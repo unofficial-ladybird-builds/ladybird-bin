@@ -55,6 +55,14 @@ jobs:
           cmake --version
           clang-20 --version
 
+      - name: Cache build output
+        uses: actions/cache@v3
+        with:
+          path: Build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+
       - name: Build via ladybird.py
         run: |
           chmod +x ./Meta/ladybird.py
