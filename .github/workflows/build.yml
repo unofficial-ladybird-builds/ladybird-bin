@@ -2,9 +2,9 @@ name: Build Ladybird
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "*" ]  # Enable for all branches (fork-safe)
   pull_request:
-    branches: [ main ]
+    branches: [ "*" ]
   workflow_dispatch:
 
 jobs:
@@ -15,23 +15,54 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install build dependencies
+      - name: Add Kitware APT repo for CMake >= 3.25
         run: |
           sudo apt update
-          sudo apt install -y python3 git cmake ninja-build clang \
-            libgl1-mesa-dev libx11-dev libxext-dev libxrender-dev \
-            libxcb1-dev libx11-xcb-dev libxrandr-dev libxfixes-dev \
-            libxi-dev libxcomposite-dev libxdamage-dev libxss-dev \
-            libxtst-dev libgtk-3-dev libasound2-dev
+          sudo apt install -y gnupg software-properties-common
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+            gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -sc) main" | \
+            sudo tee /etc/apt/sources.list.d/kitware.list
+
+      - name: Add LLVM APT repo for clang-20
+        run: |
+          sudo wget -O /usr/share/keyrings/llvm-snapshot.gpg.key https://apt.llvm.org/llvm-snapshot.gpg.key
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] https://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc)-20 main" | \
+            sudo tee -a /etc/apt/sources.list.d/llvm.list
+
+      - name: Add Ubuntu Toolchain PPA for gcc-14
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      - name: Update package list and install dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            autoconf autoconf-archive automake build-essential ccache \
+            cmake curl fonts-liberation2 git libgl1-mesa-dev nasm ninja-build \
+            pkg-config qt6-base-dev qt6-tools-dev-tools qt6-wayland qt6-multimedia-dev \
+            libpulse-dev tar unzip zip \
+            clang-20 clangd-20 clang-tools-20 clang-format-20 clang-tidy-20 lld-20 \
+            g++-14 libstdc++-14-dev
+
+      - name: Set compilers to Clang 20
+        run: |
+          echo "CC=clang-20" >> $GITHUB_ENV
+          echo "CXX=clang++-20" >> $GITHUB_ENV
+
+      - name: Confirm CMake & Clang versions
+        run: |
+          cmake --version
+          clang-20 --version
 
       - name: Build via ladybird.py
         run: |
           chmod +x ./Meta/ladybird.py
           ./Meta/ladybird.py run
 
-      - name: Archive build output
+      - name: Upload Ladybird binary
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ladybird-binary
-          path: Build/*/Ladybird/Ladybird  # Adjust if the binary goes elsewhere
+          path: Build/*/Ladybird/Ladybird
