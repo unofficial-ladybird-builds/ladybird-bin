@@ -66,7 +66,7 @@ jobs:
       - name: Build via ladybird.py
         run: |
           chmod +x ./Meta/ladybird.py
-          ./Meta/ladybird.py run
+          ./Meta/ladybird.py build
 
       - name: Upload Ladybird binary
         if: success()
