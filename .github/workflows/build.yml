@@ -2,7 +2,7 @@ name: Build Ladybird
 
 on:
   push:
-    branches: [ "*" ]  # Enable for all branches (fork-safe)
+    branches: [ "*" ]
   pull_request:
     branches: [ "*" ]
   workflow_dispatch:
@@ -14,6 +14,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Needed for upstream syncing
+
+      - name: Add upstream remote (optional sync)
+        run: |
+          git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
+          git fetch upstream
+          # Uncomment below to rebase on upstream/main
+          # git rebase upstream/main
 
       - name: Add Kitware APT repo for CMake >= 3.25
         run: |
@@ -34,7 +43,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
 
-      - name: Update package list and install dependencies
+      - name: Install dependencies
         run: |
           sudo apt update -y
           sudo apt install -y \
@@ -45,12 +54,12 @@ jobs:
             clang-20 clangd-20 clang-tools-20 clang-format-20 clang-tidy-20 lld-20 \
             g++-14 libstdc++-14-dev
 
-      - name: Set compilers to Clang 20
+      - name: Set Clang 20 as compiler
         run: |
           echo "CC=clang-20" >> $GITHUB_ENV
           echo "CXX=clang++-20" >> $GITHUB_ENV
 
-      - name: Confirm CMake & Clang versions
+      - name: Show compiler versions
         run: |
           cmake --version
           clang-20 --version
@@ -63,14 +72,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-build-
 
-      - name: Build via ladybird.py
+      - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
           ./Meta/ladybird.py build
 
-      - name: Upload Ladybird binary
-        if: success()
+      - name: Zip the bin folder
+        run: |
+          cd Build/release
+          zip -r ladybird-bin.zip bin
+
+      - name: Upload zipped bin folder
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-binary
-          path: Build/release/bin/Ladybird
+          name: ladybird-bin-zip
+          path: Build/release/ladybird-bin.zip
+
+      - name: Upload to GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Build/release/ladybird-bin.zip
