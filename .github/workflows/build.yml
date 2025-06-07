@@ -15,13 +15,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Needed for upstream syncing
+          fetch-depth: 0
 
       - name: Add upstream remote (optional sync)
         run: |
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream
-          # Uncomment below to rebase on upstream/main
+          # Uncomment to sync with upstream
           # git rebase upstream/main
 
       - name: Add Kitware APT repo for CMake >= 3.25
@@ -76,20 +76,29 @@ jobs:
         run: |
           chmod +x ./Meta/ladybird.py
           ./Meta/ladybird.py build
+            
+            
+      - name: Copy all .so* files to bin directory
+        run: |
+          find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
 
-      - name: Zip the bin folder
+      - name: Package Ladybird with shared libraries
         run: |
           cd Build/release
-          zip -r ladybird-bin.zip bin
+          mkdir ladybird-package
+          cp -r bin ladybird-package/
+          cp -r lib ladybird-package/
+          cd ladybird-package
+          zip -r ../ladybird-bundle.zip .
 
-      - name: Upload zipped bin folder
+      - name: Upload Ladybird bundle (bin + lib)
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-bin-zip
-          path: Build/release/ladybird-bin.zip
+          name: ladybird-bundle
+          path: Build/release/ladybird-bundle.zip
 
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Build/release/ladybird-bin.zip
+          files: Build/release/ladybird-bundle.zip
