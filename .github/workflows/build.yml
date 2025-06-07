@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -65,7 +65,7 @@ jobs:
           clang-20 --version
 
       - name: Cache build output
-        uses: useblacksmith/cache@v5
+        uses: actions/cache@v3
         with:
           path: Build
           key: ${{ runner.os }}-build-${{ hashFiles('**/CMakeLists.txt') }}
