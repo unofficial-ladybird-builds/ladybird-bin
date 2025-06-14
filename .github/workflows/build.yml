@@ -74,8 +74,13 @@ jobs:
 
       - name: Build Ladybird with portable flags
         run: |
-          chmod +x ./Meta/ladybird.py
-          ./Meta/ladybird.py build --cmake-args="-DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 -DCMAKE_CXX_FLAGS='-march=x86-64 -mtune=generic'"
+         chmod +x ./Meta/ladybird.py
+         export CXXFLAGS="-march=x86-64 -mtune=generic"
+         export CFLAGS="-march=x86-64 -mtune=generic"
+         ./Meta/ladybird.py build
+
+
+
 
       - name: Copy shared libraries to bin
         run: |
