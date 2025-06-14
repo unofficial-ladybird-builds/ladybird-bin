@@ -78,18 +78,17 @@ jobs:
          export CXXFLAGS="-march=x86-64 -mtune=generic"
          export CFLAGS="-march=x86-64 -mtune=generic"
          ./Meta/ladybird.py build
-
-
-
-
+         
       - name: Copy shared libraries to bin
         run: |
           find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
 
-      - name: Copy Ladybird resources
+      - name: Copy Resources if present
         run: |
-          mkdir -p Build/release/bin/resources
-          cp -r Resources/* Build/release/bin/resources/
+         mkdir -p Build/release/bin/resources
+         if [ -d Resources ] && [ "$(ls -A Resources)" ]; then
+         cp Resources/* Build/release/bin/resources/
+         fi
 
       - name: Package Ladybird with shared libraries and resources
         run: |
