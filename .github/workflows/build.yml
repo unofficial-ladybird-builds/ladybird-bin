@@ -72,26 +72,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-build-
 
-      - name: Build Ladybird
+      - name: Build Ladybird with portable flags
         run: |
           chmod +x ./Meta/ladybird.py
-          ./Meta/ladybird.py build
-            
-            
-      - name: Copy all .so* files to bin directory
+          ./Meta/ladybird.py build --cmake-args="-DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 -DCMAKE_CXX_FLAGS='-march=x86-64 -mtune=generic'"
+
+      - name: Copy shared libraries to bin
         run: |
           find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
 
-      - name: Package Ladybird with shared libraries
+      - name: Copy Ladybird resources
+        run: |
+          mkdir -p Build/release/bin/resources
+          cp -r Resources/* Build/release/bin/resources/
+
+      - name: Package Ladybird with shared libraries and resources
         run: |
           cd Build/release
           mkdir ladybird-package
-          cp -r bin ladybird-package/
-          cp -r lib ladybird-package/
+          cp -r bin lib ladybird-package/
           cd ladybird-package
           zip -r ../ladybird-bundle.zip .
 
-      - name: Upload Ladybird bundle (bin + lib)
+      - name: Upload Ladybird bundle
         uses: actions/upload-artifact@v4
         with:
           name: ladybird-bundle
