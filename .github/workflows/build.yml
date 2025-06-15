@@ -37,7 +37,7 @@ jobs:
         run: |
           sudo wget -O /usr/share/keyrings/llvm-snapshot.gpg.key https://apt.llvm.org/llvm-snapshot.gpg.key
           echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] https://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc)-20 main" | \
-            sudo tee -a /etc/apt/sources.list.d/llvm.list
+            sudo tee /etc/apt/sources.list.d/llvm.list
 
       - name: Add Ubuntu Toolchain PPA for gcc-14
         run: |
@@ -64,48 +64,39 @@ jobs:
           cmake --version
           clang-20 --version
 
-      - name: Cache build output
-        uses: useblacksmith/cache@v5
-        with:
-          path: Build
-          key: ${{ runner.os }}-build-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-build-
-
       - name: Build Ladybird with portable flags
         run: |
-         chmod +x ./Meta/ladybird.py
-         export CXXFLAGS="-march=x86-64 -mtune=generic"
-         export CFLAGS="-march=x86-64 -mtune=generic"
-         ./Meta/ladybird.py build
-         
+          chmod +x ./Meta/ladybird.py
+          export CXXFLAGS="-march=x86-64 -mtune=generic"
+          export CFLAGS="-march=x86-64 -mtune=generic"
+          ./Meta/ladybird.py build -- -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS"
+
+      - name: Ensure Resources exist or add dummy
+        run: |
+          mkdir -p Resources
+          if [ ! -f Resources/home-page.html ]; then
+            echo "<html><body><h1>Hello, Ladybird</h1></body></html>" > Resources/home-page.html
+          fi
+          mkdir -p Build/release/bin/resources
+          cp Resources/* Build/release/bin/resources/
+
       - name: Copy shared libraries to bin
         run: |
           find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
 
-      - name: Copy Resources if present
+      - name: Zip full repo (source + build) for upload
         run: |
-         mkdir -p Build/release/bin/resources
-         if [ -d Resources ] && [ "$(ls -A Resources)" ]; then
-         cp Resources/* Build/release/bin/resources/
-         fi
+          cd $GITHUB_WORKSPACE
+          zip -r ladybird-full-repo.zip .
 
-      - name: Package Ladybird with shared libraries and resources
-        run: |
-          cd Build/release
-          mkdir ladybird-package
-          cp -r bin lib ladybird-package/
-          cd ladybird-package
-          zip -r ../ladybird-bundle.zip .
-
-      - name: Upload Ladybird bundle
+      - name: Upload full repo artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-bundle
-          path: Build/release/ladybird-bundle.zip
+          name: ladybird-full-repo
+          path: ladybird-full-repo.zip
 
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Build/release/ladybird-bundle.zip
+          files: ladybird-full-repo.zip
