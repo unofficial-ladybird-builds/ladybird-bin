@@ -63,13 +63,13 @@ jobs:
         run: |
           cmake --version
           clang-20 --version
-
+          
       - name: Build Ladybird with portable flags
         run: |
-          chmod +x ./Meta/ladybird.py
-          export CXXFLAGS="-march=x86-64 -mtune=generic"
-          export CFLAGS="-march=x86-64 -mtune=generic"
-          ./Meta/ladybird.py build -- -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS"
+            chmod +x ./Meta/ladybird.py
+            export CMAKE_C_FLAGS="-march=x86-64 -mtune=generic"
+            export CMAKE_CXX_FLAGS="-march=x86-64 -mtune=generic"
+            ./Meta/ladybird.py build
 
       - name: Ensure Resources exist or add dummy
         run: |
