@@ -22,7 +22,7 @@ jobs:
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream
           # Uncomment to sync with upstream
-          # git rebase upstream/main
+          git rebase upstream/main
 
       - name: Add Kitware APT repo for CMake >= 3.25
         run: |
