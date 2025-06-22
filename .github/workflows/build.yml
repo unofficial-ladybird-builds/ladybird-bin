@@ -20,12 +20,21 @@ jobs:
       - name: Sync with main repo
         run: |
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
-          git checkout --ours .github/workflows/build.yml
-          git add -u
           git fetch upstream
-          git config user.name "github-actions[bot]" 
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git rebase upstream/master --continue
+      
+          set +e
+          git rebase upstream/master
+          status=$?
+          set -e
+      
+          if [ $status -ne 0 ]; then
+            echo "Rebase hit conflict, keeping our version of build.yml..."
+            git checkout --ours .github/workflows/build.yml
+            git add .github/workflows/build.yml
+            git rebase --continue || echo "Manual conflict resolution may still be needed."
+          fi
 
       - name: Add Kitware APT repo for CMake >= 3.25
         run: |
