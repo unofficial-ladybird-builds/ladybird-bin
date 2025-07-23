@@ -42,7 +42,7 @@ public:
     String type_for_bindings() const;
     WebIDL::ExceptionOr<void> set_type_for_bindings(String const&);
 
-    virtual void form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
+    virtual void form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
 
     bool will_validate();
 
@@ -76,6 +76,7 @@ public:
     virtual Optional<ARIA::Role> default_role() const override { return ARIA::Role::button; }
 
     virtual String value() const override;
+    virtual Optional<String> optional_value() const override;
 
     virtual bool has_activation_behavior() const override;
     virtual void activation_behavior(DOM::Event const&) override;

@@ -74,6 +74,7 @@ Regex<Parser>::Regex(ByteString pattern, typename ParserTraits<Parser>::OptionsT
 
         Parser parser(lexer, regex_options);
         parser_result = parser.parse();
+        parser_result.bytecode.flatten();
 
         run_optimization_passes();
 
@@ -90,6 +91,7 @@ Regex<Parser>::Regex(regex::Parser::Result parse_result, ByteString pattern, typ
     : pattern_value(move(pattern))
     , parser_result(move(parse_result))
 {
+    parser_result.bytecode.flatten();
     run_optimization_passes();
     if (parser_result.error == regex::Error::NoError)
         matcher = make<Matcher<Parser>>(this, regex_options | static_cast<decltype(regex_options.value())>(parser_result.options.value()));
@@ -235,7 +237,7 @@ RegexResult Matcher<Parser>::match(Vector<RegexStringView> const& views, Optiona
         input.view = view;
         dbgln_if(REGEX_DEBUG, "[match] Starting match with view ({}): _{}_", view.length(), view);
 
-        auto view_length = view.length();
+        auto view_length = view.length_in_code_units();
         size_t view_index = m_pattern->start_offset;
         state.string_position = view_index;
         state.string_position_in_code_units = view_index;
@@ -286,8 +288,14 @@ RegexResult Matcher<Parser>::match(Vector<RegexStringView> const& views, Optiona
             if (match_length_minimum && match_length_minimum > view_length - view_index)
                 break;
 
+            auto const insensitive = input.regex_options.has_flag_set(AllFlags::Insensitive);
             if (auto& starting_ranges = m_pattern->parser_result.optimization_data.starting_ranges; !starting_ranges.is_empty()) {
-                if (!binary_search(starting_ranges, input.view.code_unit_at(view_index), nullptr, compare_range))
+                auto ranges = insensitive ? m_pattern->parser_result.optimization_data.starting_ranges_insensitive.span() : starting_ranges.span();
+                auto ch = input.view.unicode_aware_code_point_at(view_index);
+                if (insensitive)
+                    ch = to_ascii_lowercase(ch);
+
+                if (!binary_search(ranges, ch, nullptr, compare_range))
                     goto done_matching;
             }
 

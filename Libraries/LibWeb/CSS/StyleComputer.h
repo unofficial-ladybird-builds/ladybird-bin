@@ -129,14 +129,6 @@ class FontLoader;
 class StyleComputer {
 public:
     static void for_each_property_expanding_shorthands(PropertyID, CSSStyleValue const&, Function<void(PropertyID, CSSStyleValue const&)> const& set_longhand_property);
-    static void set_property_expanding_shorthands(
-        CascadedProperties&,
-        PropertyID,
-        CSSStyleValue const&,
-        GC::Ptr<CSSStyleDeclaration const>,
-        CascadeOrigin,
-        Important,
-        Optional<FlyString> layer_name);
     static NonnullRefPtr<CSSStyleValue const> get_inherit_value(CSS::PropertyID, DOM::Element const*, Optional<CSS::PseudoElement> = {});
 
     static Optional<String> user_agent_style_sheet_source(StringView name);
@@ -158,7 +150,7 @@ public:
 
     [[nodiscard]] RuleCache const& get_pseudo_class_rule_cache(PseudoClass) const;
 
-    [[nodiscard]] Vector<MatchingRule const*> collect_matching_rules(DOM::Element const&, CascadeOrigin, Optional<CSS::PseudoElement>, PseudoClassBitmap& attempted_psuedo_class_matches, FlyString const& qualified_layer_name = {}) const;
+    [[nodiscard]] Vector<MatchingRule const*> collect_matching_rules(DOM::Element const&, CascadeOrigin, Optional<CSS::PseudoElement>, PseudoClassBitmap& attempted_psuedo_class_matches, Optional<FlyString const> qualified_layer_name = {}) const;
 
     InvalidationSet invalidation_set_for_properties(Vector<InvalidationSet::Property> const&) const;
     bool invalidation_property_used_in_has_selector(InvalidationSet::Property const&) const;
@@ -201,6 +193,8 @@ public:
 
     [[nodiscard]] inline bool should_reject_with_ancestor_filter(Selector const&) const;
 
+    static NonnullRefPtr<CSSStyleValue const> compute_value_of_custom_property(DOM::AbstractElement, FlyString const& custom_property, Optional<Parser::GuardedSubstitutionContexts&> = {});
+
 private:
     enum class ComputeStyleMode {
         Normal,
@@ -208,40 +202,6 @@ private:
     };
 
     struct MatchingFontCandidate;
-
-    [[nodiscard]] GC::Ptr<ComputedProperties> compute_style_impl(DOM::Element&, Optional<CSS::PseudoElement>, ComputeStyleMode) const;
-    [[nodiscard]] GC::Ref<CascadedProperties> compute_cascaded_values(DOM::Element&, Optional<CSS::PseudoElement>, bool& did_match_any_pseudo_element_rules, PseudoClassBitmap& attempted_pseudo_class_matches, ComputeStyleMode) const;
-    static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_ascending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
-    static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_descending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
-    RefPtr<Gfx::FontCascadeList const> font_matching_algorithm(FlyString const& family_name, int weight, int slope, float font_size_in_pt) const;
-    void compute_math_depth(ComputedProperties&, DOM::Element const*, Optional<CSS::PseudoElement>) const;
-    void compute_defaulted_values(ComputedProperties&, DOM::Element const*, Optional<CSS::PseudoElement>) const;
-    void start_needed_transitions(ComputedProperties const& old_style, ComputedProperties& new_style, DOM::Element&, Optional<PseudoElement>) const;
-    void resolve_effective_overflow_values(ComputedProperties&) const;
-    void transform_box_type_if_needed(ComputedProperties&, DOM::Element const&, Optional<CSS::PseudoElement>) const;
-
-    void compute_defaulted_property_value(ComputedProperties&, DOM::Element const*, CSS::PropertyID, Optional<CSS::PseudoElement>) const;
-
-    void set_all_properties(
-        CascadedProperties&,
-        DOM::Element&,
-        Optional<PseudoElement>,
-        CSSStyleValue const&,
-        DOM::Document&,
-        GC::Ptr<CSSStyleDeclaration const>,
-        CascadeOrigin,
-        Important,
-        Optional<FlyString> layer_name) const;
-
-    template<typename Callback>
-    void for_each_stylesheet(CascadeOrigin, Callback) const;
-
-    [[nodiscard]] CSSPixelRect viewport_rect() const { return m_viewport_rect; }
-
-    [[nodiscard]] Length::FontMetrics calculate_root_element_font_metrics(ComputedProperties const&) const;
-
-    Vector<FlyString> m_qualified_layer_names_in_order;
-    void build_qualified_layer_names_cache();
 
     struct LayerMatchingRules {
         FlyString qualified_layer_name;
@@ -254,6 +214,33 @@ private:
         Vector<LayerMatchingRules> author_rules;
     };
 
+    [[nodiscard]] MatchingRuleSet build_matching_rule_set(DOM::Element const&, Optional<PseudoElement>, PseudoClassBitmap& attempted_pseudo_class_matches, bool& did_match_any_pseudo_element_rules, ComputeStyleMode) const;
+
+    LogicalAliasMappingContext compute_logical_alias_mapping_context(DOM::Element&, Optional<CSS::PseudoElement>, ComputeStyleMode, MatchingRuleSet const&) const;
+    [[nodiscard]] GC::Ptr<ComputedProperties> compute_style_impl(DOM::Element&, Optional<CSS::PseudoElement>, ComputeStyleMode) const;
+    [[nodiscard]] GC::Ref<CascadedProperties> compute_cascaded_values(DOM::Element&, Optional<CSS::PseudoElement>, bool did_match_any_pseudo_element_rules, ComputeStyleMode, MatchingRuleSet const&, Optional<LogicalAliasMappingContext>, ReadonlySpan<PropertyID> properties_to_cascade) const;
+    static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_ascending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
+    static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_descending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
+    RefPtr<Gfx::FontCascadeList const> font_matching_algorithm(FlyString const& family_name, int weight, int slope, float font_size_in_pt) const;
+    void compute_custom_properties(ComputedProperties&, DOM::AbstractElement) const;
+    void compute_math_depth(ComputedProperties&, DOM::Element const*, Optional<CSS::PseudoElement>) const;
+    void compute_defaulted_values(ComputedProperties&, DOM::Element const*, Optional<CSS::PseudoElement>) const;
+    void start_needed_transitions(ComputedProperties const& old_style, ComputedProperties& new_style, DOM::Element&, Optional<PseudoElement>) const;
+    void resolve_effective_overflow_values(ComputedProperties&) const;
+    void transform_box_type_if_needed(ComputedProperties&, DOM::Element const&, Optional<CSS::PseudoElement>) const;
+
+    void compute_defaulted_property_value(ComputedProperties&, DOM::Element const*, CSS::PropertyID, Optional<CSS::PseudoElement>) const;
+
+    template<typename Callback>
+    void for_each_stylesheet(CascadeOrigin, Callback) const;
+
+    [[nodiscard]] CSSPixelRect viewport_rect() const { return m_viewport_rect; }
+
+    [[nodiscard]] Length::FontMetrics calculate_root_element_font_metrics(ComputedProperties const&) const;
+
+    Vector<FlyString> m_qualified_layer_names_in_order;
+    void build_qualified_layer_names_cache();
+
     void cascade_declarations(
         CascadedProperties&,
         DOM::Element&,
@@ -261,7 +248,9 @@ private:
         Vector<MatchingRule const*> const&,
         CascadeOrigin,
         Important,
-        Optional<FlyString> layer_name) const;
+        Optional<FlyString> layer_name,
+        Optional<LogicalAliasMappingContext>,
+        ReadonlySpan<PropertyID> properties_to_cascade) const;
 
     void build_rule_cache();
     void build_rule_cache_if_needed() const;
@@ -284,7 +273,7 @@ private:
 
     void make_rule_cache_for_cascade_origin(CascadeOrigin, SelectorInsights&);
 
-    [[nodiscard]] RuleCache const* rule_cache_for_cascade_origin(CascadeOrigin, FlyString const& qualified_layer_name, GC::Ptr<DOM::ShadowRoot const>) const;
+    [[nodiscard]] RuleCache const* rule_cache_for_cascade_origin(CascadeOrigin, Optional<FlyString const> qualified_layer_name, GC::Ptr<DOM::ShadowRoot const>) const;
 
     static void collect_selector_insights(Selector const&, SelectorInsights&);
 

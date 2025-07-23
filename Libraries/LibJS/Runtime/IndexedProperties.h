@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/NonnullOwnPtr.h>
+#include <LibJS/Export.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/Value.h>
 
@@ -41,16 +42,19 @@ public:
     virtual ValueAndAttributes take_last() = 0;
 
     virtual size_t size() const = 0;
-    virtual size_t array_like_size() const = 0;
+    size_t array_like_size() const { return m_array_size; }
     virtual bool set_array_like_size(size_t new_size) = 0;
 
     bool is_simple_storage() const { return m_is_simple_storage; }
 
 protected:
-    explicit IndexedPropertyStorage(IsSimpleStorage is_simple_storage)
-        : m_is_simple_storage(is_simple_storage == IsSimpleStorage::Yes)
+    explicit IndexedPropertyStorage(IsSimpleStorage is_simple_storage, size_t array_size = 0)
+        : m_array_size(array_size)
+        , m_is_simple_storage(is_simple_storage == IsSimpleStorage::Yes)
     {
     }
+
+    size_t m_array_size { 0 };
 
 private:
     bool m_is_simple_storage { false };
@@ -73,7 +77,6 @@ public:
     virtual ValueAndAttributes take_last() override;
 
     virtual size_t size() const override { return m_packed_elements.size(); }
-    virtual size_t array_like_size() const override { return m_array_size; }
     virtual bool set_array_like_size(size_t new_size) override;
 
     Vector<Value> const& elements() const { return m_packed_elements; }
@@ -90,12 +93,14 @@ public:
         return ValueAndAttributes { m_packed_elements.data()[index], default_attributes };
     }
 
+    bool has_empty_elements() const { return m_number_of_empty_elements.value() > 0; }
+
 private:
     friend GenericIndexedPropertyStorage;
 
     void grow_storage_if_needed();
 
-    size_t m_array_size { 0 };
+    Checked<size_t> m_number_of_empty_elements { 0 };
     Vector<Value> m_packed_elements;
 };
 
@@ -116,17 +121,15 @@ public:
     virtual ValueAndAttributes take_last() override;
 
     virtual size_t size() const override { return m_sparse_elements.size(); }
-    virtual size_t array_like_size() const override { return m_array_size; }
     virtual bool set_array_like_size(size_t new_size) override;
 
     HashMap<u32, ValueAndAttributes> const& sparse_elements() const { return m_sparse_elements; }
 
 private:
-    size_t m_array_size { 0 };
     HashMap<u32, ValueAndAttributes> m_sparse_elements;
 };
 
-class IndexedPropertyIterator {
+class JS_API IndexedPropertyIterator {
 public:
     IndexedPropertyIterator(IndexedProperties const&, u32 starting_index, bool skip_empty);
 
@@ -146,7 +149,7 @@ private:
     bool m_skip_empty { false };
 };
 
-class IndexedProperties {
+class JS_API IndexedProperties {
 public:
     IndexedProperties() = default;
 

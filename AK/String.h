@@ -69,9 +69,8 @@ public:
     [[nodiscard]] static String from_string_builder_without_validation(Badge<StringBuilder>, StringBuilder&);
 
     // Creates a new String from a sequence of UTF-16 encoded code points.
-    static ErrorOr<String> from_utf16(Utf16View const&);
-    static ErrorOr<String> from_utf16_le(ReadonlyBytes);
-    static ErrorOr<String> from_utf16_be(ReadonlyBytes);
+    static ErrorOr<String> from_utf16_le_with_replacement_character(ReadonlyBytes);
+    static ErrorOr<String> from_utf16_be_with_replacement_character(ReadonlyBytes);
 
     // Creates a new String by reading byte_count bytes from a UTF-8 encoded Stream.
     static ErrorOr<String> from_stream(Stream&, size_t byte_count);
@@ -103,6 +102,7 @@ public:
         Lower,
     };
     [[nodiscard]] static String bijective_base_from(size_t value, Case, unsigned base = 26, StringView map = {});
+    [[nodiscard]] static String greek_letter_from(size_t value);
     [[nodiscard]] static String roman_number_from(size_t value, Case);
 
     // Creates a new String by case-transforming this String. Using these methods require linking LibUnicode into your application.

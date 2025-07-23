@@ -80,6 +80,7 @@ public:
     String default_value() const { return get_attribute_value(HTML::AttributeNames::value); }
 
     virtual String value() const override;
+    virtual Optional<String> optional_value() const override;
     WebIDL::ExceptionOr<void> set_value(String const&);
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-textarea/input-relevant-value
@@ -194,7 +195,7 @@ public:
     virtual void clear_algorithm() override;
 
     virtual void form_associated_element_was_inserted() override;
-    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<FlyString> const&) override;
+    virtual void form_associated_element_attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
 
     virtual WebIDL::ExceptionOr<void> cloned(Node&, bool) const override;
 

@@ -1,15 +1,16 @@
 /*
  * Copyright (c) 2018-2022, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
- * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2024-2025, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "CounterStyleValue.h"
+#include <LibWeb/CSS/CountersSet.h>
 #include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/Keyword.h>
 #include <LibWeb/CSS/Serialize.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/DOM/Element.h>
@@ -78,6 +79,8 @@ static String generate_a_counter_representation(CSSStyleValue const& counter_sty
                 case CounterStyleNameKeyword::UpperAlpha:
                 case CounterStyleNameKeyword::UpperLatin:
                     return String::bijective_base_from(value - 1, String::Case::Upper);
+                case CounterStyleNameKeyword::LowerGreek:
+                    return String::greek_letter_from(value);
                 case CounterStyleNameKeyword::LowerRoman:
                     return String::roman_number_from(value, String::Case::Lower);
                 case CounterStyleNameKeyword::UpperRoman:
@@ -94,13 +97,13 @@ static String generate_a_counter_representation(CSSStyleValue const& counter_sty
     return MUST(String::formatted("{}", value));
 }
 
-String CounterStyleValue::resolve(DOM::Element& element) const
+String CounterStyleValue::resolve(DOM::AbstractElement& element_reference) const
 {
     // "If no counter named <counter-name> exists on an element where counter() or counters() is used,
     // one is first instantiated with a starting value of 0."
-    auto& counters_set = element.ensure_counters_set();
+    auto& counters_set = element_reference.ensure_counters_set();
     if (!counters_set.last_counter_with_name(m_properties.counter_name).has_value())
-        counters_set.instantiate_a_counter(m_properties.counter_name, element.unique_id(), false, 0);
+        counters_set.instantiate_a_counter(m_properties.counter_name, element_reference, false, 0);
 
     // counter( <counter-name>, <counter-style>? )
     // "Represents the value of the innermost counter in the element’s CSS counters set named <counter-name>

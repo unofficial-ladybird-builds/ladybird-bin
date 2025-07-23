@@ -14,7 +14,7 @@
 #include <AK/GenericLexer.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
-#include <AK/StringUtils.h>
+#include <AK/StringConversions.h>
 #include <AK/TemporaryChange.h>
 #include <LibUnicode/CharacterTypes.h>
 
@@ -120,10 +120,9 @@ ALWAYS_INLINE Optional<u32> Parser::consume_escaped_code_point(bool unicode)
 
 ALWAYS_INLINE bool Parser::try_skip(StringView str)
 {
-    if (str.starts_with(m_parser_state.current_token.value()))
-        str = str.substring_view(m_parser_state.current_token.value().length(), str.length() - m_parser_state.current_token.value().length());
-    else
+    if (!str.starts_with(m_parser_state.current_token.value()))
         return false;
+    str = str.substring_view(m_parser_state.current_token.value().length(), str.length() - m_parser_state.current_token.value().length());
 
     size_t potentially_go_back { 0 };
     for (auto ch : str) {
@@ -1220,7 +1219,7 @@ StringView ECMA262Parser::read_digits_as_string(ReadDigitsInitialZeroState initi
         if (max_count > 0 && count >= max_count)
             break;
 
-        if (hex && !AK::StringUtils::convert_to_uint_from_hex(c).has_value())
+        if (hex && !AK::parse_hexadecimal_number<u32>(c).has_value())
             break;
         if (!hex && !c.to_number<unsigned>().has_value())
             break;
@@ -1241,7 +1240,7 @@ Optional<unsigned> ECMA262Parser::read_digits(ECMA262Parser::ReadDigitsInitialZe
     if (str.is_empty())
         return {};
     if (hex)
-        return AK::StringUtils::convert_to_uint_from_hex(str);
+        return AK::parse_hexadecimal_number<u32>(str);
     return str.to_number<unsigned>();
 }
 
@@ -2266,6 +2265,10 @@ Optional<u32> ECMA262Parser::parse_class_set_character()
         "&&"sv, "!!"sv, "##"sv, "$$"sv, "%%"sv, "**"sv, "++"sv, ",,"sv, ".."sv, "::"sv, ";;"sv, "<<"sv, "=="sv, ">>"sv, "??"sv, "@@"sv, "^^"sv, "``"sv, "~~"sv
     };
 
+    constexpr auto class_set_reserved_punctuator = Array {
+        "&"sv, "-"sv, "!"sv, "#"sv, "%"sv, ","sv, ":"sv, ";"sv, "<"sv, "="sv, ">"sv, "@"sv, "`"sv, "~"sv
+    };
+
     if (done()) {
         set_error(Error::InvalidPattern);
         return {};
@@ -2281,7 +2284,7 @@ Optional<u32> ECMA262Parser::parse_class_set_character()
         }
 
         // "\" ClassSetReservedPunctuator
-        for (auto const& reserved : class_set_reserved_double_punctuator) {
+        for (auto const& reserved : class_set_reserved_punctuator) {
             if (try_skip(reserved)) {
                 // "\" ClassSetReservedPunctuator (ClassSetReservedPunctuator)
                 back();

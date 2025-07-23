@@ -1,5 +1,7 @@
 #import <Clipboard/Clipboard.idl>
 #import <CredentialManagement/CredentialsContainer.idl>
+#import <Gamepad/Gamepad.idl>
+#import <Geolocation/Geolocation.idl>
 #import <HTML/MimeTypeArray.idl>
 #import <HTML/NavigatorBeacon.idl>
 #import <HTML/NavigatorConcurrentHardware.idl>
@@ -20,6 +22,9 @@ interface Navigator {
 
     // https://w3c.github.io/clipboard-apis/#navigator-interface
     [SecureContext, SameObject] readonly attribute Clipboard clipboard;
+
+    // https://w3c.github.io/geolocation/#navigator_interface
+    [SameObject] readonly attribute Geolocation geolocation;
 
     // https://w3c.github.io/pointerevents/#extensions-to-the-navigator-interface
     readonly attribute long maxTouchPoints;
@@ -67,7 +72,6 @@ interface mixin NavigatorAutomationInformation {
     readonly attribute boolean webdriver;
 };
 
-Navigator includes NavigatorBeacon;
 Navigator includes NavigatorID;
 Navigator includes NavigatorLanguage;
 Navigator includes NavigatorOnLine;

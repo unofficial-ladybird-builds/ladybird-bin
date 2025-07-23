@@ -175,12 +175,11 @@ static WebIDL::ExceptionOr<GC::Ref<JS::Set>> find_matching_font_faces(JS::Realm&
 {
     // 1. Parse font using the CSS value syntax of the font property. If a syntax error occurs, return a syntax error.
     auto property = parse_css_value(CSS::Parser::ParsingParams(), font, PropertyID::Font);
-    if (!property)
+    if (!property || !property->is_shorthand())
         return WebIDL::SyntaxError::create(realm, "Unable to parse font"_string);
 
     // If the parsed value is a CSS-wide keyword, return a syntax error.
-    if (property->is_css_wide_keyword())
-        return WebIDL::SyntaxError::create(realm, "Parsed font is a CSS-wide keyword"_string);
+    // Note: This case is already caught by the is_shorthand check.
 
     // FIXME: Absolutize all relative lengths against the initial values of the corresponding properties. (For example, a
     //        relative font weight like bolder is evaluated against the initial value normal.)
@@ -265,9 +264,10 @@ JS::ThrowCompletionOr<GC::Ref<WebIDL::Promise>> FontFaceSet::load(String const& 
 
             WebIDL::wait_for_all(
                 realm, promises,
-                [&realm, promise](auto const&) {
+                [&realm, promise](auto const& fonts) {
                     HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
-                    WebIDL::resolve_promise(realm, promise);
+                    auto fonts_array = JS::Array::create_from(realm, fonts);
+                    WebIDL::resolve_promise(realm, promise, fonts_array);
                 },
                 [&realm, promise](auto error) {
                     HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibWeb/Bindings/PlatformObject.h>
+#include <LibWeb/Gamepad/NavigatorGamepad.h>
 #include <LibWeb/HTML/MimeTypeArray.h>
 #include <LibWeb/HTML/NavigatorBeacon.h>
 #include <LibWeb/HTML/NavigatorConcurrentHardware.h>
@@ -22,9 +23,10 @@
 namespace Web::HTML {
 
 class Navigator : public Bindings::PlatformObject
-    , public NavigatorBeaconMixin
+    , public NavigatorBeaconPartial
     , public NavigatorConcurrentHardwareMixin
     , public NavigatorDeviceMemoryMixin
+    , public Gamepad::NavigatorGamepadPartial
     , public NavigatorIDMixin
     , public NavigatorLanguageMixin
     , public NavigatorOnLineMixin
@@ -53,6 +55,7 @@ public:
     [[nodiscard]] GC::Ref<MimeTypeArray> mime_types();
     [[nodiscard]] GC::Ref<PluginArray> plugins();
     [[nodiscard]] GC::Ref<Clipboard::Clipboard> clipboard();
+    [[nodiscard]] GC::Ref<Geolocation::Geolocation> geolocation();
     [[nodiscard]] GC::Ref<UserActivation> user_activation();
     [[nodiscard]] GC::Ref<CredentialManagement::CredentialsContainer> credentials();
 
@@ -82,6 +85,9 @@ private:
 
     // https://w3c.github.io/clipboard-apis/#dom-navigator-clipboard
     GC::Ptr<Clipboard::Clipboard> m_clipboard;
+
+    // https://w3c.github.io/geolocation/#navigator_interface
+    GC::Ptr<Geolocation::Geolocation> m_geolocation;
 
     // https://html.spec.whatwg.org/multipage/interaction.html#dom-navigator-useractivation
     GC::Ptr<UserActivation> m_user_activation;

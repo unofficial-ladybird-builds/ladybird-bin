@@ -31,7 +31,10 @@ public:
     explicit UnsignedBigInteger(u64 value);
 
     UnsignedBigInteger(UnsignedBigInteger const&);
+    UnsignedBigInteger(UnsignedBigInteger&&);
+
     UnsignedBigInteger& operator=(UnsignedBigInteger const&);
+    UnsignedBigInteger& operator=(UnsignedBigInteger&&);
 
     UnsignedBigInteger();
     ~UnsignedBigInteger();
@@ -80,6 +83,7 @@ public:
     [[nodiscard]] UnsignedDivisionResult divided_by(UnsignedBigInteger const& divisor) const;
     [[nodiscard]] UnsignedBigInteger pow(u32 exponent) const;
     [[nodiscard]] UnsignedBigInteger gcd(UnsignedBigInteger const& other) const;
+    [[nodiscard]] UnsignedBigInteger lcm(UnsignedBigInteger const& other) const;
 
     [[nodiscard]] u32 hash() const;
 

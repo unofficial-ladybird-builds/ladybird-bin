@@ -47,16 +47,43 @@ SignedBigInteger::SignedBigInteger(i64 value)
 }
 
 SignedBigInteger::SignedBigInteger(SignedBigInteger const& other)
+    : m_hash(other.m_hash)
 {
     MP_MUST(mp_init_copy(&m_mp, &other.m_mp));
+}
+
+SignedBigInteger::SignedBigInteger(SignedBigInteger&& other)
+    : m_mp(other.m_mp)
+    , m_hash(other.m_hash)
+{
+    other.m_mp = {};
+    other.m_hash.clear();
 }
 
 SignedBigInteger& SignedBigInteger::operator=(SignedBigInteger const& other)
 {
     if (this == &other)
         return *this;
+
     mp_clear(&m_mp);
     MP_MUST(mp_init_copy(&m_mp, &other.m_mp));
+    m_hash = other.m_hash;
+
+    return *this;
+}
+
+SignedBigInteger& SignedBigInteger::operator=(SignedBigInteger&& other)
+{
+    if (this == &other)
+        return *this;
+
+    mp_clear(&m_mp);
+    m_mp = other.m_mp;
+    m_hash = other.m_hash;
+
+    other.m_mp = {};
+    other.m_hash.clear();
+
     return *this;
 }
 

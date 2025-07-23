@@ -116,7 +116,7 @@ static RefPtr<CSSStyleValue const> interpolate_scale(DOM::Element& element, Calc
 
     return TransformationStyleValue::create(
         PropertyID::Scale,
-        TransformFunction::Scale,
+        new_values.size() == 3 ? TransformFunction::Scale3d : TransformFunction::Scale,
         move(new_values));
 }
 
@@ -160,6 +160,104 @@ static RefPtr<CSSStyleValue const> interpolate_translate(DOM::Element& element, 
         PropertyID::Translate,
         new_values.size() == 3 ? TransformFunction::Translate3d : TransformFunction::Translate,
         move(new_values));
+}
+
+// https://drafts.csswg.org/css-transforms-2/#interpolation-of-decomposed-3d-matrix-values
+static FloatVector4 slerp(FloatVector4 const& from, FloatVector4 const& to, float delta)
+{
+    auto product = from.dot(to);
+
+    product = clamp(product, -1.0f, 1.0f);
+    if (fabsf(product) >= 1.0f)
+        return from;
+
+    auto theta = acosf(product);
+    auto w = sinf(delta * theta) / sqrtf(1 - (product * product));
+
+    return from * (cosf(delta * theta) - (product * w)) + to * w;
+}
+
+static RefPtr<CSSStyleValue const> interpolate_rotate(DOM::Element& element, CalculationContext calculation_context, CSSStyleValue const& a_from, CSSStyleValue const& a_to, float delta, AllowDiscrete allow_discrete)
+{
+    if (a_from.to_keyword() == Keyword::None && a_to.to_keyword() == Keyword::None)
+        return a_from;
+
+    static auto zero_degrees_value = AngleStyleValue::create(Angle::make_degrees(0));
+    static auto zero = TransformationStyleValue::create(PropertyID::Rotate, TransformFunction::Rotate, { zero_degrees_value });
+
+    auto const& from = a_from.to_keyword() == Keyword::None ? *zero : a_from;
+    auto const& to = a_to.to_keyword() == Keyword::None ? *zero : a_to;
+
+    auto const& from_transform = from.as_transformation();
+    auto const& to_transform = to.as_transformation();
+
+    auto from_transform_type = from_transform.transform_function();
+    auto to_transform_type = to_transform.transform_function();
+
+    if (from_transform_type == to_transform_type && from_transform.values().size() == 1) {
+        auto interpolated_angle = interpolate_value(element, calculation_context, from_transform.values()[0], to_transform.values()[0], delta, allow_discrete);
+        if (!interpolated_angle)
+            return {};
+        return TransformationStyleValue::create(PropertyID::Rotate, from_transform_type, { *interpolated_angle.release_nonnull() });
+    }
+
+    FloatVector3 from_axis { 0, 0, 1 };
+    auto from_angle_value = from_transform.values()[0];
+    if (from_transform.values().size() == 4) {
+        from_axis.set_x(from_transform.values()[0]->as_number().number());
+        from_axis.set_y(from_transform.values()[1]->as_number().number());
+        from_axis.set_z(from_transform.values()[2]->as_number().number());
+        from_angle_value = from_transform.values()[3];
+    }
+    float from_angle = from_angle_value->as_angle().angle().to_radians();
+
+    FloatVector3 to_axis { 0, 0, 1 };
+    auto to_angle_value = to_transform.values()[0];
+    if (to_transform.values().size() == 4) {
+        to_axis.set_x(to_transform.values()[0]->as_number().number());
+        to_axis.set_y(to_transform.values()[1]->as_number().number());
+        to_axis.set_z(to_transform.values()[2]->as_number().number());
+        to_angle_value = to_transform.values()[3];
+    }
+    float to_angle = to_angle_value->as_angle().angle().to_radians();
+
+    auto from_axis_angle = [](FloatVector3 const& axis, float angle) -> FloatVector4 {
+        auto normalized = axis.normalized();
+        auto half_angle = angle / 2.0f;
+        auto sin_half_angle = sinf(half_angle);
+        FloatVector4 result { normalized.x() * sin_half_angle, normalized.y() * sin_half_angle, normalized.z() * sin_half_angle, cosf(half_angle) };
+        return result;
+    };
+
+    struct AxisAngle {
+        FloatVector3 axis;
+        float angle;
+    };
+    auto quaternion_to_axis_angle = [](FloatVector4 const& quaternion) {
+        FloatVector3 axis { quaternion[0], quaternion[1], quaternion[2] };
+        auto epsilon = 1e-5f;
+        auto sin_half_angle = sqrtf(max(0.0f, 1.0f - quaternion[3] * quaternion[3]));
+        if (sin_half_angle < epsilon)
+            return AxisAngle { axis, quaternion[3] };
+        auto angle = 2.0f * acosf(quaternion[3]);
+        axis = axis * (1.0f / sin_half_angle);
+        return AxisAngle { axis, angle };
+    };
+
+    auto from_quaternion = from_axis_angle(from_axis, from_angle);
+    auto to_quaternion = from_axis_angle(to_axis, to_angle);
+
+    auto interpolated_quaternion = slerp(from_quaternion, to_quaternion, delta);
+    auto interpolated_axis_angle = quaternion_to_axis_angle(interpolated_quaternion);
+    auto interpolated_x_axis = NumberStyleValue::create(interpolated_axis_angle.axis.x());
+    auto interpolated_y_axis = NumberStyleValue::create(interpolated_axis_angle.axis.y());
+    auto interpolated_z_axis = NumberStyleValue::create(interpolated_axis_angle.axis.z());
+    auto interpolated_angle = AngleStyleValue::create(Angle::make_degrees(AK::to_degrees(interpolated_axis_angle.angle)));
+
+    return TransformationStyleValue::create(
+        PropertyID::Rotate,
+        TransformFunction::Rotate3d,
+        { interpolated_x_axis, interpolated_y_axis, interpolated_z_axis, interpolated_angle });
 }
 
 ValueComparingRefPtr<CSSStyleValue const> interpolate_property(DOM::Element& element, PropertyID property_id, CSSStyleValue const& a_from, CSSStyleValue const& a_to, float delta, AllowDiscrete allow_discrete)
@@ -254,6 +352,12 @@ ValueComparingRefPtr<CSSStyleValue const> interpolate_property(DOM::Element& ele
 
         if (property_id == PropertyID::Translate) {
             if (auto result = interpolate_translate(element, calculation_context, from, to, delta, allow_discrete))
+                return result;
+            return interpolate_discrete(from, to, delta, allow_discrete);
+        }
+
+        if (property_id == PropertyID::Rotate) {
+            if (auto result = interpolate_rotate(element, calculation_context, from, to, delta, allow_discrete))
                 return result;
             return interpolate_discrete(from, to, delta, allow_discrete);
         }
@@ -555,21 +659,7 @@ RefPtr<CSSStyleValue const> interpolate_transform(DOM::Element& element, CSSStyl
 
     // https://drafts.csswg.org/css-transforms-2/#interpolation-of-decomposed-3d-matrix-values
     static constexpr auto interpolate = [](DecomposedValues& from, DecomposedValues& to, float delta) -> DecomposedValues {
-        auto product = clamp(from.rotation.dot(to.rotation), -1.0f, 1.0f);
-        FloatVector4 interpolated_rotation;
-        if (fabsf(product) == 1.0f) {
-            interpolated_rotation = from.rotation;
-        } else {
-            auto theta = acos(product);
-            auto w = sin(delta * theta) / sqrtf(1.0f - product * product);
-
-            for (int i = 0; i < 4; i++) {
-                from.rotation[i] *= cos(delta * theta) - product * w;
-                to.rotation[i] *= w;
-                interpolated_rotation[i] = from.rotation[i] + to.rotation[i];
-            }
-        }
-
+        auto interpolated_rotation = slerp(from.rotation, to.rotation, delta);
         return {
             interpolate_raw(from.translation, to.translation, delta),
             interpolate_raw(from.scale, to.scale, delta),
@@ -595,19 +685,36 @@ RefPtr<CSSStyleValue const> interpolate_transform(DOM::Element& element, CSSStyl
     return StyleValueList::create({ TransformationStyleValue::create(PropertyID::Transform, TransformFunction::Matrix3d, move(values)) }, StyleValueList::Separator::Comma);
 }
 
-Color interpolate_color(Color from, Color to, float delta)
+Color interpolate_color(Color from, Color to, float delta, ColorSyntax syntax)
 {
+    // https://drafts.csswg.org/css-color/#interpolation
+    // FIXME: Handle all interpolation methods.
+    // FIXME: Handle "analogous", "missing", and "powerless" components, somehow.
+
     // https://drafts.csswg.org/css-color/#interpolation-space
     // If the host syntax does not define what color space interpolation should take place in, it defaults to Oklab.
-    auto from_oklab = from.to_oklab();
-    auto to_oklab = to.to_oklab();
+    // However, user agents must handle interpolation between legacy sRGB color formats (hex colors, named colors,
+    // rgb(), hsl() or hwb() and the equivalent alpha-including forms) in gamma-encoded sRGB space.  This provides
+    // Web compatibility; legacy sRGB content interpolates in the sRGB space by default.
 
-    auto color = Color::from_oklab(
-        interpolate_raw(from_oklab.L, to_oklab.L, delta),
-        interpolate_raw(from_oklab.a, to_oklab.a, delta),
-        interpolate_raw(from_oklab.b, to_oklab.b, delta));
-    color.set_alpha(interpolate_raw(from.alpha(), to.alpha(), delta));
-    return color;
+    Color result;
+    if (syntax == ColorSyntax::Modern) {
+        auto from_oklab = from.to_oklab();
+        auto to_oklab = to.to_oklab();
+
+        result = Color::from_oklab(
+            interpolate_raw(from_oklab.L, to_oklab.L, delta),
+            interpolate_raw(from_oklab.a, to_oklab.a, delta),
+            interpolate_raw(from_oklab.b, to_oklab.b, delta));
+    } else {
+        result = Color {
+            interpolate_raw(from.red(), to.red(), delta),
+            interpolate_raw(from.green(), to.green(), delta),
+            interpolate_raw(from.blue(), to.blue(), delta),
+        };
+    }
+    result.set_alpha(interpolate_raw(from.alpha(), to.alpha(), delta));
+    return result;
 }
 
 RefPtr<CSSStyleValue const> interpolate_box_shadow(DOM::Element& element, CalculationContext const& calculation_context, CSSStyleValue const& from, CSSStyleValue const& to, float delta, AllowDiscrete allow_discrete)
@@ -655,6 +762,13 @@ RefPtr<CSSStyleValue const> interpolate_box_shadow(DOM::Element& element, Calcul
     StyleValueVector result_shadows;
     result_shadows.ensure_capacity(from_shadows.size());
 
+    Optional<Layout::NodeWithStyle const&> layout_node;
+    CalculationResolutionContext resolution_context;
+    if (auto node = element.layout_node()) {
+        layout_node = *node;
+        resolution_context.length_resolution_context = Length::ResolutionContext::for_layout_node(*node);
+    }
+
     for (size_t i = 0; i < from_shadows.size(); i++) {
         auto const& from_shadow = from_shadows[i]->as_shadow();
         auto const& to_shadow = to_shadows[i]->as_shadow();
@@ -664,8 +778,25 @@ RefPtr<CSSStyleValue const> interpolate_box_shadow(DOM::Element& element, Calcul
         auto interpolated_spread_distance = interpolate_value(element, calculation_context, from_shadow.spread_distance(), to_shadow.spread_distance(), delta, allow_discrete);
         if (!interpolated_offset_x || !interpolated_offset_y || !interpolated_blur_radius || !interpolated_spread_distance)
             return {};
+
+        auto color_syntax = ColorSyntax::Legacy;
+        if ((!from_shadow.color()->is_keyword() && from_shadow.color()->as_color().color_syntax() == ColorSyntax::Modern)
+            || (!to_shadow.color()->is_keyword() && to_shadow.color()->as_color().color_syntax() == ColorSyntax::Modern)) {
+            color_syntax = ColorSyntax::Modern;
+        }
+
+        // FIXME: If we aren't able to resolve the colors here, we should postpone interpolation until we can (perhaps
+        //        by creating something similar to a ColorMixStyleValue).
+        auto from_color = from_shadow.color()->to_color(layout_node, resolution_context);
+        auto to_color = to_shadow.color()->to_color(layout_node, resolution_context);
+
+        Color interpolated_color = Color::Black;
+
+        if (from_color.has_value() && to_color.has_value())
+            interpolated_color = interpolate_color(from_color.value(), to_color.value(), delta, color_syntax);
+
         auto result_shadow = ShadowStyleValue::create(
-            CSSColorValue::create_from_color(interpolate_color(from_shadow.color()->to_color({}), to_shadow.color()->to_color({}), delta), ColorSyntax::Modern),
+            CSSColorValue::create_from_color(interpolated_color, ColorSyntax::Modern),
             *interpolated_offset_x,
             *interpolated_offset_y,
             *interpolated_blur_radius,
@@ -777,9 +908,29 @@ static RefPtr<CSSStyleValue const> interpolate_value_impl(DOM::Element& element,
     }
     case CSSStyleValue::Type::Color: {
         Optional<Layout::NodeWithStyle const&> layout_node;
-        if (auto node = element.layout_node())
+        CalculationResolutionContext resolution_context {};
+        if (auto node = element.layout_node()) {
             layout_node = *node;
-        return CSSColorValue::create_from_color(interpolate_color(from.to_color(layout_node), to.to_color(layout_node), delta), ColorSyntax::Modern);
+            resolution_context.length_resolution_context = Length::ResolutionContext::for_layout_node(*node);
+        }
+
+        auto color_syntax = ColorSyntax::Legacy;
+        if ((!from.is_keyword() && from.as_color().color_syntax() == ColorSyntax::Modern)
+            || (!to.is_keyword() && to.as_color().color_syntax() == ColorSyntax::Modern)) {
+            color_syntax = ColorSyntax::Modern;
+        }
+
+        // FIXME: If we aren't able to resolve the colors here, we should postpone interpolation until we can (perhaps
+        //        by creating something similar to a ColorMixStyleValue).
+        auto from_color = from.to_color(layout_node, resolution_context);
+        auto to_color = to.to_color(layout_node, resolution_context);
+
+        Color interpolated_color = Color::Black;
+
+        if (from_color.has_value() && to_color.has_value())
+            interpolated_color = interpolate_color(from_color.value(), to_color.value(), delta, color_syntax);
+
+        return CSSColorValue::create_from_color(interpolated_color, ColorSyntax::Modern);
     }
     case CSSStyleValue::Type::Edge: {
         auto resolved_from = from.as_edge().resolved_value(calculation_context);
@@ -815,7 +966,6 @@ static RefPtr<CSSStyleValue const> interpolate_value_impl(DOM::Element& element,
         return IntegerStyleValue::create(round_to<i64>(interpolated_value));
     }
     case CSSStyleValue::Type::Length: {
-        // FIXME: Absolutize values
         auto const& from_length = from.as_length().length();
         auto const& to_length = to.as_length().length();
         return LengthStyleValue::create(Length(interpolate_raw(from_length.raw_value(), to_length.raw_value(), delta), from_length.type()));
@@ -861,7 +1011,6 @@ static RefPtr<CSSStyleValue const> interpolate_value_impl(DOM::Element& element,
         if (from_rect.top_edge.is_auto() != to_rect.top_edge.is_auto() || from_rect.right_edge.is_auto() != to_rect.right_edge.is_auto() || from_rect.bottom_edge.is_auto() != to_rect.bottom_edge.is_auto() || from_rect.left_edge.is_auto() != to_rect.left_edge.is_auto())
             return {};
 
-        // FIXME: Absolutize values
         return RectStyleValue::create({
             Length(interpolate_raw(from_rect.top_edge.raw_value(), to_rect.top_edge.raw_value(), delta), from_rect.top_edge.type()),
             Length(interpolate_raw(from_rect.right_edge.raw_value(), to_rect.right_edge.raw_value(), delta), from_rect.right_edge.type()),

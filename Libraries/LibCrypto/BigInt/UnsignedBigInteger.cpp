@@ -50,16 +50,43 @@ UnsignedBigInteger::UnsignedBigInteger(u64 value)
 }
 
 UnsignedBigInteger::UnsignedBigInteger(UnsignedBigInteger const& other)
+    : m_hash(other.m_hash)
 {
     MP_MUST(mp_init_copy(&m_mp, &other.m_mp));
+}
+
+UnsignedBigInteger::UnsignedBigInteger(UnsignedBigInteger&& other)
+    : m_mp(other.m_mp)
+    , m_hash(other.m_hash)
+{
+    other.m_mp = {};
+    other.m_hash.clear();
 }
 
 UnsignedBigInteger& UnsignedBigInteger::operator=(UnsignedBigInteger const& other)
 {
     if (this == &other)
         return *this;
+
     mp_clear(&m_mp);
     MP_MUST(mp_init_copy(&m_mp, &other.m_mp));
+    m_hash = other.m_hash;
+
+    return *this;
+}
+
+UnsignedBigInteger& UnsignedBigInteger::operator=(UnsignedBigInteger&& other)
+{
+    if (this == &other)
+        return *this;
+
+    mp_clear(&m_mp);
+    m_mp = other.m_mp;
+    m_hash = other.m_hash;
+
+    other.m_mp = {};
+    other.m_hash.clear();
+
     return *this;
 }
 
@@ -320,6 +347,13 @@ FLATTEN UnsignedBigInteger UnsignedBigInteger::gcd(UnsignedBigInteger const& oth
 {
     UnsignedBigInteger result;
     MP_MUST(mp_gcd(&m_mp, &other.m_mp, &result.m_mp));
+    return result;
+}
+
+FLATTEN UnsignedBigInteger UnsignedBigInteger::lcm(UnsignedBigInteger const& other) const
+{
+    UnsignedBigInteger result;
+    MP_MUST(mp_lcm(&m_mp, &other.m_mp, &result.m_mp));
     return result;
 }
 

@@ -56,7 +56,7 @@ private:                                                                        
     {                                                                                                                                                                       \
         ElementBaseClass::attribute_changed(name, old_value, value, namespace_);                                                                                            \
         form_node_attribute_changed(name, value);                                                                                                                           \
-        form_associated_element_attribute_changed(name, value, namespace_);                                                                                                 \
+        form_associated_element_attribute_changed(name, old_value, value, namespace_);                                                                                      \
     }
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#selection-direction
@@ -110,6 +110,9 @@ public:
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-fv-valid
     bool satisfies_its_constraints() const;
 
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-fs-novalidate
+    bool novalidate_state() const;
+
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure/#definitions
     virtual bool suffering_from_being_missing() const { return false; }
     virtual bool suffering_from_a_type_mismatch() const { return false; }
@@ -123,6 +126,7 @@ public:
     bool suffering_from_a_custom_error() const;
 
     virtual String value() const { return String {}; }
+    virtual Optional<String> optional_value() const { VERIFY_NOT_REACHED(); }
 
     virtual HTMLElement& form_associated_element_to_html_element() = 0;
     HTMLElement const& form_associated_element_to_html_element() const { return const_cast<FormAssociatedElement&>(*this).form_associated_element_to_html_element(); }
@@ -148,7 +152,7 @@ protected:
     virtual void form_associated_element_was_inserted() { }
     virtual void form_associated_element_was_removed(DOM::Node*) { }
     virtual void form_associated_element_was_moved(GC::Ptr<DOM::Node>) { }
-    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<FlyString> const&) { }
+    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<String> const&, Optional<FlyString> const&) { }
 
     void form_node_was_inserted();
     void form_node_was_removed();

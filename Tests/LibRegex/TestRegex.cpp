@@ -736,6 +736,8 @@ TEST_CASE(ECMA262_match)
         { "(?!(b))\\1"sv, "a"sv, false },
         // String table merge bug: inverse map should be merged regardless of available direct mappings.
         { "((?<x>a)|(?<x>b))"sv, "aa"sv, false },
+        // Insensitive charclasses should accept upper/lowercase in pattern (lookup table should still be ordered if insensitive lookup is used), ladybird#5399.
+        { "[aBc]"sv, "b"sv, true, ECMAScriptFlags::Insensitive },
     };
 
     for (auto& test : tests) {
@@ -750,6 +752,23 @@ TEST_CASE(ECMA262_match)
         }
         EXPECT_EQ(re.parser_result.error, regex::Error::NoError);
         EXPECT_EQ(re.match(test.subject).success, test.matches);
+    }
+}
+
+TEST_CASE(ECMA262_unicode_parser_error)
+{
+    struct _test {
+        StringView pattern;
+        regex::Error error;
+    };
+
+    constexpr _test tests[] {
+        { "([^\\:]+?)"sv, regex::Error::InvalidPattern },
+    };
+
+    for (auto test : tests) {
+        Regex<ECMA262> re(test.pattern, (ECMAScriptFlags)regex::AllFlags::Unicode);
+        EXPECT_EQ(re.parser_result.error, test.error);
     }
 }
 
@@ -799,12 +818,23 @@ TEST_CASE(ECMA262_unicode_match)
         { "[\\ufb06]"sv, "\ufb05"sv, false, ECMAScriptFlags::Unicode },
         { "[\\ufb05]"sv, "\ufb06"sv, true, combine_flags(ECMAScriptFlags::Unicode, ECMAScriptFlags::Insensitive) },
         { "[\\ufb06]"sv, "\ufb05"sv, true, combine_flags(ECMAScriptFlags::Unicode, ECMAScriptFlags::Insensitive) },
+
+        // https://github.com/LadybirdBrowser/ladybird/issues/5549
+        { "[\\ud800-\\udbff][\\udc00-\\udfff]"sv, "😀"sv, true },
+        { "[\\ud800-\\udbff][\\udc00-\\udfff]"sv, "😀"sv, false, ECMAScriptFlags::Unicode },
+        { "[\\ud800-\\udbff][\\udc00-\\udfff]"sv, "a"sv, false },
+        { "[\\ud800-\\udbff][\\udc00-\\udfff]"sv, "a"sv, false, ECMAScriptFlags::Unicode },
+        {
+            "\\ud83c[\\udffb-\\udfff](?=\\ud83c[\\udffb-\\udfff])|(?:[^\\ud800-\\udfff][\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff]?|[\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff]|(?:\\ud83c[\\udde6-\\uddff]){2}|[\\ud800-\\udbff][\\udc00-\\udfff]|[\\ud800-\\udfff])[\\ufe0e\\ufe0f]?(?:[\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff]|\\ud83c[\\udffb-\\udfff])?(?:\\u200d(?:[^\\ud800-\\udfff]|(?:\\ud83c[\\udde6-\\uddff]){2}|[\\ud800-\\udbff][\\udc00-\\udfff])[\\ufe0e\\ufe0f]?(?:[\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff]|\\ud83c[\\udffb-\\udfff])?)*"sv,
+            "😀"sv,
+            true,
+        }
     };
 
     for (auto& test : tests) {
         Regex<ECMA262> re(test.pattern, (ECMAScriptFlags)regex::AllFlags::Global | test.options);
 
-        auto subject = MUST(AK::utf8_to_utf16(test.subject));
+        auto subject = Utf16String::from_utf8(test.subject);
         Utf16View view { subject };
 
         if constexpr (REGEX_DEBUG) {
@@ -859,6 +889,7 @@ TEST_CASE(ECMA262_unicode_sets_match)
         { "[[0-9\\w]--x--6]"sv, "9"sv, true },
         { "[\\w&&\\d]"sv, "a"sv, false },
         { "[\\w&&\\d]"sv, "4"sv, true },
+        { "([^\\:]+?)"sv, "a"sv, true },
     };
 
     for (auto& test : tests) {
@@ -936,7 +967,7 @@ TEST_CASE(ECMA262_property_match)
     for (auto& test : tests) {
         Regex<ECMA262> re(test.pattern, (ECMAScriptFlags)regex::AllFlags::Global | regex::ECMAScriptFlags::BrowserExtended | test.options);
 
-        auto subject = MUST(AK::utf8_to_utf16(test.subject));
+        auto subject = Utf16String::from_utf8(test.subject);
         Utf16View view { subject };
 
         if constexpr (REGEX_DEBUG) {

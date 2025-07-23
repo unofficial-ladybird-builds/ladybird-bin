@@ -2,8 +2,8 @@ Harness status: OK
 
 Found 687 tests
 
-654 Pass
-33 Fail
+659 Pass
+28 Fail
 Pass	background-attachment: scroll
 Pass	background-attachment: fixed
 Pass	background-attachment: inherit
@@ -334,7 +334,7 @@ Fail	content: attr( |bar )
 Pass	content: attr(foo-bar, "fallback")
 Pass	content: attr(foo_bar, "fallback")
 Fail	content: attr(|bar, "fallback")
-Fail	content: attr(foo, "")
+Pass	content: attr(foo, "")
 Fail	content: attr( |foo ,  "" )
 Pass	content: inherit
 Pass	cursor: auto
@@ -374,9 +374,9 @@ Pass	display: table-cell
 Pass	display: table-caption
 Pass	display: none
 Pass	display: inherit
-Fail	empty-cells: show
-Fail	empty-cells: hide
-Fail	empty-cells: inherit
+Pass	empty-cells: show
+Pass	empty-cells: hide
+Pass	empty-cells: inherit
 Pass	float: left
 Pass	float: right
 Pass	float: none
@@ -468,7 +468,7 @@ Pass	list-style-type: decimal
 Pass	list-style-type: decimal-leading-zero
 Pass	list-style-type: lower-roman
 Pass	list-style-type: upper-roman
-Fail	list-style-type: lower-greek
+Pass	list-style-type: lower-greek
 Pass	list-style-type: lower-latin
 Pass	list-style-type: upper-latin
 Fail	list-style-type: armenian

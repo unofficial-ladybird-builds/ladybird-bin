@@ -12,6 +12,7 @@
 #include <AK/Function.h>
 #include <AK/Span.h>
 #include <AK/Vector.h>
+#include <LibJS/Export.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Object.h>
@@ -19,7 +20,7 @@
 
 namespace JS {
 
-class Array : public Object {
+class JS_API Array : public Object {
     JS_OBJECT(Array, Object);
     GC_DECLARE_ALLOCATOR(Array);
 
@@ -50,6 +51,7 @@ public:
     virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override final;
     virtual ThrowCompletionOr<bool> internal_set(PropertyKey const&, Value value, Value receiver, CacheablePropertyMetadata*, PropertyLookupPhase) override;
     virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor const&, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override final;
+    virtual ThrowCompletionOr<bool> internal_has_property(PropertyKey const&) const override final;
     virtual ThrowCompletionOr<bool> internal_delete(PropertyKey const&) override;
     virtual ThrowCompletionOr<GC::RootVector<Value>> internal_own_property_keys() const override final;
 

@@ -8,6 +8,7 @@
 
 #include <AK/CharacterTypes.h>
 #include <AK/Function.h>
+#include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Array.h>
@@ -75,7 +76,7 @@ static ThrowCompletionOr<void> increment_last_index(VM& vm, Object& regexp_objec
 struct Match {
     static Match create(regex::Match const& match)
     {
-        return { match.global_offset, match.global_offset + match.view.length() };
+        return { match.global_offset, match.global_offset + match.view.length_in_code_units() };
     }
 
     size_t start_index { 0 };
@@ -83,7 +84,7 @@ struct Match {
 };
 
 // 22.2.7.7 GetMatchIndexPair ( S, match ), https://tc39.es/ecma262/#sec-getmatchindexpair
-static Value get_match_index_par(VM& vm, Utf16View const& string, Match const& match)
+static Value get_match_index_pair(VM& vm, Utf16View const& string, Match const& match)
 {
     auto& realm = *vm.current_realm();
 
@@ -144,14 +145,14 @@ static Value make_match_indices_index_pair_array(VM& vm, Utf16View const& string
         //     i. Let matchIndicesArray be undefined.
         auto match_indices_array = js_undefined();
         if (match_indices.has_value())
-            match_indices_array = get_match_index_par(vm, string, *match_indices);
+            match_indices_array = get_match_index_pair(vm, string, *match_indices);
 
         // d. Perform ! CreateDataPropertyOrThrow(A, ! ToString(i), matchIndicesArray).
         MUST(array->create_data_property_or_throw(i, match_indices_array));
     }
 
     for (auto const& entry : group_names) {
-        auto match_indices_array = get_match_index_par(vm, string, entry.value);
+        auto match_indices_array = get_match_index_pair(vm, string, entry.value);
 
         // e. If i > 0 and groupNames[i - 1] is not undefined, then
         //     i. Assert: groups is not undefined.
@@ -220,7 +221,10 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
     //       ii. Set matchSucceeded to true.
 
     // 13.b and 13.c
-    regex.start_offset = full_unicode ? string->utf16_string_view().code_point_offset_of(last_index) : last_index;
+    regex.start_offset = full_unicode && last_index <= string->length_in_utf16_code_units()
+        ? string->utf16_string_view().code_point_offset_of(last_index)
+        : last_index;
+
     result = regex.match(string->utf16_string_view());
 
     // 13.d and 13.a
@@ -280,7 +284,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
 
     // 28. Let matchedValue be ! GetMatchString(S, match).
     // 29. Perform ! CreateDataPropertyOrThrow(A, "0", matchedValue).
-    MUST(array->create_data_property_or_throw(0, PrimitiveString::create(vm, Utf16String::create(match.view.u16_view()))));
+    MUST(array->create_data_property_or_throw(0, PrimitiveString::create(vm, match.view.u16_view())));
 
     // 30. If R contains any GroupName, then
     //     a. Let groups be OrdinaryObjectCreate(null).
@@ -305,7 +309,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
             // ii. Append undefined to indices.
             indices.append({});
             // iii. Append capture to indices.
-            captured_values.append(Utf16String::create());
+            captured_values.append({});
         }
         // c. Else,
         else {
@@ -316,7 +320,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
             //     2. Set captureEnd to ! GetStringIndex(S, Input, captureEnd).
             // iv. Let capture be the Match { [[StartIndex]]: captureStart, [[EndIndex]: captureEnd }.
             // v. Let capturedValue be ! GetMatchString(S, capture).
-            auto capture_as_utf16_string = Utf16String::create(capture.view.u16_view());
+            auto capture_as_utf16_string = Utf16String::from_utf16_without_validation(capture.view.u16_view());
             captured_value = PrimitiveString::create(vm, capture_as_utf16_string);
             // vi. Append capture to indices.
             indices.append(Match::create(capture));
@@ -987,7 +991,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
         auto substring = string->utf16_string_view().substring_view(last_match_end, next_search_from - last_match_end);
 
         // 2. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
-        MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, Utf16String::create(substring))));
+        MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, substring)));
 
         // 3. Set lengthA to lengthA + 1.
         ++array_length;
@@ -1033,7 +1037,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
     auto substring = string->utf16_string_view().substring_view(last_match_end);
 
     // 21. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
-    MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, Utf16String::create(substring))));
+    MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, substring)));
 
     // 22. Return A.
     return array;
