@@ -2,30 +2,36 @@ name: Sync with upstream
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours (adjust as needed)
-  workflow_dispatch:        # Allow manual trigger
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write  # Required to allow pushing to the repo
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Fetch all history for merging
+          fetch-depth: 0   # Needed for proper merging
+          ref: master      # Syncing your fork's master branch
 
       - name: Set up Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Add upstream
+      - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream
 
-      - name: Merge upstream changes
+      - name: Merge upstream/main into master
         run: |
+          # Create local main if needed (fetch only brings it in remote)
+          git branch --track upstream-main upstream/main || true
           git checkout master
           git merge upstream/main --no-edit || true
           git push origin master
