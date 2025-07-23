@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # Required to allow pushing to the repo
+  contents: write  # Allow the bot to push
 
 jobs:
   sync:
@@ -15,8 +15,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Needed for proper merging
-          ref: master      # Syncing your fork's master branch
+          fetch-depth: 0
+          ref: master
 
       - name: Set up Git
         run: |
@@ -28,10 +28,8 @@ jobs:
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream
 
-      - name: Merge upstream/main into master
+      - name: Merge upstream/master into fork/master
         run: |
-          # Create local main if needed (fetch only brings it in remote)
-          git branch --track upstream-main upstream/main || true
           git checkout master
-          git merge upstream/main --no-edit || true
+          git merge upstream/master --no-edit || true
           git push origin master
