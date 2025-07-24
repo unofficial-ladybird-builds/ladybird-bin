@@ -38,7 +38,7 @@ enum class Zoned {
     Yes,
 };
 
-// 13.30.1 Static Semantics: IsValidMonthDay, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-isvalidmonthday
+// 13.31.1 Static Semantics: IsValidMonthDay, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-isvalidmonthday
 static bool is_valid_month_day(ParseResult const& result)
 {
     // 1. If DateDay is "31" and DateMonth is "02", "04", "06", "09", "11", return false.
@@ -53,7 +53,7 @@ static bool is_valid_month_day(ParseResult const& result)
     return true;
 }
 
-// 13.30.2 Static Semantics: IsValidDate, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-isvaliddate
+// 13.31.2 Static Semantics: IsValidDate, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-isvaliddate
 static bool is_valid_date(ParseResult const& result)
 {
     // 1. If IsValidMonthDay of DateSpec is false, return false.
@@ -71,7 +71,7 @@ static bool is_valid_date(ParseResult const& result)
     return true;
 }
 
-// 13.30 RFC 9557 / ISO 8601 grammar, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar
+// 13.31 RFC 9557 / ISO 8601 grammar, https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar
 class ISO8601Parser {
 public:
     explicit ISO8601Parser(StringView input)
@@ -150,6 +150,15 @@ public:
         return parse_annotated_date_time(Zoned::No, TimeRequired::Yes) || parse_annotated_time();
     }
 
+    // https://tc39.es/proposal-temporal/#prod-AmbiguousTemporalTimeString
+    [[nodiscard]] bool parse_ambiguous_temporal_time_string()
+    {
+        // AmbiguousTemporalTimeString :::
+        //     DateSpecMonthDay TimeZoneAnnotation[opt] Annotations[opt]
+        //     DateSpecYearMonth TimeZoneAnnotation[opt] Annotations[opt]
+        return parse_annotated_month_day() || parse_annotated_year_month();
+    }
+
     // https://tc39.es/proposal-temporal/#prod-TemporalYearMonthString
     [[nodiscard]] bool parse_temporal_year_month_string()
     {
@@ -199,16 +208,7 @@ public:
         // AnnotatedTime :::
         //     TimeDesignator Time DateTimeUTCOffset[~Z][opt] TimeZoneAnnotation[opt] Annotations[opt]
         //     Time DateTimeUTCOffset[~Z][opt] TimeZoneAnnotation[opt] Annotations[opt]
-        auto has_time_designator = parse_time_designator();
-
-        if (!has_time_designator) {
-            StateTransaction transaction { *this };
-
-            // It is a Syntax Error if ParseText(Time DateTimeUTCOffset[~Z], DateSpecMonthDay) is a Parse Node.
-            // It is a Syntax Error if ParseText(Time DateTimeUTCOffset[~Z], DateSpecYearMonth) is a Parse Node.
-            if (parse_date_spec_month_day() || parse_date_spec_year_month())
-                return false;
-        }
+        (void)parse_time_designator();
 
         if (!parse_time())
             return false;
@@ -285,6 +285,8 @@ public:
         if (!parse_date_day())
             return false;
 
+        // Note the prohibition on invalid combinations of month and day in 13.31.3.
+        // https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-early-errors
         // It is a Syntax Error if IsValidDate of DateSpec is false.
         if (!is_valid_date(m_state.parse_result))
             return false;
@@ -310,6 +312,8 @@ public:
         if (!parse_date_day())
             return false;
 
+        // Note the prohibition on invalid combinations of month and day in 13.31.3.
+        // https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-early-errors
         // It is a Syntax Error if IsValidMonthDay of DateSpecMonthDay is false.
         if (!is_valid_month_day(m_state.parse_result))
             return false;
@@ -352,6 +356,8 @@ public:
                 return false;
         }
 
+        // Note the prohibition on negative zero in 13.31.3.
+        // https://tc39.es/proposal-temporal/#sec-temporal-iso8601grammar-static-semantics-early-errors
         // It is a Syntax Error if DateYear is "-000000".
         if (transaction.parsed_string_view() == "-000000"sv)
             return false;
@@ -1297,6 +1303,7 @@ private:
 };
 
 #define JS_ENUMERATE_ISO8601_PRODUCTION_PARSERS                                        \
+    __JS_ENUMERATE(AmbiguousTemporalTimeString, parse_ambiguous_temporal_time_string)  \
     __JS_ENUMERATE(AnnotationValue, parse_annotation_value)                            \
     __JS_ENUMERATE(DateMonth, parse_date_month)                                        \
     __JS_ENUMERATE(TemporalDateTimeString, parse_temporal_date_time_string)            \
