@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2024-2025, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -138,16 +138,13 @@ TimeZoneData::TimeZoneData(NonnullOwnPtr<icu::TimeZone> time_zone)
 {
 }
 
-Vector<icu::UnicodeString> icu_string_list(ReadonlySpan<String> strings)
+Vector<icu::UnicodeString> icu_string_list(ReadonlySpan<Utf16String> strings)
 {
     Vector<icu::UnicodeString> result;
     result.ensure_capacity(strings.size());
 
-    for (auto const& string : strings) {
-        auto view = string.bytes_as_string_view();
-        icu::UnicodeString icu_string(view.characters_without_null_termination(), static_cast<i32>(view.length()));
-        result.unchecked_append(move(icu_string));
-    }
+    for (auto const& string : strings)
+        result.unchecked_append(icu_string(string));
 
     return result;
 }
@@ -160,6 +157,33 @@ String icu_string_to_string(icu::UnicodeString const& string)
 String icu_string_to_string(UChar const* string, i32 length)
 {
     return MUST(Utf16View { string, static_cast<size_t>(length) }.to_utf8());
+}
+
+Utf16String icu_string_to_utf16_string(icu::UnicodeString const& string)
+{
+    return icu_string_to_utf16_string(string.getBuffer(), string.length());
+}
+
+Utf16String icu_string_to_utf16_string(UChar const* string, i32 length)
+{
+    return Utf16String::from_utf16_without_validation({ string, static_cast<size_t>(length) });
+}
+
+Utf16View icu_string_to_utf16_view(icu::UnicodeString const& string)
+{
+    return { string.getBuffer(), static_cast<size_t>(string.length()) };
+}
+
+UCharIterator icu_string_iterator(Utf16View const& string)
+{
+    UCharIterator iterator;
+
+    if (string.has_ascii_storage())
+        uiter_setUTF8(&iterator, string.ascii_span().data(), static_cast<i32>(string.length_in_code_units()));
+    else
+        uiter_setString(&iterator, string.utf16_span().data(), static_cast<i32>(string.length_in_code_units()));
+
+    return iterator;
 }
 
 }
