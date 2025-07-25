@@ -342,8 +342,11 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
                         // 3.5.1.7. Set the surrounding agent's associated store to store.
                         address = cache.abstract_machine().store().allocate({ type.type(), false }, cast_value);
                     }
-                    // FIXME: 3.5.2. Otherwise, if v implements Global,
-                    // FIXME: 3.5.2.1. Let globaladdr be v.[[Global]].
+                    // 3.5.2. Otherwise, if v implements Global,
+                    else if (import_.is_object() && is<Global>(import_.as_object())) {
+                        // 3.5.2.1. Let globaladdr be v.[[Global]].
+                        address = as<Global>(import_.as_object()).address();
+                    }
                     // 3.5.3. Otherwise,
                     else {
                         // 3.5.3.1. Throw a LinkError exception.
@@ -397,9 +400,17 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
         return vm.throw_completion<LinkError>(MUST(builder.to_string()));
     }
 
+    // https://webassembly.github.io/spec/js-api/index.html#instantiate-the-core-of-a-webassembly-module
     auto instance_result = cache.abstract_machine().instantiate(module, link_result.release_value());
     if (instance_result.is_error()) {
-        return vm.throw_completion<LinkError>(instance_result.error().error);
+        auto instantiation_error = instance_result.release_error();
+        switch (instantiation_error.source) {
+        case Wasm::InstantiationErrorSource::Linking:
+            return vm.throw_completion<LinkError>(instantiation_error.error);
+        case Wasm::InstantiationErrorSource::StartFunction:
+            return vm.throw_completion<RuntimeError>(instantiation_error.error);
+        }
+        VERIFY_NOT_REACHED();
     }
 
     return instance_result.release_value();

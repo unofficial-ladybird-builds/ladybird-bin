@@ -9,6 +9,7 @@
 #include <LibGC/Ptr.h>
 #include <LibGfx/Rect.h>
 #include <LibGfx/TextLayout.h>
+#include <LibWeb/CSS/Enums.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/PixelUnits.h>
 
@@ -46,7 +47,7 @@ public:
 
     bool ends_in_whitespace() const;
     bool is_justifiable_whitespace() const;
-    StringView text() const;
+    Utf16View text() const;
 
     bool is_atomic_inline() const;
 

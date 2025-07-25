@@ -125,6 +125,8 @@ public:
         return builder.to_utf16_string();
     }
 
+    static Utf16String repeated(u32 code_point, size_t count);
+
     ALWAYS_INLINE static Utf16String from_string_builder(Badge<StringBuilder>, StringBuilder& builder)
     {
         VERIFY(builder.utf16_string_view().validate());
@@ -135,6 +137,13 @@ public:
     {
         return from_string_builder_without_validation(builder);
     }
+
+    // These methods require linking LibUnicode.
+    Utf16String to_lowercase(Optional<StringView> const& locale = {}) const;
+    Utf16String to_uppercase(Optional<StringView> const& locale = {}) const;
+    Utf16String to_titlecase(Optional<StringView> const& locale = {}, TrailingCodePointTransformation trailing_code_point_transformation = TrailingCodePointTransformation::Lowercase) const;
+    Utf16String to_casefold() const;
+    Utf16String to_fullwidth() const;
 
     ALWAYS_INLINE Utf16String to_ascii_lowercase() const
     {
