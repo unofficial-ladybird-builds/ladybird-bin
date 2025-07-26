@@ -39,7 +39,8 @@ jobs:
 
           # Restore our own .github folder
           git restore --source=HEAD --staged --worktree .github || true
-
+          git restore --staged --worktree -- README.md  # Keeps README as-is
+          
           # Commit the sync
           git add -A
           git commit -m "Sync with upstream (excluding .github)" || echo "No changes to commit"
