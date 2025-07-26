@@ -34,7 +34,7 @@ void EditingHostManager::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_active_contenteditable_element);
 }
 
-void EditingHostManager::handle_insert(String const& value)
+void EditingHostManager::handle_insert(Utf16String const& value)
 {
     // https://w3c.github.io/editing/docs/execCommand/#additional-requirements
     // When the user instructs the user agent to insert text inside an editing host, such as by typing on the keyboard
