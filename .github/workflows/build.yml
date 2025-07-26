@@ -35,7 +35,8 @@ jobs:
           git checkout upstream/master -- .
 
           # Keep our .github folder (workflows, configs)
-          git restore --source=HEAD --staged --worktree .github || true
+          git restore --source=HEAD --staged --worktree .github
+          git restore --staged --worktree -- README.md  # Keeps README as-is
 
           # Commit the sync (only if there are changes)
           git add -A
