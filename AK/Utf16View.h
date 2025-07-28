@@ -88,6 +88,25 @@ public:
         return static_cast<u32>(code_unit);
     }
 
+    constexpr Optional<u32> peek(size_t code_point_offset) const
+    {
+        if (code_point_offset == 0) {
+            if (remaining_code_units() == 0)
+                return {};
+            return this->operator*();
+        }
+
+        auto it = *this;
+
+        for (size_t index = 0; index < code_point_offset; ++index) {
+            ++it;
+            if (it.remaining_code_units() == 0)
+                return {};
+        }
+
+        return *it;
+    }
+
     [[nodiscard]] constexpr bool operator==(Utf16CodePointIterator const& other) const
     {
         // Note that this also protects against iterators with different underlying storage.
@@ -347,14 +366,14 @@ public:
         if (has_ascii_storage()) {
             VERIFY(it.has_ascii_storage());
             VERIFY(it.m_iterator.ascii >= m_string.ascii);
-            VERIFY(it.m_iterator.ascii <= m_string.ascii);
+            VERIFY(it.m_iterator.ascii <= m_string.ascii + length_in_code_units());
 
             return it.m_iterator.ascii - m_string.ascii;
         }
 
         VERIFY(!it.has_ascii_storage());
         VERIFY(it.m_iterator.utf16 >= m_string.utf16);
-        VERIFY(it.m_iterator.utf16 <= m_string.utf16);
+        VERIFY(it.m_iterator.utf16 <= m_string.utf16 + length_in_code_units());
 
         return it.m_iterator.utf16 - m_string.utf16;
     }
@@ -479,6 +498,16 @@ public:
 
     [[nodiscard]] constexpr bool contains(char16_t needle) const { return find_code_unit_offset(needle).has_value(); }
     [[nodiscard]] constexpr bool contains(Utf16View const& needle) const { return find_code_unit_offset(needle).has_value(); }
+
+    [[nodiscard]] constexpr bool contains_any_of(ReadonlySpan<u32> needles) const
+    {
+        for (auto code_point : *this) {
+            if (needles.contains_slow(code_point))
+                return true;
+        }
+
+        return false;
+    }
 
     [[nodiscard]] constexpr size_t count(Utf16View const& needle) const
     {
