@@ -26,7 +26,9 @@ GC::Ref<ImagePaintable> ImagePaintable::create(Layout::SVGImageBox const& layout
 
 GC::Ref<ImagePaintable> ImagePaintable::create(Layout::ImageBox const& layout_box)
 {
-    auto alt = layout_box.dom_node().get_attribute_value(HTML::AttributeNames::alt);
+    String alt;
+    if (auto element = layout_box.dom_node())
+        alt = element->get_attribute_value(HTML::AttributeNames::alt);
     return layout_box.heap().allocate<ImagePaintable>(layout_box, layout_box.image_provider(), layout_box.renders_as_alt_text(), move(alt), false);
 }
 
@@ -43,7 +45,7 @@ ImagePaintable::ImagePaintable(Layout::Box const& layout_box, Layout::ImageProvi
 void ImagePaintable::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_image_provider.to_html_element());
+    m_image_provider.image_provider_visit_edges(visitor);
 }
 
 void ImagePaintable::finalize()
