@@ -190,6 +190,7 @@ class SubtleCrypto;
 namespace Web::CSS {
 
 class AbstractImageStyleValue;
+class AnchorSizeStyleValue;
 class Angle;
 class AngleOrCalculated;
 class AnglePercentage;
@@ -989,6 +990,7 @@ namespace Web::SVG {
 class Path;
 class SVGAnimatedEnumeration;
 class SVGAnimatedLength;
+class SVGAnimationElement;
 class SVGAnimatedRect;
 class SVGCircleElement;
 class SVGClipPathElement;
@@ -1180,5 +1182,11 @@ ErrorOr<void> encode(Encoder&, Web::UniqueNodeID const&);
 
 template<>
 ErrorOr<Web::UniqueNodeID> decode(Decoder&);
+
+}
+
+namespace Web::TrustedTypes {
+
+class TrustedTypePolicyFactory;
 
 }

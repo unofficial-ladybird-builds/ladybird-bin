@@ -354,6 +354,7 @@ private:
     RefPtr<CSSStyleValue const> parse_calculated_value(ComponentValue const&);
     Optional<FlyString> parse_custom_ident(TokenStream<ComponentValue>&, ReadonlySpan<StringView> blacklist);
     RefPtr<CustomIdentStyleValue const> parse_custom_ident_value(TokenStream<ComponentValue>&, ReadonlySpan<StringView> blacklist);
+    Optional<FlyString> parse_dashed_ident(TokenStream<ComponentValue>&);
     // NOTE: Implemented in generated code. (GenerateCSSMathFunctions.cpp)
     RefPtr<CalculationNode const> parse_math_function(Function const&, CalculationContext const&);
     RefPtr<CalculationNode const> parse_a_calc_function_node(Function const&, CalculationContext const&);
@@ -395,6 +396,7 @@ private:
     RefPtr<StringStyleValue const> parse_opentype_tag_value(TokenStream<ComponentValue>&);
     RefPtr<FontSourceStyleValue const> parse_font_source_value(TokenStream<ComponentValue>&);
 
+    RefPtr<CSSStyleValue const> parse_anchor_size(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue const> parse_angle_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue const> parse_angle_percentage_value(TokenStream<ComponentValue>&);
     RefPtr<CSSStyleValue const> parse_flex_value(TokenStream<ComponentValue>&);

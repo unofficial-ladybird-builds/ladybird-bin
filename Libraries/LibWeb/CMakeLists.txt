@@ -178,6 +178,7 @@ set(SOURCES
     CSS/StyleSheet.cpp
     CSS/StyleSheetIdentifier.cpp
     CSS/StyleSheetList.cpp
+    CSS/StyleValues/AnchorSizeStyleValue.cpp
     CSS/StyleValues/AngleStyleValue.cpp
     CSS/StyleValues/BackgroundRepeatStyleValue.cpp
     CSS/StyleValues/BackgroundSizeStyleValue.cpp
@@ -833,6 +834,7 @@ set(SOURCES
     SVG/SVGAnimatedRect.cpp
     SVG/SVGAnimatedString.cpp
     SVG/SVGAnimatedTransformList.cpp
+    SVG/SVGAnimationElement.cpp
     SVG/SVGCircleElement.cpp
     SVG/SVGClipPathElement.cpp
     SVG/SVGDecodedImageData.cpp
@@ -877,6 +879,7 @@ set(SOURCES
     SVG/SVGViewElement.cpp
     SVG/TagNames.cpp
     SVG/ViewBox.cpp
+    TrustedTypes/TrustedTypePolicyFactory.cpp
     UIEvents/CompositionEvent.cpp
     UIEvents/EventNames.cpp
     UIEvents/FocusEvent.cpp
