@@ -39,6 +39,7 @@
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/VisibilityState.h>
 #include <LibWeb/InvalidateDisplayList.h>
+#include <LibWeb/ResizeObserver/ResizeObserver.h>
 #include <LibWeb/TrustedTypes/InjectionSink.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/WebIDL/ObservableArray.h>
@@ -1081,7 +1082,9 @@ private:
 
     HashTable<GC::Ptr<NodeIterator>> m_node_iterators;
 
-    HashTable<GC::Ref<DocumentObserver>> m_document_observers;
+    // Document should not visit DocumentObserver to avoid leaks.
+    // It's responsibility of object that requires DocumentObserver to keep it alive.
+    HashTable<GC::RawRef<DocumentObserver>> m_document_observers;
     Vector<GC::Ref<DocumentObserver>> m_document_observers_being_notified;
 
     // https://html.spec.whatwg.org/multipage/dom.html#is-initial-about:blank
@@ -1155,7 +1158,7 @@ private:
     // Each Document has a lazy load intersection observer, initially set to null but can be set to an IntersectionObserver instance.
     GC::Ptr<IntersectionObserver::IntersectionObserver> m_lazy_load_intersection_observer;
 
-    Vector<GC::Ref<ResizeObserver::ResizeObserver>> m_resize_observers;
+    ResizeObserver::ResizeObserver::ResizeObserversList m_resize_observers;
 
     // https://html.spec.whatwg.org/multipage/semantics.html#will-declaratively-refresh
     // A Document object has an associated will declaratively refresh (a boolean). It is initially false.
@@ -1198,6 +1201,8 @@ private:
 
     mutable GC::Ptr<WebIDL::ObservableArray> m_adopted_style_sheets;
 
+    // Document should not visit ShadowRoot list to avoid leaks.
+    // It's responsibility of object that allocated ShadowRoot to keep it alive.
     ShadowRoot::DocumentShadowRootList m_shadow_roots;
 
     Optional<AK::UnixDateTime> m_last_modified;
