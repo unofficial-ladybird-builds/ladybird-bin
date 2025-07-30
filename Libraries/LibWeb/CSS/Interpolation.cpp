@@ -42,7 +42,7 @@ static T interpolate_raw(T from, T to, float delta)
     } else if constexpr (AK::Detail::IsIntegral<T>) {
         auto from_float = static_cast<float>(from);
         auto to_float = static_cast<float>(to);
-        auto unclamped_result = from_float + (to_float - from_float) * delta;
+        auto unclamped_result = roundf(from_float + (to_float - from_float) * delta);
         return static_cast<AK::Detail::RemoveCVReference<T>>(clamp(unclamped_result, NumericLimits<T>::min(), NumericLimits<T>::max()));
     }
     return static_cast<AK::Detail::RemoveCVReference<T>>(from + (to - from) * delta);
@@ -288,7 +288,7 @@ ValueComparingRefPtr<CSSStyleValue const> interpolate_property(DOM::Element& ele
             // such a state, the transformed element is not rendered.
             return {};
         }
-        if (property_id == PropertyID::BoxShadow) {
+        if (property_id == PropertyID::BoxShadow || property_id == PropertyID::TextShadow) {
             if (auto interpolated_box_shadow = interpolate_box_shadow(element, calculation_context, from, to, delta, allow_discrete))
                 return *interpolated_box_shadow;
             return interpolate_discrete(from, to, delta, allow_discrete);
