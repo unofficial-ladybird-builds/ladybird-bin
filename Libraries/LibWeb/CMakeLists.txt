@@ -725,10 +725,11 @@ set(SOURCES
     Painting/CanvasPaintable.cpp
     Painting/CheckBoxPaintable.cpp
     Painting/ClipFrame.cpp
-    Painting/Command.cpp
     Painting/DisplayList.cpp
+    Painting/DisplayListCommand.cpp
     Painting/DisplayListPlayerSkia.cpp
     Painting/DisplayListRecorder.cpp
+    Painting/DisplayListRecordingContext.cpp
     Painting/FieldSetPaintable.cpp
     Painting/GradientPainting.cpp
     Painting/ImagePaintable.cpp
@@ -739,7 +740,6 @@ set(SOURCES
     Painting/Paintable.cpp
     Painting/PaintableBox.cpp
     Painting/PaintableFragment.cpp
-    Painting/PaintContext.cpp
     Painting/RadioButtonPaintable.cpp
     Painting/ScrollFrame.cpp
     Painting/ScrollState.cpp

@@ -136,8 +136,8 @@ public:
 
     void apply_backdrop_filter(Gfx::IntRect const& backdrop_region, BorderRadiiData const& border_radii_data, Gfx::Filter const& backdrop_filter);
 
-    void paint_outer_box_shadow_params(PaintBoxShadowParams params);
-    void paint_inner_box_shadow_params(PaintBoxShadowParams params);
+    void paint_outer_box_shadow(PaintBoxShadowParams params);
+    void paint_inner_box_shadow(PaintBoxShadowParams params);
     void paint_text_shadow(int blur_radius, Gfx::IntRect bounding_rect, Gfx::IntRect text_rect, Gfx::GlyphRun const&, double glyph_run_scale, Color color, Gfx::FloatPoint draw_location);
 
     void fill_rect_with_rounded_corners(Gfx::IntRect const& rect, Color color, CornerRadius top_left_radius, CornerRadius top_right_radius, CornerRadius bottom_right_radius, CornerRadius bottom_left_radius);
@@ -157,31 +157,29 @@ public:
     DisplayListRecorder(DisplayList&);
     ~DisplayListRecorder();
 
-    DisplayList const& display_list() const { return m_command_list; }
-
     int m_save_nesting_level { 0 };
 
 private:
     Vector<Optional<i32>> m_scroll_frame_id_stack;
     Vector<RefPtr<ClipFrame const>> m_clip_frame_stack;
-    DisplayList& m_command_list;
+    DisplayList& m_display_list;
 };
 
 class DisplayListRecorderStateSaver {
 public:
-    explicit DisplayListRecorderStateSaver(DisplayListRecorder& painter)
-        : m_painter(painter)
+    explicit DisplayListRecorderStateSaver(DisplayListRecorder& recorder)
+        : m_recorder(recorder)
     {
-        m_painter.save();
+        m_recorder.save();
     }
 
     ~DisplayListRecorderStateSaver()
     {
-        m_painter.restore();
+        m_recorder.restore();
     }
 
 private:
-    DisplayListRecorder& m_painter;
+    DisplayListRecorder& m_recorder;
 };
 
 }
