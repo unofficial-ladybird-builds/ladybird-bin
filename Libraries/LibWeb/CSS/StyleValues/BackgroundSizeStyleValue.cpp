@@ -13,7 +13,7 @@ namespace Web::CSS {
 
 BackgroundSizeStyleValue::BackgroundSizeStyleValue(LengthPercentage size_x, LengthPercentage size_y)
     : StyleValueWithDefaultOperators(Type::BackgroundSize)
-    , m_properties { .size_x = size_x, .size_y = size_y }
+    , m_properties { .size_x = move(size_x), .size_y = move(size_y) }
 {
 }
 
@@ -21,6 +21,8 @@ BackgroundSizeStyleValue::~BackgroundSizeStyleValue() = default;
 
 String BackgroundSizeStyleValue::to_string(SerializationMode) const
 {
+    if (m_properties.size_x.is_auto() && m_properties.size_y.is_auto())
+        return "auto"_string;
     return MUST(String::formatted("{} {}", m_properties.size_x.to_string(), m_properties.size_y.to_string()));
 }
 
