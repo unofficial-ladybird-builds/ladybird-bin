@@ -116,7 +116,12 @@ CSSPixelRect Page::web_exposed_screen_area() const
 
 CSS::PreferredColorScheme Page::preferred_color_scheme() const
 {
-    return m_client->preferred_color_scheme();
+    auto preferred_color_scheme = m_client->preferred_color_scheme();
+
+    if (preferred_color_scheme == CSS::PreferredColorScheme::Auto)
+        preferred_color_scheme = palette().is_dark() ? CSS::PreferredColorScheme::Dark : CSS::PreferredColorScheme::Light;
+
+    return preferred_color_scheme;
 }
 
 CSS::PreferredContrast Page::preferred_contrast() const
