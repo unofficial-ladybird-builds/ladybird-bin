@@ -158,16 +158,20 @@ void Bitmap::apply_mask(Gfx::Bitmap const& mask, MaskKind mask_kind)
     }
 }
 
-ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::cropped(Gfx::IntRect crop, Optional<BitmapFormat> new_bitmap_format) const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::cropped(Gfx::IntRect crop, Gfx::Color outside_color) const
 {
-    auto new_bitmap = TRY(Gfx::Bitmap::create(new_bitmap_format.value_or(format()), alpha_type(), { crop.width(), crop.height() }));
+    // OPTIMIZATION: Skip slow manual copying for NO-OP crops
+    if (crop == rect())
+        return clone();
+
+    auto new_bitmap = TRY(Gfx::Bitmap::create(format(), alpha_type(), { crop.width(), crop.height() }));
 
     for (int y = 0; y < crop.height(); ++y) {
         for (int x = 0; x < crop.width(); ++x) {
             int global_x = x + crop.left();
             int global_y = y + crop.top();
             if (global_x >= width() || global_y >= height() || global_x < 0 || global_y < 0) {
-                new_bitmap->set_pixel(x, y, Gfx::Color::Black);
+                new_bitmap->set_pixel(x, y, outside_color);
             } else {
                 new_bitmap->set_pixel(x, y, get_pixel(global_x, global_y));
             }
