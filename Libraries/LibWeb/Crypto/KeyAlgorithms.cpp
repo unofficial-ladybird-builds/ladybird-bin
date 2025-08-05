@@ -49,7 +49,7 @@ KeyAlgorithm::KeyAlgorithm(JS::Realm& realm)
 
 void KeyAlgorithm::initialize(JS::Realm& realm)
 {
-    define_native_accessor(realm, "name"_fly_string, name_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "name"_utf16_fly_string, name_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
     Base::initialize(realm);
 }
 
@@ -81,8 +81,8 @@ void RsaKeyAlgorithm::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
 
-    define_native_accessor(realm, "modulusLength"_fly_string, modulus_length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
-    define_native_accessor(realm, "publicExponent"_fly_string, public_exponent_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "modulusLength"_utf16_fly_string, modulus_length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "publicExponent"_utf16_fly_string, public_exponent_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
 void RsaKeyAlgorithm::visit_edges(Visitor& visitor)
@@ -98,23 +98,11 @@ WebIDL::ExceptionOr<void> RsaKeyAlgorithm::set_public_exponent(::Crypto::Unsigne
 
     auto bytes = TRY_OR_THROW_OOM(vm, ByteBuffer::create_uninitialized(exponent.byte_length()));
 
-    auto data_size = exponent.export_data(bytes.span());
-    auto data_slice_be = bytes.bytes().slice(bytes.size() - data_size, data_size);
+    auto result = exponent.export_data(bytes.span());
 
     // The BigInteger typedef from the WebCrypto spec requires the bytes in the Uint8Array be ordered in Big Endian
-
-    if constexpr (AK::HostIsLittleEndian) {
-        Vector<u8, 32> data_slice_le;
-        data_slice_le.ensure_capacity(data_size);
-        for (size_t i = 0; i < data_size; ++i) {
-            data_slice_le.append(data_slice_be[data_size - i - 1]);
-        }
-        m_public_exponent = TRY(JS::Uint8Array::create(realm, data_slice_le.size()));
-        m_public_exponent->viewed_array_buffer()->buffer().overwrite(0, data_slice_le.data(), data_slice_le.size());
-    } else {
-        m_public_exponent = TRY(JS::Uint8Array::create(realm, data_slice_be.size()));
-        m_public_exponent->viewed_array_buffer()->buffer().overwrite(0, data_slice_be.data(), data_slice_be.size());
-    }
+    m_public_exponent = TRY(JS::Uint8Array::create(realm, result.size()));
+    m_public_exponent->viewed_array_buffer()->buffer().overwrite(0, result.data(), result.size());
 
     return {};
 }
@@ -145,7 +133,7 @@ void EcKeyAlgorithm::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
 
-    define_native_accessor(realm, "namedCurve"_fly_string, named_curve_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "namedCurve"_utf16_fly_string, named_curve_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
 JS_DEFINE_NATIVE_FUNCTION(EcKeyAlgorithm::named_curve_getter)
@@ -169,7 +157,7 @@ void RsaHashedKeyAlgorithm::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
 
-    define_native_accessor(realm, "hash"_fly_string, hash_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "hash"_utf16_fly_string, hash_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
 JS_DEFINE_NATIVE_FUNCTION(RsaHashedKeyAlgorithm::hash_getter)
@@ -203,7 +191,7 @@ void AesKeyAlgorithm::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
 
-    define_native_accessor(realm, "length"_fly_string, length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "length"_utf16_fly_string, length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
 JS_DEFINE_NATIVE_FUNCTION(AesKeyAlgorithm::length_getter)
@@ -226,8 +214,8 @@ HmacKeyAlgorithm::HmacKeyAlgorithm(JS::Realm& realm)
 void HmacKeyAlgorithm::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
-    define_native_accessor(realm, "hash"_fly_string, hash_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
-    define_native_accessor(realm, "length"_fly_string, length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "hash"_utf16_fly_string, hash_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_native_accessor(realm, "length"_utf16_fly_string, length_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
 void HmacKeyAlgorithm::visit_edges(JS::Cell::Visitor& visitor)

@@ -117,7 +117,7 @@ ErrorOr<UnsignedBigInteger> Decoder::decode_arbitrary_sized_integer(ReadonlyByte
     if (is_negative)
         return Error::from_string_literal("ASN1::Decoder: Decoding a negative unsigned arbitrary sized integer");
 
-    return UnsignedBigInteger::import_data(data.data(), data.size());
+    return UnsignedBigInteger::import_data(data);
 }
 
 ErrorOr<StringView> Decoder::decode_octet_string(ReadonlyBytes bytes)
@@ -305,32 +305,21 @@ ErrorOr<void> Encoder::write_arbitrary_sized_integer(UnsignedBigInteger const& v
     auto max_byte_size = max(1ull, value.byte_length()); // At minimum, we need one byte to encode 0.
     ByteBuffer buffer;
     auto output = TRY(buffer.get_bytes_for_writing(max_byte_size));
-    auto size = value.export_data(output);
+    auto result = value.export_data(output);
     // DER does not allow empty integers, encode a zero if the exported size is zero.
-    if (size == 0) {
+    if (result.is_empty()) {
         output[0] = 0;
-        size = 1;
-    }
-
-    // Chop off the leading zeros
-    if constexpr (AK::HostIsLittleEndian) {
-        while (size > 1 && output[0] == 0) {
-            size--;
-            output = output.slice(1);
-        }
-    } else {
-        while (size > 1 && output[size - 1] == 0)
-            size--;
+        result = output.slice(0, 1);
     }
 
     // If the MSB is set, we need to add a leading zero to indicate a positive number.
     if ((output[0] & 0x80) != 0) {
-        TRY(write_length(size + 1));
+        TRY(write_length(result.size() + 1));
         TRY(write_byte(0));
     } else {
-        TRY(write_length(size));
+        TRY(write_length(result.size()));
     }
-    return write_bytes(output.slice(0, size));
+    return write_bytes(result);
 }
 
 ErrorOr<void> Encoder::write_printable_string(StringView string, Optional<Class> class_override, Optional<Kind> kind_override)

@@ -20,6 +20,7 @@
 #include <AK/Traits.h>
 #include <AK/Types.h>
 #include <AK/UnicodeUtils.h>
+#include <AK/Utf8View.h>
 #include <AK/Vector.h>
 
 namespace AK {
@@ -78,12 +79,7 @@ public:
                 if (UnicodeUtils::is_utf16_low_surrogate(next_code_unit))
                     return UnicodeUtils::decode_utf16_surrogate_pair(code_unit, next_code_unit);
             }
-
-            return UnicodeUtils::REPLACEMENT_CODE_POINT;
         }
-
-        if (UnicodeUtils::is_utf16_low_surrogate(code_unit))
-            return UnicodeUtils::REPLACEMENT_CODE_POINT;
 
         return static_cast<u32>(code_unit);
     }
@@ -237,7 +233,60 @@ public:
     {
         if (has_ascii_storage())
             return StringView { m_string.ascii, length_in_code_units() } == other;
-        return *this == Utf16View { other.characters_without_null_termination(), other.length() };
+
+        if (other.is_ascii())
+            return *this == Utf16View { other.characters_without_null_termination(), other.length() };
+
+        Utf8View other_utf8 { other };
+
+        auto this_it = begin();
+        auto other_it = other_utf8.begin();
+
+        for (; this_it != end() && other_it != other_utf8.end(); ++this_it, ++other_it) {
+            if (*this_it != *other_it)
+                return false;
+        }
+
+        return this_it == end() && other_it == other_utf8.end();
+    }
+
+    [[nodiscard]] constexpr int operator<=>(Utf16View const& other) const
+    {
+        if (is_empty() && other.is_empty())
+            return 0;
+
+        size_t length = min(length_in_code_units(), other.length_in_code_units());
+        int result = 0;
+
+        if (has_ascii_storage() && other.has_ascii_storage()) {
+            result = __builtin_memcmp(m_string.ascii, other.m_string.ascii, length);
+        } else if (!has_ascii_storage() && !other.has_ascii_storage()) {
+            result = __builtin_memcmp(m_string.utf16, other.m_string.utf16, length * sizeof(char16_t));
+        } else {
+            for (size_t i = 0; i < length; ++i) {
+                auto this_code_unit = code_unit_at(i);
+                auto other_code_unit = other.code_unit_at(i);
+
+                if (this_code_unit < other_code_unit) {
+                    result = -1;
+                    break;
+                }
+                if (this_code_unit > other_code_unit) {
+                    result = 1;
+                    break;
+                }
+            }
+        }
+
+        if (result == 0) {
+            if (length_in_code_units() == other.length_in_code_units())
+                return 0;
+            if (length_in_code_units() < other.length_in_code_units())
+                return -1;
+            return 1;
+        }
+
+        return result;
     }
 
     [[nodiscard]] constexpr bool equals_ignoring_case(Utf16View const& other) const

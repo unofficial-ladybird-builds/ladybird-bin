@@ -21,6 +21,8 @@ public:
     constexpr Utf16FlyString() = default;
 
     static Utf16FlyString from_utf8(StringView);
+    static Utf16FlyString from_utf8(String const& string) { return from_utf8_without_validation(string); }
+    static Utf16FlyString from_utf8(FlyString const& string) { return from_utf8_without_validation(string); }
     static Utf16FlyString from_utf8_without_validation(StringView);
     static Utf16FlyString from_utf8_but_should_be_ported_to_utf16(StringView string) { return from_utf8_without_validation(string); }
 
@@ -94,6 +96,9 @@ public:
     [[nodiscard]] ALWAYS_INLINE bool operator==(Utf16String const& other) const { return m_data == other; }
     [[nodiscard]] ALWAYS_INLINE bool operator==(Utf16View const& other) const { return m_data == other; }
     [[nodiscard]] ALWAYS_INLINE bool operator==(StringView other) const { return m_data == other; }
+
+    [[nodiscard]] ALWAYS_INLINE int operator<=>(Utf16FlyString const& other) const { return m_data.operator<=>(other.m_data); }
+    [[nodiscard]] ALWAYS_INLINE int operator<=>(Utf16View const& other) const { return m_data.operator<=>(other); }
 
     [[nodiscard]] ALWAYS_INLINE bool equals_ignoring_ascii_case(Utf16FlyString const& other) const
     {

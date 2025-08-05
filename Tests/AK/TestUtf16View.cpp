@@ -331,7 +331,7 @@ TEST_CASE(decode_invalid_utf16)
         Utf16View view { u"AB\xd800"sv };
         EXPECT_EQ(view.length_in_code_units(), 3uz);
 
-        auto expected = Array { (u32)0x41, 0x42, 0xfffd };
+        auto expected = Array { (u32)0x41, 0x42, 0xd800 };
         EXPECT_EQ(expected.size(), view.length_in_code_points());
 
         size_t i = 0;
@@ -345,7 +345,7 @@ TEST_CASE(decode_invalid_utf16)
         Utf16View view { u"AB\xdc00"sv };
         EXPECT_EQ(view.length_in_code_units(), 3uz);
 
-        auto expected = Array { (u32)0x41, 0x42, 0xfffd };
+        auto expected = Array { (u32)0x41, 0x42, 0xdc00 };
         EXPECT_EQ(expected.size(), view.length_in_code_points());
 
         size_t i = 0;
@@ -359,7 +359,7 @@ TEST_CASE(decode_invalid_utf16)
         Utf16View view { u"AB\xd800\x0000"sv };
         EXPECT_EQ(view.length_in_code_units(), 4uz);
 
-        auto expected = Array { (u32)0x41, 0x42, 0xfffd, 0 };
+        auto expected = Array { (u32)0x41, 0x42, 0xd800, 0 };
         EXPECT_EQ(expected.size(), view.length_in_code_points());
 
         size_t i = 0;
@@ -373,7 +373,7 @@ TEST_CASE(decode_invalid_utf16)
         Utf16View view { u"AB\xd800\xd800"sv };
         EXPECT_EQ(view.length_in_code_units(), 4uz);
 
-        auto expected = Array { (u32)0x41, 0x42, 0xfffd, 0xfffd };
+        auto expected = Array { (u32)0x41, 0x42, 0xd800, 0xd800 };
         EXPECT_EQ(expected.size(), view.length_in_code_points());
 
         size_t i = 0;
@@ -440,6 +440,77 @@ TEST_CASE(to_ascii_titlecase)
     EXPECT_EQ(u"foo bar"sv.to_ascii_titlecase(), u"Foo Bar"sv);
     EXPECT_EQ(u"FOO BAR"sv.to_ascii_titlecase(), u"Foo Bar"sv);
     EXPECT_EQ(u"foo 😀 bar"sv.to_ascii_titlecase(), u"Foo 😀 Bar"sv);
+}
+
+TEST_CASE(equals_utf8)
+{
+    EXPECT_EQ(u""sv, ""sv);
+
+    EXPECT_EQ(u"foo bar"sv, "foo bar"sv);
+    EXPECT_NE(u"foo bar"sv, "foo ba"sv);
+    EXPECT_NE(u"foo bar"sv, "foo"sv);
+    EXPECT_NE(u"foo bar"sv, ""sv);
+
+    EXPECT_EQ(u"foo 😀 bar"sv, "foo 😀 bar"sv);
+    EXPECT_NE(u"foo 😀 bar"sv, "foo 😀"sv);
+    EXPECT_NE(u"foo 😀 bar"sv, "foo"sv);
+    EXPECT_NE(u"foo 😀 bar"sv, ""sv);
+
+    EXPECT_NE(u"foo 😀 bar"sv, "foo 😂 bar"sv);
+    EXPECT_NE(u"foo 😂 bar"sv, "foo 😀 bar"sv);
+}
+
+TEST_CASE(comparison)
+{
+    EXPECT(!(u""sv < u""sv));
+    EXPECT(!(u""sv > u""sv));
+    EXPECT(u""sv <= u""sv);
+    EXPECT(u""sv >= u""sv);
+
+    EXPECT(!(u"a"sv < u"a"sv));
+    EXPECT(!(u"a"sv > u"a"sv));
+    EXPECT(u"a"sv <= u"a"sv);
+    EXPECT(u"a"sv >= u"a"sv);
+
+    EXPECT(!(u"😀"sv < u"😀"sv));
+    EXPECT(!(u"😀"sv > u"😀"sv));
+    EXPECT(u"😀"sv <= u"😀"sv);
+    EXPECT(u"😀"sv >= u"😀"sv);
+
+    EXPECT(u"a"sv < u"b"sv);
+    EXPECT(!(u"a"sv > u"b"sv));
+    EXPECT(u"a"sv <= u"b"sv);
+    EXPECT(!(u"a"sv >= u"b"sv));
+
+    EXPECT(Utf16View { "a"sv } < u"b"sv);
+    EXPECT(!(Utf16View { "a"sv } > u"b"sv));
+    EXPECT(Utf16View { "a"sv } <= u"b"sv);
+    EXPECT(!(Utf16View { "a"sv } >= u"b"sv));
+
+    EXPECT(u"a"sv < u"aa"sv);
+    EXPECT(!(u"a"sv > u"aa"sv));
+    EXPECT(u"a"sv <= u"aa"sv);
+    EXPECT(!(u"a"sv >= u"aa"sv));
+
+    EXPECT(Utf16View { "a"sv } < u"aa"sv);
+    EXPECT(!(Utf16View { "a"sv } > u"aa"sv));
+    EXPECT(Utf16View { "a"sv } <= u"aa"sv);
+    EXPECT(!(Utf16View { "a"sv } >= u"aa"sv));
+
+    EXPECT(!(u"b"sv < u"a"sv));
+    EXPECT(u"b"sv > u"a"sv);
+    EXPECT(!(u"b"sv <= u"a"sv));
+    EXPECT(u"b"sv >= u"a"sv);
+
+    EXPECT(u"😀"sv < u"😂"sv);
+    EXPECT(!(u"😀"sv > u"😂"sv));
+    EXPECT(u"😀"sv <= u"😂"sv);
+    EXPECT(!(u"😀"sv >= u"😂"sv));
+
+    EXPECT(!(u"😂"sv < u"😀"sv));
+    EXPECT(u"😂"sv > u"😀"sv);
+    EXPECT(!(u"😂"sv <= u"😀"sv));
+    EXPECT(u"😂"sv >= u"😀"sv);
 }
 
 TEST_CASE(equals_ignoring_case)
