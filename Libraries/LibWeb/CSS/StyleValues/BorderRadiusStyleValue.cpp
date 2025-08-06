@@ -11,25 +11,21 @@
 
 namespace Web::CSS {
 
-String BorderRadiusStyleValue::to_string(SerializationMode) const
+String BorderRadiusStyleValue::to_string(SerializationMode mode) const
 {
     if (m_properties.horizontal_radius == m_properties.vertical_radius)
-        return m_properties.horizontal_radius.to_string();
-    return MUST(String::formatted("{} {}", m_properties.horizontal_radius.to_string(), m_properties.vertical_radius.to_string()));
+        return m_properties.horizontal_radius.to_string(mode);
+    return MUST(String::formatted("{} {}", m_properties.horizontal_radius.to_string(mode), m_properties.vertical_radius.to_string(mode)));
 }
 
 ValueComparingNonnullRefPtr<CSSStyleValue const> BorderRadiusStyleValue::absolutized(CSSPixelRect const& viewport_rect, Length::FontMetrics const& font_metrics, Length::FontMetrics const& root_font_metrics) const
 {
-    if (m_properties.horizontal_radius.is_percentage() && m_properties.vertical_radius.is_percentage())
-        return *this;
-    auto absolutized_horizontal_radius = m_properties.horizontal_radius;
-    auto absolutized_vertical_radius = m_properties.vertical_radius;
-    if (m_properties.horizontal_radius.is_length())
-        absolutized_horizontal_radius = m_properties.horizontal_radius.length().absolutized(viewport_rect, font_metrics, root_font_metrics);
-    if (m_properties.vertical_radius.is_length())
-        absolutized_vertical_radius = m_properties.vertical_radius.length().absolutized(viewport_rect, font_metrics, root_font_metrics);
+    auto absolutized_horizontal_radius = m_properties.horizontal_radius.absolutized(viewport_rect, font_metrics, root_font_metrics);
+    auto absolutized_vertical_radius = m_properties.vertical_radius.absolutized(viewport_rect, font_metrics, root_font_metrics);
+
     if (absolutized_vertical_radius == m_properties.vertical_radius && absolutized_horizontal_radius == m_properties.horizontal_radius)
         return *this;
+
     return BorderRadiusStyleValue::create(absolutized_horizontal_radius, absolutized_vertical_radius);
 }
 

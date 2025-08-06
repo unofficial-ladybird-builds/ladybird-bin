@@ -2600,7 +2600,7 @@ CalculatedStyleValue::CalculationResult CalculatedStyleValue::CalculationResult:
                 return 0.0;
 
             if (length.is_absolute())
-                return length.absolute_length_to_px().to_double();
+                return length.absolute_length_to_px_without_rounding();
 
             // If we don't have a context, we cant resolve the length, so return NAN
             if (!context.length_resolution_context.has_value()) {
@@ -2659,6 +2659,17 @@ void CalculatedStyleValue::CalculationResult::invert()
 String CalculatedStyleValue::to_string(SerializationMode serialization_mode) const
 {
     return serialize_a_math_function(m_calculation, m_context, serialization_mode);
+}
+
+ValueComparingNonnullRefPtr<CSSStyleValue const> CalculatedStyleValue::absolutized(CSSPixelRect const& viewport_rect, Length::FontMetrics const& font_metrics, Length::FontMetrics const& root_font_metrics) const
+{
+    Length::ResolutionContext length_resolution_context {
+        .viewport_rect = viewport_rect,
+        .font_metrics = font_metrics,
+        .root_font_metrics = root_font_metrics
+    };
+
+    return CalculatedStyleValue::create(simplify_a_calculation_tree(m_calculation, m_context, { .length_resolution_context = length_resolution_context }), m_resolved_type, m_context);
 }
 
 bool CalculatedStyleValue::equals(CSSStyleValue const& other) const
@@ -2751,7 +2762,7 @@ Optional<Length> CalculatedStyleValue::resolve_length_deprecated(CalculationReso
 {
     auto result = m_calculation->resolve(context);
     if (result.type().has_value() && result.type()->matches_length(m_context.percentages_resolve_as))
-        return Length::make_px(CSSPixels { result.value() });
+        return Length::make_px(result.value());
     return {};
 }
 
@@ -3304,32 +3315,45 @@ NonnullRefPtr<CalculationNode const> simplify_a_calculation_tree(CalculationNode
         //    its child’s value), expressed in the result’s canonical unit.
         Optional<CalculatedStyleValue::CalculationResult> accumulated_result;
         bool is_valid = true;
+
+        auto accumulate = [&accumulated_result, &resolution_context](NumericCalculationNode const& numeric_child, bool invert) {
+            auto child_type = numeric_child.numeric_type();
+
+            if (!child_type.has_value())
+                return false;
+
+            // FIXME: The spec doesn't cover how to handle values in non-canonical units
+            if (!numeric_child.is_in_canonical_unit())
+                return false;
+
+            // AD-HOC: The spec doesn't cover how to handle unresolved percentages, to handle this we force percentages
+            //         back to the percent type (e.g. { hint: None, "percent" → 1 } rather than
+            //         { hint: length, "length" → 1 }), this avoids a situation calling make_calculation_node below
+            //         where we would treat the value as an absolute value expressed in canonical units rather than a
+            //         percent. `make_calculation_node` will still calculate the correct numeric type for the
+            //         simplified node. See spec issue: https://github.com/w3c/csswg-drafts/issues/11588
+            if (numeric_child.value().has<Percentage>())
+                child_type = CSSNumericType { CSSNumericType::BaseType::Percent, 1 };
+
+            auto child_value = CalculatedStyleValue::CalculationResult::from_value(numeric_child.value(), resolution_context, child_type);
+
+            if (invert)
+                child_value.invert();
+
+            if (accumulated_result.has_value())
+                accumulated_result->multiply_by(child_value);
+            else
+                accumulated_result = child_value;
+
+            if (!accumulated_result->type().has_value())
+                return false;
+
+            return true;
+        };
+
         for (auto const& child : children) {
             if (child->type() == CalculationNode::Type::Numeric) {
-                auto const& numeric_child = as<NumericCalculationNode>(*child);
-                auto child_type = numeric_child.numeric_type();
-                if (!child_type.has_value()) {
-                    is_valid = false;
-                    break;
-                }
-
-                // FIXME: The spec doesn't handle unresolved percentages here, but if we don't exit when we see one,
-                //        we'll get a wrongly-typed value after multiplying the types.
-                //        Same goes for other numerics with non-canonical units.
-                //        Spec bug: https://github.com/w3c/csswg-drafts/issues/11588
-                if ((numeric_child.value().has<Percentage>() && context.percentages_resolve_as.has_value())
-                    || !numeric_child.is_in_canonical_unit()) {
-                    is_valid = false;
-                    break;
-                }
-
-                auto child_value = CalculatedStyleValue::CalculationResult::from_value(numeric_child.value(), resolution_context, child_type);
-                if (accumulated_result.has_value()) {
-                    accumulated_result->multiply_by(child_value);
-                } else {
-                    accumulated_result = move(child_value);
-                }
-                if (!accumulated_result->type().has_value()) {
+                if (!accumulate(as<NumericCalculationNode>(*child), false)) {
                     is_valid = false;
                     break;
                 }
@@ -3337,26 +3361,7 @@ NonnullRefPtr<CalculationNode const> simplify_a_calculation_tree(CalculationNode
             }
             if (child->type() == CalculationNode::Type::Invert) {
                 auto const& invert_child = as<InvertCalculationNode>(*child);
-                if (invert_child.child().type() != CalculationNode::Type::Numeric) {
-                    is_valid = false;
-                    break;
-                }
-                auto const& grandchild = as<NumericCalculationNode>(invert_child.child());
-
-                auto child_type = child->numeric_type();
-                if (!child_type.has_value()) {
-                    is_valid = false;
-                    break;
-                }
-
-                auto child_value = CalculatedStyleValue::CalculationResult::from_value(grandchild.value(), resolution_context, grandchild.numeric_type());
-                child_value.invert();
-                if (accumulated_result.has_value()) {
-                    accumulated_result->multiply_by(child_value);
-                } else {
-                    accumulated_result = move(child_value);
-                }
-                if (!accumulated_result->type().has_value()) {
+                if (invert_child.child().type() != CalculationNode::Type::Numeric || !accumulate(as<NumericCalculationNode>(invert_child.child()), true)) {
                     is_valid = false;
                     break;
                 }

@@ -63,7 +63,7 @@ public:
             });
     }
 
-    String to_string() const
+    String to_string(SerializationMode mode) const
     {
         return m_value.visit(
             [](T const& t) {
@@ -73,8 +73,22 @@ public:
                     return t.to_string();
                 }
             },
-            [](NonnullRefPtr<CalculatedStyleValue const> const& calculated) {
-                return calculated->to_string(SerializationMode::Normal);
+            [&mode](NonnullRefPtr<CalculatedStyleValue const> const& calculated) {
+                return calculated->to_string(mode);
+            });
+    }
+
+    Self absolutized(CSSPixelRect const& viewport_rect, Length::FontMetrics const& font_metrics, Length::FontMetrics const& root_font_metrics) const
+    {
+        return m_value.visit(
+            [&](T const& value) {
+                if constexpr (IsSame<T, Length>)
+                    return Self { value.absolutized(viewport_rect, font_metrics, root_font_metrics) };
+                else
+                    return *static_cast<Self const*>(this);
+            },
+            [&](NonnullRefPtr<CalculatedStyleValue const> const& value) {
+                return Self { value->absolutized(viewport_rect, font_metrics, root_font_metrics)->as_calculated() };
             });
     }
 
@@ -177,7 +191,7 @@ template<>
 struct AK::Formatter<Web::CSS::AngleOrCalculated> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::AngleOrCalculated const& calculated_or)
     {
-        return Formatter<StringView>::format(builder, calculated_or.to_string());
+        return Formatter<StringView>::format(builder, calculated_or.to_string(Web::CSS::SerializationMode::Normal));
     }
 };
 
@@ -185,7 +199,7 @@ template<>
 struct AK::Formatter<Web::CSS::FrequencyOrCalculated> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::FrequencyOrCalculated const& calculated_or)
     {
-        return Formatter<StringView>::format(builder, calculated_or.to_string());
+        return Formatter<StringView>::format(builder, calculated_or.to_string(Web::CSS::SerializationMode::Normal));
     }
 };
 
@@ -193,7 +207,7 @@ template<>
 struct AK::Formatter<Web::CSS::LengthOrCalculated> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::LengthOrCalculated const& calculated_or)
     {
-        return Formatter<StringView>::format(builder, calculated_or.to_string());
+        return Formatter<StringView>::format(builder, calculated_or.to_string(Web::CSS::SerializationMode::Normal));
     }
 };
 
@@ -201,7 +215,7 @@ template<>
 struct AK::Formatter<Web::CSS::PercentageOrCalculated> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::PercentageOrCalculated const& calculated_or)
     {
-        return Formatter<StringView>::format(builder, calculated_or.to_string());
+        return Formatter<StringView>::format(builder, calculated_or.to_string(Web::CSS::SerializationMode::Normal));
     }
 };
 
@@ -209,6 +223,6 @@ template<>
 struct AK::Formatter<Web::CSS::TimeOrCalculated> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Web::CSS::TimeOrCalculated const& calculated_or)
     {
-        return Formatter<StringView>::format(builder, calculated_or.to_string());
+        return Formatter<StringView>::format(builder, calculated_or.to_string(Web::CSS::SerializationMode::Normal));
     }
 };
