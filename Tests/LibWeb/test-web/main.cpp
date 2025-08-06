@@ -369,7 +369,7 @@ static void run_ref_test(TestWebView& view, Test& test, URL::URL const& url, int
         VERIFY(test.ref_test_expectation_type.has_value());
         auto should_match = test.ref_test_expectation_type == RefTestExpectationType::Match;
         auto screenshot_matches = fuzzy_screenshot_match(
-            view.url(), *test.actual_screenshot, *test.expectation_screenshot, test.fuzzy_matches);
+            url, view.url(), *test.actual_screenshot, *test.expectation_screenshot, test.fuzzy_matches);
         if (should_match == screenshot_matches)
             return TestResult::Pass;
 
@@ -455,7 +455,7 @@ static void run_ref_test(TestWebView& view, Test& test, URL::URL const& url, int
             auto content = fuzzy_configuration.get_string("content"sv).release_value();
             auto fuzzy_match_or_error = parse_fuzzy_match(reference_url, content);
             if (fuzzy_match_or_error.is_error()) {
-                warnln("Failed to parse fuzzy configuration '{}' (reference: {})", content, reference_url);
+                warnln("Failed to parse fuzzy configuration '{}' (reference: {}): {}", content, reference_url, fuzzy_match_or_error.error());
                 continue;
             }
 
