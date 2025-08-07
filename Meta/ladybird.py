@@ -84,6 +84,15 @@ def main():
         "args", nargs=argparse.REMAINDER, help="Additional arguments passed through to the build system"
     )
 
+    profile_parser = subparsers.add_parser(
+        "profile",
+        help="Launches the application under callgrind for performance profiling",
+        parents=[preset_parser, compiler_parser, target_parser],
+    )
+    profile_parser.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Additional arguments passed through to the build system"
+    )
+
     install_parser = subparsers.add_parser(
         "install", help="Installs the target binary", parents=[preset_parser, compiler_parser, target_parser]
     )
@@ -157,6 +166,10 @@ def main():
         build_dir = configure_main(platform, args.preset, args.cc, args.cxx)
         build_main(build_dir, args.jobs, args.target, args.args)
         debug_main(platform.host_system, build_dir, args.target, args.debugger, args.cmd)
+    elif args.command == "profile":
+        build_dir = configure_main(platform, args.preset, args.cc, args.cxx)
+        build_main(build_dir, args.jobs, args.target, args.args)
+        profile_main(platform.host_system, build_dir, args.target)
     elif args.command == "install":
         build_dir = configure_main(platform, args.preset, args.cc, args.cxx)
         build_main(build_dir, args.jobs, args.target, args.args)
@@ -183,9 +196,12 @@ def configure_main(platform: Platform, preset: str, cc: str, cxx: str) -> Path:
     if build_preset_dir.joinpath("build.ninja").exists() or build_preset_dir.joinpath("ladybird.sln").exists():
         return build_preset_dir
 
+    switfc: Optional[str] = None
     validate_cmake_version()
+
     if "Swift" in preset:
-        (cc, cxx, swiftc) = pick_swift_compilers(platform, ladybird_source_dir)
+        compilers = pick_swift_compilers(platform, ladybird_source_dir)
+        (cc, cxx, swiftc) = tuple(map(str, compilers))
     else:
         (cc, cxx) = pick_host_compiler(platform, cc, cxx)
 
@@ -201,7 +217,7 @@ def configure_main(platform: Platform, preset: str, cc: str, cxx: str) -> Path:
         f"-DCMAKE_CXX_COMPILER={cxx}",
     ]
 
-    if "Swift" in preset:
+    if switfc:
         config_args.append(f"-DCMAKE_Swift_COMPILER={swiftc}")
 
     if platform.host_system == HostSystem.Linux and platform.host_architecture == HostArchitecture.AArch64:
@@ -382,6 +398,21 @@ def debug_main(host_system: HostSystem, build_dir: Path, target: str, debugger: 
         gdb_args.append(str(build_dir.joinpath("bin", target)))
 
     run_command(gdb_args, exit_on_failure=True)
+
+
+def profile_main(host_system: HostSystem, build_dir: Path, target: str):
+    if not shutil.which("valgrind"):
+        print("Please install valgrind", file=sys.stderr)
+        sys.exit(1)
+
+    valgrind_args = ["valgrind", "--tool=callgrind", "--instr-atstart=yes"]
+
+    if target == "Ladybird" and host_system == HostSystem.macOS:
+        valgrind_args.append(str(build_dir.joinpath("bin", "Ladybird.app")))
+    else:
+        valgrind_args.append(str(build_dir.joinpath("bin", target)))
+
+    run_command(valgrind_args, exit_on_failure=True)
 
 
 def clean_main(preset: str):
