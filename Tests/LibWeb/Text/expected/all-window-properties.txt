@@ -344,6 +344,9 @@ SVGEllipseElement
 SVGFEBlendElement
 SVGFEFloodElement
 SVGFEGaussianBlurElement
+SVGFEMergeElement
+SVGFEMergeNodeElement
+SVGFEOffsetElement
 SVGFilterElement
 SVGForeignObjectElement
 SVGGElement

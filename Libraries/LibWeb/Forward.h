@@ -149,12 +149,16 @@ class ImageSourceDirective;
 class ManifestSourceDirective;
 class MediaSourceDirective;
 class ObjectSourceDirective;
+class ReportToDirective;
+class ReportUriDirective;
+class SandboxDirective;
 class ScriptSourceAttributeDirective;
 class ScriptSourceDirective;
 class ScriptSourceElementDirective;
 class StyleSourceAttributeDirective;
 class StyleSourceDirective;
 class StyleSourceElementDirective;
+class WebRTCDirective;
 class WorkerSourceDirective;
 struct SerializedDirective;
 

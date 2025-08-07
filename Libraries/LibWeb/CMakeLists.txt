@@ -60,6 +60,9 @@ set(SOURCES
     ContentSecurityPolicy/Directives/MediaSourceDirective.cpp
     ContentSecurityPolicy/Directives/Names.cpp
     ContentSecurityPolicy/Directives/ObjectSourceDirective.cpp
+    ContentSecurityPolicy/Directives/ReportToDirective.cpp
+    ContentSecurityPolicy/Directives/ReportUriDirective.cpp
+    ContentSecurityPolicy/Directives/SandboxDirective.cpp
     ContentSecurityPolicy/Directives/ScriptSourceAttributeDirective.cpp
     ContentSecurityPolicy/Directives/ScriptSourceDirective.cpp
     ContentSecurityPolicy/Directives/ScriptSourceElementDirective.cpp
@@ -68,6 +71,7 @@ set(SOURCES
     ContentSecurityPolicy/Directives/StyleSourceAttributeDirective.cpp
     ContentSecurityPolicy/Directives/StyleSourceDirective.cpp
     ContentSecurityPolicy/Directives/StyleSourceElementDirective.cpp
+    ContentSecurityPolicy/Directives/WebRTCDirective.cpp
     ContentSecurityPolicy/Directives/WorkerSourceDirective.cpp
     ContentSecurityPolicy/Policy.cpp
     ContentSecurityPolicy/PolicyList.cpp
@@ -552,6 +556,7 @@ set(SOURCES
     HTML/PromiseRejectionEvent.cpp
     HTML/RadioNodeList.cpp
     HTML/RenderingThread.cpp
+    HTML/SandboxingFlagSet.cpp
     HTML/Scripting/Agent.cpp
     HTML/Scripting/ClassicScript.cpp
     HTML/Scripting/Environments.cpp
@@ -850,6 +855,9 @@ set(SOURCES
     SVG/SVGFEBlendElement.cpp
     SVG/SVGFEFloodElement.cpp
     SVG/SVGFEGaussianBlurElement.cpp
+    SVG/SVGFEMergeElement.cpp
+    SVG/SVGFEMergeNodeElement.cpp
+    SVG/SVGFEOffsetElement.cpp
     SVG/SVGFilterElement.cpp
     SVG/SVGForeignObjectElement.cpp
     SVG/SVGGElement.cpp
@@ -1021,6 +1029,7 @@ set(GENERATED_SOURCES
     CSS/DefaultStyleSheetSource.cpp
     CSS/DescriptorID.cpp
     CSS/Enums.cpp
+    CSS/EnvironmentVariable.cpp
     CSS/GeneratedCSSStyleProperties.cpp
     CSS/GeneratedCSSStyleProperties.idl
     CSS/Keyword.cpp
