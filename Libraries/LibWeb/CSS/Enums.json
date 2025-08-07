@@ -136,6 +136,12 @@
     "none",
     "all"
   ],
+  "compositing-operator": [
+    "add",
+    "subtract",
+    "intersect",
+    "exclude"
+  ],
   "contain": [
     "none",
     "strict",
@@ -150,6 +156,14 @@
     "visible",
     "auto",
     "hidden"
+  ],
+  "coord-box": [
+    "content-box",
+    "padding-box",
+    "border-box",
+    "fill-box",
+    "stroke-box",
+    "view-box"
   ],
   "counter-style-name-keyword": [
     "circle",
@@ -485,6 +499,11 @@
     "luminance",
     "alpha"
   ],
+  "masking-mode": [
+    "alpha",
+    "luminance",
+    "match-source"
+  ],
   "math-shift": [
     "normal",
     "compact"
@@ -586,7 +605,7 @@
     "strict-origin-when-cross-origin",
     "unsafe-url"
   ],
-  "repeat": [
+  "repetition": [
     "no-repeat",
     "repeat",
     "round",

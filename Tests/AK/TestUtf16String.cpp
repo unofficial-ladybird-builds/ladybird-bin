@@ -14,6 +14,9 @@
 #include <AK/Utf16String.h>
 #include <AK/Utf32View.h>
 
+static_assert(AK::Concepts::HashCompatible<Utf16String, Utf16View>);
+static_assert(AK::Concepts::HashCompatible<Utf16View, Utf16String>);
+
 static Utf16String make_copy(Utf16String const& string)
 {
     return string.has_ascii_storage()
@@ -340,6 +343,7 @@ TEST_CASE(formatted)
             u"ABCDEFGHIJKLMNOPQRSTUVWXYZ"sv,
             u"\xd83d\xde00"sv,
             u"abcdefghijklmnopqrstuvwxyz"sv,
+            u"\xd800\xdc00"sv,
             u"ABCDEFGHIJKLMNOPQRSTUVWXYZ"sv,
             u"🍕"sv,
             u"abcdefghijklmnopqrstuvwxyz"sv,
@@ -351,9 +355,9 @@ TEST_CASE(formatted)
         EXPECT(!string.is_ascii());
         EXPECT(!string.has_long_ascii_storage());
         EXPECT(!string.has_short_ascii_storage());
-        EXPECT_EQ(string.length_in_code_units(), 174uz);
-        EXPECT_EQ(string.length_in_code_points(), 172uz);
-        EXPECT_EQ(string, u"abcdefghijklmnopqrstuvwxyz--ABCDEFGHIJKLMNOPQRSTUVWXYZ--😀--abcdefghijklmnopqrstuvwxyz--ABCDEFGHIJKLMNOPQRSTUVWXYZ--🍕--abcdefghijklmnopqrstuvwxyz--ABCDEFGHIJKLMNOPQRSTUVWXYZ"sv);
+        EXPECT_EQ(string.length_in_code_units(), 178uz);
+        EXPECT_EQ(string.length_in_code_points(), 175uz);
+        EXPECT_EQ(string, u"abcdefghijklmnopqrstuvwxyz--ABCDEFGHIJKLMNOPQRSTUVWXYZ--😀--abcdefghijklmnopqrstuvwxyz--𐀀--ABCDEFGHIJKLMNOPQRSTUVWXYZ--🍕--abcdefghijklmnopqrstuvwxyz--ABCDEFGHIJKLMNOPQRSTUVWXYZ"sv);
     }
 }
 
@@ -410,6 +414,23 @@ TEST_CASE(repeated)
     }
 
     EXPECT_DEATH("Creating a string from an invalid code point", (void)Utf16String::repeated(0xffffffff, 1));
+}
+
+TEST_CASE(from_string_builder)
+{
+    StringBuilder builder(StringBuilder::Mode::UTF16);
+    builder.append_code_point('a');
+    builder.append_code_point('b');
+    builder.append_code_point(0x1f600);
+    builder.append_code_point(0x10000);
+    builder.append_code_point(0x1f355);
+    builder.append_code_point('c');
+    builder.append_code_point('d');
+
+    auto string = builder.to_utf16_string();
+    EXPECT_EQ(string.length_in_code_units(), 10uz);
+    EXPECT_EQ(string.length_in_code_points(), 7uz);
+    EXPECT_EQ(string, "ab😀𐀀🍕cd"sv);
 }
 
 TEST_CASE(from_ipc_stream)

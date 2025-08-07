@@ -202,11 +202,11 @@ public:
     }
 
     template<Arithmetic T>
-    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes) const
+    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes, int base = 10) const
     {
         if (has_ascii_storage())
-            return parse_number<T>(bytes(), trim_whitespace);
-        return parse_number<T>(*this, trim_whitespace);
+            return parse_number<T>(bytes(), trim_whitespace, base);
+        return parse_number<T>(*this, trim_whitespace, base);
     }
 
     [[nodiscard]] constexpr bool operator==(Utf16View const& other) const
@@ -324,7 +324,7 @@ public:
             return 0;
         if (has_ascii_storage())
             return string_hash(m_string.ascii, length_in_code_units());
-        return string_hash(reinterpret_cast<char const*>(m_string.utf16), length_in_code_units() * sizeof(char16_t));
+        return string_hash(m_string.utf16, length_in_code_units());
     }
 
     [[nodiscard]] constexpr bool is_null() const
@@ -425,6 +425,16 @@ public:
         return it.m_iterator.utf16 - m_string.utf16;
     }
 
+    [[nodiscard]] constexpr Utf16CodePointIterator iterator_at_code_unit_offset(size_t code_unit_offset) const
+    {
+        VERIFY(code_unit_offset <= length_in_code_units());
+
+        if (has_ascii_storage())
+            return { m_string.ascii + code_unit_offset, length_in_code_units() - code_unit_offset };
+        return { m_string.utf16 + code_unit_offset, length_in_code_units() - code_unit_offset };
+    }
+
+    Utf16String replace(char16_t needle, Utf16View const& replacement, ReplaceMode) const;
     Utf16String replace(Utf16View const& needle, Utf16View const& replacement, ReplaceMode) const;
     Utf16String escape_html_entities() const;
 
@@ -569,6 +579,13 @@ public:
         return count;
     }
 
+    [[nodiscard]] constexpr bool starts_with(char16_t needle) const
+    {
+        if (is_empty())
+            return false;
+        return code_unit_at(0) == needle;
+    }
+
     [[nodiscard]] constexpr bool starts_with(Utf16View const& needle) const
     {
         auto needle_length = needle.length_in_code_units();
@@ -578,6 +595,13 @@ public:
             return false;
 
         return substring_view(0, needle_length) == needle;
+    }
+
+    [[nodiscard]] constexpr bool ends_with(char16_t needle) const
+    {
+        if (is_empty())
+            return false;
+        return code_unit_at(length_in_code_units() - 1) == needle;
     }
 
     [[nodiscard]] constexpr bool ends_with(Utf16View const& needle) const

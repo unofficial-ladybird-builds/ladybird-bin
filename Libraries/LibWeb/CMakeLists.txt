@@ -43,6 +43,7 @@ set(SOURCES
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
     ContentSecurityPolicy/BlockingAlgorithms.cpp
+    ContentSecurityPolicy/Directives/BaseUriDirective.cpp
     ContentSecurityPolicy/Directives/ChildSourceDirective.cpp
     ContentSecurityPolicy/Directives/ConnectSourceDirective.cpp
     ContentSecurityPolicy/Directives/DefaultSourceDirective.cpp
@@ -50,6 +51,8 @@ set(SOURCES
     ContentSecurityPolicy/Directives/DirectiveFactory.cpp
     ContentSecurityPolicy/Directives/DirectiveOperations.cpp
     ContentSecurityPolicy/Directives/FontSourceDirective.cpp
+    ContentSecurityPolicy/Directives/FormActionDirective.cpp
+    ContentSecurityPolicy/Directives/FrameAncestorsDirective.cpp
     ContentSecurityPolicy/Directives/FrameSourceDirective.cpp
     ContentSecurityPolicy/Directives/ImageSourceDirective.cpp
     ContentSecurityPolicy/Directives/KeywordSources.cpp
@@ -182,7 +185,6 @@ set(SOURCES
     CSS/StyleValues/AnchorStyleValue.cpp
     CSS/StyleValues/AnchorSizeStyleValue.cpp
     CSS/StyleValues/AngleStyleValue.cpp
-    CSS/StyleValues/BackgroundRepeatStyleValue.cpp
     CSS/StyleValues/BackgroundSizeStyleValue.cpp
     CSS/StyleValues/BasicShapeStyleValue.cpp
     CSS/StyleValues/BorderImageSliceStyleValue.cpp
@@ -224,6 +226,7 @@ set(SOURCES
     CSS/StyleValues/PositionStyleValue.cpp
     CSS/StyleValues/RadialGradientStyleValue.cpp
     CSS/StyleValues/RectStyleValue.cpp
+    CSS/StyleValues/RepeatStyleStyleValue.cpp
     CSS/StyleValues/ScrollbarColorStyleValue.cpp
     CSS/StyleValues/ShadowStyleValue.cpp
     CSS/StyleValues/ShorthandStyleValue.cpp

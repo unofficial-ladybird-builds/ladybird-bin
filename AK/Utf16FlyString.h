@@ -39,6 +39,9 @@ public:
 
     ALWAYS_INLINE explicit operator Utf16String() const { return to_utf16_string(); }
 
+    ALWAYS_INLINE operator Utf16View() const& { return view(); }
+    explicit operator Utf16View() const&& = delete;
+
     ALWAYS_INLINE Utf16String to_utf16_string() const
     {
         Detail::Utf16StringBase copy { m_data };
@@ -81,9 +84,9 @@ public:
     }
 
     template<Arithmetic T>
-    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes) const
+    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes, int base = 10) const
     {
-        return m_data.to_number<T>(trim_whitespace);
+        return m_data.to_number<T>(trim_whitespace, base);
     }
 
     ALWAYS_INLINE Utf16FlyString& operator=(Utf16String const& string)
@@ -161,6 +164,22 @@ struct Formatter<Utf16FlyString> : Formatter<Utf16String> {
         return Formatter<Utf16String>::format(builder, string.to_utf16_string());
     }
 };
+
+namespace Detail {
+
+template<>
+inline constexpr bool IsHashCompatible<Utf16View, Utf16FlyString> = true;
+
+template<>
+inline constexpr bool IsHashCompatible<Utf16FlyString, Utf16View> = true;
+
+template<>
+inline constexpr bool IsHashCompatible<Utf16String, Utf16FlyString> = true;
+
+template<>
+inline constexpr bool IsHashCompatible<Utf16FlyString, Utf16String> = true;
+
+}
 
 }
 

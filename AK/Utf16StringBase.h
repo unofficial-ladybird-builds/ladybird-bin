@@ -95,9 +95,9 @@ public:
     Utf16View utf16_view() const&& = delete;
 
     template<Arithmetic T>
-    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes) const
+    ALWAYS_INLINE Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes, int base = 10) const
     {
-        return utf16_view().to_number<T>(trim_whitespace);
+        return utf16_view().to_number<T>(trim_whitespace, base);
     }
 
     ALWAYS_INLINE Utf16StringBase& operator=(Utf16StringBase const& other)
@@ -176,7 +176,7 @@ public:
 
         if (auto const* data = data_without_union_member_assertion())
             return data->hash();
-        return string_hash(nullptr, 0);
+        return string_hash<char16_t>(nullptr, 0);
     }
 
     [[nodiscard]] ALWAYS_INLINE bool is_empty() const { return length_in_code_units() == 0uz; }
@@ -254,7 +254,10 @@ public:
 
     [[nodiscard]] ALWAYS_INLINE size_t count(Utf16View const& needle) const { return utf16_view().count(needle); }
 
+    [[nodiscard]] ALWAYS_INLINE bool starts_with(char16_t needle) const { return utf16_view().starts_with(needle); }
     [[nodiscard]] ALWAYS_INLINE bool starts_with(Utf16View const& needle) const { return utf16_view().starts_with(needle); }
+
+    [[nodiscard]] ALWAYS_INLINE bool ends_with(char16_t needle) const { return utf16_view().ends_with(needle); }
     [[nodiscard]] ALWAYS_INLINE bool ends_with(Utf16View const& needle) const { return utf16_view().ends_with(needle); }
 
     [[nodiscard]] ALWAYS_INLINE Vector<Utf16View> split_view(char16_t needle, SplitBehavior split_behavior) const { return utf16_view().split_view(needle, split_behavior); }

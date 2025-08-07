@@ -136,11 +136,14 @@ struct SerializedPolicy;
 
 namespace Web::ContentSecurityPolicy::Directives {
 
+class BaseUriDirective;
 class ChildSourceDirective;
 class ConnectSourceDirective;
 class DefaultSourceDirective;
 class Directive;
 class FontSourceDirective;
+class FormActionDirective;
+class FrameAncestorsDirective;
 class FrameSourceDirective;
 class ImageSourceDirective;
 class ManifestSourceDirective;
@@ -198,7 +201,6 @@ class Angle;
 class AngleOrCalculated;
 class AnglePercentage;
 class AngleStyleValue;
-class BackgroundRepeatStyleValue;
 class BackgroundSizeStyleValue;
 class BasicShapeStyleValue;
 class BorderImageSliceStyleValue;
@@ -307,6 +309,7 @@ class RadialGradientStyleValue;
 class Ratio;
 class RatioStyleValue;
 class RectStyleValue;
+class RepeatStyleStyleValue;
 class Resolution;
 class ResolutionOrCalculated;
 class ResolutionStyleValue;
