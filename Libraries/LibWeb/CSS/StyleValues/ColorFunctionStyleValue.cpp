@@ -15,51 +15,51 @@ namespace Web::CSS {
 
 namespace {
 
-CSSColorValue::ColorType color_type_from_string_view(StringView color_space)
+ColorStyleValue::ColorType color_type_from_string_view(StringView color_space)
 {
     if (color_space == "a98-rgb"sv)
-        return CSSColorValue::ColorType::A98RGB;
+        return ColorStyleValue::ColorType::A98RGB;
     if (color_space == "display-p3"sv)
-        return CSSColorValue::ColorType::DisplayP3;
+        return ColorStyleValue::ColorType::DisplayP3;
     if (color_space == "srgb"sv)
-        return CSSColorValue::ColorType::sRGB;
+        return ColorStyleValue::ColorType::sRGB;
     if (color_space == "srgb-linear"sv)
-        return CSSColorValue::ColorType::sRGBLinear;
+        return ColorStyleValue::ColorType::sRGBLinear;
     if (color_space == "prophoto-rgb"sv)
-        return CSSColorValue::ColorType::ProPhotoRGB;
+        return ColorStyleValue::ColorType::ProPhotoRGB;
     if (color_space == "rec2020"sv)
-        return CSSColorValue::ColorType::Rec2020;
+        return ColorStyleValue::ColorType::Rec2020;
     if (color_space == "xyz-d50"sv)
-        return CSSColorValue::ColorType::XYZD50;
+        return ColorStyleValue::ColorType::XYZD50;
     if (color_space == "xyz"sv || color_space == "xyz-d65")
-        return CSSColorValue::ColorType::XYZD65;
+        return ColorStyleValue::ColorType::XYZD65;
     VERIFY_NOT_REACHED();
 }
 
-StringView string_view_from_color_type(CSSColorValue::ColorType color_type)
+StringView string_view_from_color_type(ColorStyleValue::ColorType color_type)
 {
-    if (color_type == CSSColorValue::ColorType::A98RGB)
+    if (color_type == ColorStyleValue::ColorType::A98RGB)
         return "a98-rgb"sv;
-    if (color_type == CSSColorValue::ColorType::DisplayP3)
+    if (color_type == ColorStyleValue::ColorType::DisplayP3)
         return "display-p3"sv;
-    if (color_type == CSSColorValue::ColorType::sRGB)
+    if (color_type == ColorStyleValue::ColorType::sRGB)
         return "srgb"sv;
-    if (color_type == CSSColorValue::ColorType::sRGBLinear)
+    if (color_type == ColorStyleValue::ColorType::sRGBLinear)
         return "srgb-linear"sv;
-    if (color_type == CSSColorValue::ColorType::ProPhotoRGB)
+    if (color_type == ColorStyleValue::ColorType::ProPhotoRGB)
         return "prophoto-rgb"sv;
-    if (color_type == CSSColorValue::ColorType::Rec2020)
+    if (color_type == ColorStyleValue::ColorType::Rec2020)
         return "rec2020"sv;
-    if (color_type == CSSColorValue::ColorType::XYZD50)
+    if (color_type == ColorStyleValue::ColorType::XYZD50)
         return "xyz-d50"sv;
-    if (color_type == CSSColorValue::ColorType::XYZD65)
+    if (color_type == ColorStyleValue::ColorType::XYZD65)
         return "xyz-d65"sv;
     VERIFY_NOT_REACHED();
 }
 
 }
 
-ValueComparingNonnullRefPtr<ColorFunctionStyleValue const> ColorFunctionStyleValue::create(StringView color_space, ValueComparingNonnullRefPtr<CSSStyleValue const> c1, ValueComparingNonnullRefPtr<CSSStyleValue const> c2, ValueComparingNonnullRefPtr<CSSStyleValue const> c3, ValueComparingRefPtr<CSSStyleValue const> alpha)
+ValueComparingNonnullRefPtr<ColorFunctionStyleValue const> ColorFunctionStyleValue::create(StringView color_space, ValueComparingNonnullRefPtr<StyleValue const> c1, ValueComparingNonnullRefPtr<StyleValue const> c2, ValueComparingNonnullRefPtr<StyleValue const> c3, ValueComparingRefPtr<StyleValue const> alpha)
 {
     VERIFY(any_of(s_supported_color_space, [=](auto supported) { return color_space == supported; }));
 
@@ -71,7 +71,7 @@ ValueComparingNonnullRefPtr<ColorFunctionStyleValue const> ColorFunctionStyleVal
     VERIFY_NOT_REACHED();
 }
 
-bool ColorFunctionStyleValue::equals(CSSStyleValue const& other) const
+bool ColorFunctionStyleValue::equals(StyleValue const& other) const
 {
     if (type() != other.type())
         return false;
@@ -103,9 +103,9 @@ Optional<ColorFunctionStyleValue::Resolved> ColorFunctionStyleValue::resolve_pro
 // https://www.w3.org/TR/css-color-4/#serializing-color-function-values
 String ColorFunctionStyleValue::to_string(SerializationMode mode) const
 {
-    auto convert_percentage = [&](ValueComparingNonnullRefPtr<CSSStyleValue const> const& value) -> RemoveReference<decltype(value)> {
+    auto convert_percentage = [&](ValueComparingNonnullRefPtr<StyleValue const> const& value) -> RemoveReference<decltype(value)> {
         if (value->is_percentage())
-            return NumberStyleValue::create(value->as_percentage().value() / 100);
+            return NumberStyleValue::create(value->as_percentage().raw_value() / 100);
         if (mode == SerializationMode::ResolvedValue && value->is_calculated()) {
             // FIXME: Figure out how to get the proper calculation resolution context here
             CalculationResolutionContext context {};
@@ -130,11 +130,11 @@ String ColorFunctionStyleValue::to_string(SerializationMode mode) const
 
     bool const is_alpha_required = [&]() {
         if (alpha->is_number())
-            return alpha->as_number().value() < 1;
+            return alpha->as_number().number() < 1;
         return true;
     }();
 
-    if (alpha->is_number() && alpha->as_number().value() < 0)
+    if (alpha->is_number() && alpha->as_number().number() < 0)
         alpha = NumberStyleValue::create(0);
 
     if (is_alpha_required) {

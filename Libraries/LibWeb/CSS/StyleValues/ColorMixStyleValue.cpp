@@ -17,7 +17,7 @@ ValueComparingNonnullRefPtr<ColorMixStyleValue const> ColorMixStyleValue::create
 }
 
 ColorMixStyleValue::ColorMixStyleValue(ColorInterpolationMethod color_interpolation_method, ColorMixComponent first_component, ColorMixComponent second_component)
-    : CSSColorValue(ColorType::ColorMix, ColorSyntax::Modern)
+    : ColorStyleValue(ColorType::ColorMix, ColorSyntax::Modern)
     , m_properties {
         .color_interpolation_method = move(color_interpolation_method),
         .first_component = move(first_component),
@@ -26,7 +26,7 @@ ColorMixStyleValue::ColorMixStyleValue(ColorInterpolationMethod color_interpolat
 {
 }
 
-bool ColorMixStyleValue::equals(CSSStyleValue const& other) const
+bool ColorMixStyleValue::equals(StyleValue const& other) const
 {
     if (type() != other.type())
         return false;

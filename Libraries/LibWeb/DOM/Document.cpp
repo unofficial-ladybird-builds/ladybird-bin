@@ -3782,7 +3782,7 @@ String Document::domain() const
 }
 
 // https://html.spec.whatwg.org/multipage/browsers.html#is-a-registrable-domain-suffix-of-or-is-equal-to
-static bool is_a_registrable_domain_suffix_of_or_is_equal_to(StringView host_suffix_string, URL::Host const& original_host)
+bool is_a_registrable_domain_suffix_of_or_is_equal_to(StringView host_suffix_string, URL::Host const& original_host)
 {
     // 1. If hostSuffixString is the empty string, then return false.
     if (host_suffix_string.is_empty())
@@ -6645,7 +6645,7 @@ HashMap<FlyString, GC::Ref<Web::CSS::CSSPropertyRule>>& Document::registered_cus
     return m_registered_custom_properties;
 }
 
-NonnullRefPtr<CSS::CSSStyleValue const> Document::custom_property_initial_value(FlyString const& name) const
+NonnullRefPtr<CSS::StyleValue const> Document::custom_property_initial_value(FlyString const& name) const
 {
     auto maybe_custom_property = m_registered_custom_properties.get(name);
     if (maybe_custom_property.has_value()) {

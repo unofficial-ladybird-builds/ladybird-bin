@@ -9,11 +9,11 @@
 
 #pragma once
 
-#include <LibWeb/CSS/StyleValues/CSSUnitValue.h>
+#include <LibWeb/CSS/StyleValues/StyleValue.h>
 
 namespace Web::CSS {
 
-class NumberStyleValue final : public CSSUnitValue {
+class NumberStyleValue final : public StyleValue {
 public:
     static ValueComparingNonnullRefPtr<NumberStyleValue const> create(double value)
     {
@@ -21,13 +21,11 @@ public:
     }
 
     double number() const { return m_value; }
-    virtual double value() const override { return m_value; }
-    virtual StringView unit() const override { return "number"sv; }
 
     virtual String to_string(SerializationMode) const override;
     virtual Vector<Parser::ComponentValue> tokenize() const override;
 
-    bool equals(CSSStyleValue const& other) const override
+    bool equals(StyleValue const& other) const override
     {
         if (type() != other.type())
             return false;
@@ -37,7 +35,7 @@ public:
 
 private:
     explicit NumberStyleValue(double value)
-        : CSSUnitValue(Type::Number)
+        : StyleValue(Type::Number)
         , m_value(value)
     {
     }

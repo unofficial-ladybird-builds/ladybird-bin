@@ -173,6 +173,13 @@ enum class Source;
 
 }
 
+namespace Web::CookieStore {
+
+class CookieChangeEvent;
+class CookieStore;
+
+}
+
 namespace Web::CredentialManagement {
 
 class Credential;
@@ -214,46 +221,41 @@ class CascadedProperties;
 class Clip;
 class ColorMixStyleValue;
 class ColorSchemeStyleValue;
+class ColorFunctionStyleValue;
+class ColorStyleValue;
 class ConicGradientStyleValue;
 class ContentStyleValue;
 class CounterDefinitionsStyleValue;
 class CounterStyleValue;
 class CountersSet;
 class CSSAnimation;
-class CSSColorValue;
 class CSSConditionRule;
 class CSSDescriptors;
 class CSSFontFaceDescriptors;
 class CSSFontFaceRule;
 class CSSGroupingRule;
-class CSSHSL;
-class CSSHWB;
 class CSSImportRule;
 class CSSKeyframeRule;
 class CSSKeyframesRule;
-class CSSKeywordValue;
 class CSSLayerBlockRule;
 class CSSLayerStatementRule;
 class CSSMarginRule;
 class CSSMediaRule;
 class CSSNamespaceRule;
 class CSSNestedDeclarations;
-class CSSOKLab;
-class CSSOKLCH;
 class CSSPageRule;
 class CSSPageDescriptors;
 class CSSPropertyRule;
-class CSSRGB;
 class CSSRule;
 class CSSRuleList;
 class CSSStyleDeclaration;
 class CSSStyleProperties;
 class CSSStyleRule;
 class CSSStyleSheet;
-class CSSStyleValue;
 class CSSSupportsRule;
 class CursorStyleValue;
 class CustomIdentStyleValue;
+class DimensionStyleValue;
 class Display;
 class DisplayStyleValue;
 class EasingStyleValue;
@@ -283,10 +285,13 @@ class GridTrackPlacementStyleValue;
 class GridTrackSizeList;
 class GridTrackSizeListStyleValue;
 class GuaranteedInvalidStyleValue;
+class HSLColorStyleValue;
+class HWBColorStyleValue;
 class ImageStyleValue;
 class IntegerOrCalculated;
 class IntegerStyleValue;
 class InvalidationSet;
+class KeywordStyleValue;
 class Length;
 class LengthBox;
 class LengthOrCalculated;
@@ -302,6 +307,8 @@ class MediaQueryListEvent;
 class Number;
 class NumberOrCalculated;
 class NumberStyleValue;
+class OKLabColorStyleValue;
+class OKLCHColorStyleValue;
 class OpenTypeTaggedStyleValue;
 class ParsedFontFace;
 class PendingSubstitutionStyleValue;
@@ -317,6 +324,7 @@ class RepeatStyleStyleValue;
 class Resolution;
 class ResolutionOrCalculated;
 class ResolutionStyleValue;
+class RGBColorStyleValue;
 class Screen;
 class ScreenOrientation;
 class ScrollbarGutterStyleValue;
@@ -330,6 +338,7 @@ class StyleComputer;
 class ComputedProperties;
 class StyleSheet;
 class StyleSheetList;
+class StyleValue;
 class StyleValueList;
 class Supports;
 class SVGPaint;

@@ -26,8 +26,8 @@
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
-#include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
+#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
 #include <LibWeb/DOM/Attr.h>
@@ -706,7 +706,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
     if (is<HTML::HTMLTableElement>(*this)) {
         auto text_align = new_computed_properties->text_align();
         if (text_align == CSS::TextAlign::LibwebLeft || text_align == CSS::TextAlign::LibwebCenter || text_align == CSS::TextAlign::LibwebRight)
-            new_computed_properties->set_property(CSS::PropertyID::TextAlign, CSS::CSSKeywordValue::create(CSS::Keyword::Start));
+            new_computed_properties->set_property(CSS::PropertyID::TextAlign, CSS::KeywordStyleValue::create(CSS::Keyword::Start));
     }
 
     bool had_list_marker = false;
@@ -801,7 +801,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
 
     CSS::RequiredInvalidationAfterStyleChange invalidation;
 
-    HashMap<size_t, RefPtr<CSS::CSSStyleValue const>> old_values_with_relative_units;
+    HashMap<size_t, RefPtr<CSS::StyleValue const>> old_values_with_relative_units;
     for (auto i = to_underlying(CSS::first_property_id); i <= to_underlying(CSS::last_property_id); ++i) {
         auto property_id = static_cast<CSS::PropertyID>(i);
         auto const& preabsolutized_value = m_cascaded_properties->property(property_id);

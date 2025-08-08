@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <../../Libraries/LibWeb/CSS/StyleValues/StyleValue.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
 #include <AK/LexicalPath.h>
@@ -16,7 +17,6 @@
 #include <LibCore/File.h>
 #include <LibJS/Runtime/Value.h>
 #include <LibURL/Parser.h>
-#include <LibWeb/CSS/CSSStyleValue.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/Cookie/Cookie.h>
@@ -2148,7 +2148,7 @@ Messages::WebDriverClient::GetAllCookiesResponse WebDriverConnection::get_all_co
         // 4. For each cookie in all associated cookies of the current browsing context’s active document:
         auto* document = current_browsing_context().active_document();
 
-        for (auto const& cookie : current_browsing_context().page().client().page_did_request_all_cookies(document->url())) {
+        for (auto const& cookie : current_browsing_context().page().client().page_did_request_all_cookies_webdriver(document->url())) {
             // 1. Let serialized cookie be the result of serializing cookie.
             auto serialized_cookie = serialize_cookie(cookie);
 
@@ -3070,7 +3070,7 @@ void WebDriverConnection::delete_cookies(Optional<StringView> const& name)
     // For each cookie among all associated cookies of the current browsing context’s active document, un the substeps of the first matching condition:
     auto* document = current_browsing_context().active_document();
 
-    for (auto& cookie : current_browsing_context().page().client().page_did_request_all_cookies(document->url())) {
+    for (auto& cookie : current_browsing_context().page().client().page_did_request_all_cookies_webdriver(document->url())) {
         // -> name is undefined
         // -> name is equal to cookie name
         if (!name.has_value() || name.value() == cookie.name) {

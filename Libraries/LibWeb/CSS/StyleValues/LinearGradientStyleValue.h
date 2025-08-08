@@ -13,7 +13,7 @@
 #include <LibWeb/CSS/Angle.h>
 #include <LibWeb/CSS/Percentage.h>
 #include <LibWeb/CSS/StyleValues/AbstractImageStyleValue.h>
-#include <LibWeb/CSS/StyleValues/CSSColorValue.h>
+#include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
 #include <LibWeb/Painting/GradientPainting.h>
 
 namespace Web::CSS {
@@ -48,7 +48,7 @@ public:
 
     virtual String to_string(SerializationMode) const override;
     virtual ~LinearGradientStyleValue() override = default;
-    virtual bool equals(CSSStyleValue const& other) const override;
+    virtual bool equals(StyleValue const& other) const override;
 
     Vector<LinearColorStopListElement> const& color_stop_list() const
     {

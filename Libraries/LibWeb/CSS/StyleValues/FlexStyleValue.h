@@ -7,11 +7,11 @@
 #pragma once
 
 #include <LibWeb/CSS/Flex.h>
-#include <LibWeb/CSS/StyleValues/CSSUnitValue.h>
+#include <LibWeb/CSS/StyleValues/DimensionStyleValue.h>
 
 namespace Web::CSS {
 
-class FlexStyleValue final : public CSSUnitValue {
+class FlexStyleValue final : public DimensionStyleValue {
 public:
     static ValueComparingNonnullRefPtr<FlexStyleValue const> create(Flex flex)
     {
@@ -20,12 +20,12 @@ public:
     virtual ~FlexStyleValue() override = default;
 
     Flex const& flex() const { return m_flex; }
-    virtual double value() const override { return m_flex.raw_value(); }
-    virtual StringView unit() const override { return m_flex.unit_name(); }
+    virtual double raw_value() const override { return m_flex.raw_value(); }
+    virtual StringView unit_name() const override { return m_flex.unit_name(); }
 
     virtual String to_string(SerializationMode serialization_mode) const override { return m_flex.to_string(serialization_mode); }
 
-    bool equals(CSSStyleValue const& other) const override
+    bool equals(StyleValue const& other) const override
     {
         if (type() != other.type())
             return false;
@@ -35,7 +35,7 @@ public:
 
 private:
     FlexStyleValue(Flex&& flex)
-        : CSSUnitValue(Type::Flex)
+        : DimensionStyleValue(Type::Flex)
         , m_flex(flex)
     {
     }

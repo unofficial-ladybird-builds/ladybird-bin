@@ -25,7 +25,7 @@ Each property will have some set of these fields on it:
 | `affects-stacking-context`        | No       | `false` | Boolean. Whether this property can cause a new stacking context for the element.                            | `bool property_affects_stacking_context(PropertyID)`                                                                                                                                        |
 | `animation-type`                  | Yes      |         | String. How the property should be animated. Defined by the spec. See below.                                | `AnimationType animation_type_from_longhand_property(PropertyID)`                                                                                                                           |
 | `inherited`                       | Yes      |         | Boolean. Whether the property is inherited by its child elements.                                           | `bool is_inherited_property(PropertyID)`                                                                                                                                                    |
-| `initial`                         | Yes      |         | String. The property's initial value if it is not specified.                                                | `NonnullRefPtr<CSSStyleValue const> property_initial_value(PropertyID)`                                                                                                                     |
+| `initial`                         | Yes      |         | String. The property's initial value if it is not specified.                                                | `NonnullRefPtr<StyleValue const> property_initial_value(PropertyID)`                                                                                                                     |
 | `legacy-alias-for`                | No       | Nothing | String. The name of a property this is an alias for. See below.                                             |                                                                                                                                                                                             |
 | `logical-alias-for`               | No       | Nothing | An object. See below.                                                                                       | `bool property_is_logical_alias(PropertyID);`<br/>`PropertyID map_logical_alias_to_physical_property(PropertyID, LogicalAliasMappingContext const&)`                                        |
 | `longhands`                       | No       | `[]`    | Array of strings. If this is a shorthand, these are the property names that it expands out into.            | `Vector<PropertyID> longhands_for_shorthand(PropertyID)`<br/>`Vector<PropertyID> expanded_longhands_for_shorthand(PropertyID)`<br/>`Vector<PropertyID> shorthands_for_longhand(PropertyID)` |
@@ -129,7 +129,7 @@ The generated code provides:
   it exists in that at-rule.
 - `FlyString to_string(DescriptorID)` for serializing descriptor names.
 - `bool at_rule_supports_descriptor(AtRuleID, DescriptorID)` to query if the given at-rule allows the descriptor.
-- `RefPtr<CSSStyleValue const> descriptor_initial_value(AtRuleID, DescriptorID)` for getting a descriptor's initial value.
+- `RefPtr<StyleValue const> descriptor_initial_value(AtRuleID, DescriptorID)` for getting a descriptor's initial value.
 - `DescriptorMetadata get_descriptor_metadata(AtRuleID, DescriptorID)` returns data used for parsing the descriptor.
 
 ### At-rule fields
@@ -159,7 +159,7 @@ This generates `Keyword.h` and `Keyword.cpp`.
 All keyword values used by any property or media-feature need to be defined here.
 
 The generated code provides:
-- A `Keyword` enum as used by `CSSKeywordValue`
+- A `Keyword` enum as used by `KeywordStyleValue`
 - `Optional<Keyword> keyword_from_string(StringView)` to attempt to convert a string into a Keyword
 - `StringView string_from_keyword(Keyword)` to convert a Keyword back into a string
 - `bool is_css_wide_keyword(StringView)` which returns whether the string is one of the special "CSS-wide keywords"

@@ -8,8 +8,8 @@
 #include <LibWeb/Bindings/HTMLHRElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/ComputedProperties.h>
-#include <LibWeb/CSS/StyleValues/CSSColorValue.h>
-#include <LibWeb/CSS/StyleValues/CSSKeywordValue.h>
+#include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
+#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/HTML/HTMLHRElement.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
@@ -44,22 +44,22 @@ void HTMLHRElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> 
     for_each_attribute([&](auto& name, auto& value) {
         // https://html.spec.whatwg.org/multipage/rendering.html#the-hr-element-2
         if (name == HTML::AttributeNames::color || name == HTML::AttributeNames::noshade) {
-            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopStyle, CSS::CSSKeywordValue::create(CSS::Keyword::Solid));
-            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightStyle, CSS::CSSKeywordValue::create(CSS::Keyword::Solid));
-            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomStyle, CSS::CSSKeywordValue::create(CSS::Keyword::Solid));
-            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftStyle, CSS::CSSKeywordValue::create(CSS::Keyword::Solid));
+            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderTopStyle, CSS::KeywordStyleValue::create(CSS::Keyword::Solid));
+            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderRightStyle, CSS::KeywordStyleValue::create(CSS::Keyword::Solid));
+            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderBottomStyle, CSS::KeywordStyleValue::create(CSS::Keyword::Solid));
+            cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BorderLeftStyle, CSS::KeywordStyleValue::create(CSS::Keyword::Solid));
         }
 
         if (name == HTML::AttributeNames::align) {
             if (value.equals_ignoring_ascii_case("left"sv)) {
                 cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, CSS::LengthStyleValue::create(CSS::Length::make_px(0)));
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, CSS::CSSKeywordValue::create(CSS::Keyword::Auto));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, CSS::KeywordStyleValue::create(CSS::Keyword::Auto));
             } else if (value.equals_ignoring_ascii_case("right"sv)) {
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, CSS::CSSKeywordValue::create(CSS::Keyword::Auto));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, CSS::KeywordStyleValue::create(CSS::Keyword::Auto));
                 cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, CSS::LengthStyleValue::create(CSS::Length::make_px(0)));
             } else if (value.equals_ignoring_ascii_case("center"sv)) {
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, CSS::CSSKeywordValue::create(CSS::Keyword::Auto));
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, CSS::CSSKeywordValue::create(CSS::Keyword::Auto));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginLeft, CSS::KeywordStyleValue::create(CSS::Keyword::Auto));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::MarginRight, CSS::KeywordStyleValue::create(CSS::Keyword::Auto));
             }
         }
 
@@ -68,7 +68,7 @@ void HTMLHRElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> 
         // the user agent is expected to treat the attribute as a presentational hint setting the element's 'color' property to the resulting color.
         if (name == HTML::AttributeNames::color) {
             if (auto parsed_value = parse_legacy_color_value(value); parsed_value.has_value()) {
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Color, CSS::CSSColorValue::create_from_color(*parsed_value, CSS::ColorSyntax::Legacy));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::Color, CSS::ColorStyleValue::create_from_color(*parsed_value, CSS::ColorSyntax::Legacy));
             }
         }
         // https://html.spec.whatwg.org/multipage/rendering.html#the-hr-element-2:maps-to-the-dimension-property
