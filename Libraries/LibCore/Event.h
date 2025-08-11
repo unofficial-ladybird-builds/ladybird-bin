@@ -24,9 +24,6 @@ public:
         Timer,
         NotifierActivation,
         DeferredInvoke,
-        ChildAdded,
-        ChildRemoved,
-        Custom,
     };
 
     Event() = default;
@@ -100,37 +97,6 @@ public:
 private:
     int m_fd;
     NotificationType m_type;
-};
-
-class ChildEvent final : public Event {
-public:
-    ChildEvent(Type, EventReceiver& child, EventReceiver* insertion_before_child = nullptr);
-    ~ChildEvent() = default;
-
-    EventReceiver* child();
-    EventReceiver const* child() const;
-
-    EventReceiver* insertion_before_child();
-    EventReceiver const* insertion_before_child() const;
-
-private:
-    WeakPtr<EventReceiver> m_child;
-    WeakPtr<EventReceiver> m_insertion_before_child;
-};
-
-class CustomEvent : public Event {
-public:
-    CustomEvent(int custom_type)
-        : Event(Event::Type::Custom)
-        , m_custom_type(custom_type)
-    {
-    }
-    ~CustomEvent() = default;
-
-    int custom_type() const { return m_custom_type; }
-
-private:
-    int m_custom_type { 0 };
 };
 
 }

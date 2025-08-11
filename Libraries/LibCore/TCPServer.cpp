@@ -14,7 +14,7 @@
 
 namespace Core {
 
-ErrorOr<NonnullRefPtr<TCPServer>> TCPServer::try_create(EventReceiver* parent)
+ErrorOr<NonnullRefPtr<TCPServer>> TCPServer::try_create()
 {
 #ifdef SOCK_NONBLOCK
     int fd = TRY(Core::System::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
@@ -25,12 +25,11 @@ ErrorOr<NonnullRefPtr<TCPServer>> TCPServer::try_create(EventReceiver* parent)
     TRY(Core::System::fcntl(fd, F_SETFD, FD_CLOEXEC));
 #endif
 
-    return adopt_nonnull_ref_or_enomem(new (nothrow) TCPServer(fd, parent));
+    return adopt_nonnull_ref_or_enomem(new (nothrow) TCPServer(fd));
 }
 
-TCPServer::TCPServer(int fd, EventReceiver* parent)
-    : EventReceiver(parent)
-    , m_fd(fd)
+TCPServer::TCPServer(int fd)
+    : m_fd(fd)
 {
     VERIFY(m_fd >= 0);
 }
@@ -57,7 +56,7 @@ ErrorOr<void> TCPServer::listen(IPv4Address const& address, u16 port, AllowAddre
     TRY(Core::System::listen(m_fd, 5));
     m_listening = true;
 
-    m_notifier = Notifier::construct(m_fd, Notifier::Type::Read, this);
+    m_notifier = Notifier::construct(m_fd, Notifier::Type::Read);
     m_notifier->on_activation = [this] {
         if (on_ready_to_accept)
             on_ready_to_accept();

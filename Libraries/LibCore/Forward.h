@@ -13,7 +13,6 @@ namespace Core {
 class AnonymousBuffer;
 class ArgsParser;
 class BufferedSocketBase;
-class ChildEvent;
 class ConfigFile;
 class CustomEvent;
 class DateTime;
@@ -50,8 +49,6 @@ class UDPServer;
 class UDPSocket;
 
 struct ProxyData;
-
-enum class TimerShouldFireWhenNotVisible;
 
 #ifdef AK_OS_MACH
 class MachPort;

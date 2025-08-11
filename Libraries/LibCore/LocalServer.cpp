@@ -21,10 +21,7 @@
 
 namespace Core {
 
-LocalServer::LocalServer(EventReceiver* parent)
-    : EventReceiver(parent)
-{
-}
+LocalServer::LocalServer() = default;
 
 LocalServer::~LocalServer()
 {
@@ -45,7 +42,7 @@ ErrorOr<void> LocalServer::take_over_fd(int socket_fd)
 
 void LocalServer::setup_notifier()
 {
-    m_notifier = Notifier::construct(m_fd, Notifier::Type::Read, this);
+    m_notifier = Notifier::construct(m_fd, Notifier::Type::Read);
     m_notifier->on_activation = [this] {
         if (on_accept) {
             auto maybe_client_socket = accept();
