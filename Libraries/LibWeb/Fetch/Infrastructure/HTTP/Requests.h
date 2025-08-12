@@ -19,6 +19,7 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibURL/Origin.h>
 #include <LibURL/URL.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 #include <LibWeb/HTML/PolicyContainers.h>
@@ -228,6 +229,9 @@ public:
     [[nodiscard]] OriginType const& origin() const { return m_origin; }
     void set_origin(OriginType origin) { m_origin = move(origin); }
 
+    [[nodiscard]] Optional<URL::Origin> const& top_level_navigation_initiator_origin() const { return m_top_level_navigation_initiator_origin; }
+    void set_top_level_navigation_initiator_origin(Optional<URL::Origin> top_level_navigation_initiator_origin) { m_top_level_navigation_initiator_origin = move(top_level_navigation_initiator_origin); }
+
     [[nodiscard]] PolicyContainerType const& policy_container() const { return m_policy_container; }
     void set_policy_container(PolicyContainerType policy_container) { m_policy_container = move(policy_container); }
 
@@ -307,7 +311,7 @@ public:
     [[nodiscard]] bool is_non_subresource_request() const;
     [[nodiscard]] bool is_navigation_request() const;
 
-    [[nodiscard]] bool has_redirect_tainted_origin() const;
+    [[nodiscard]] RedirectTaint redirect_taint() const;
 
     [[nodiscard]] String serialize_origin() const;
     [[nodiscard]] ByteBuffer byte_serialize_origin() const;
@@ -416,6 +420,10 @@ private:
     // https://fetch.spec.whatwg.org/#concept-request-origin
     // A request has an associated origin, which is "client" or an origin. Unless stated otherwise it is "client".
     OriginType m_origin { Origin::Client };
+
+    // https://fetch.spec.whatwg.org/#request-top-level-navigation-initiator-origin
+    // A request has an associated top-level navigation initiator origin, which is an origin or null. Unless stated otherwise it is null.
+    Optional<URL::Origin> m_top_level_navigation_initiator_origin;
 
     // https://fetch.spec.whatwg.org/#concept-request-policy-container
     // A request has an associated policy container, which is "client" or a policy container. Unless stated otherwise
