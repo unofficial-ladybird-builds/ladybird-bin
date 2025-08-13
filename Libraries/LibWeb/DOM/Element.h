@@ -19,6 +19,7 @@
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StyleProperty.h>
+#include <LibWeb/CSS/StylePropertyMapReadOnly.h>
 #include <LibWeb/DOM/ChildNode.h>
 #include <LibWeb/DOM/NonDocumentTypeChildNode.h>
 #include <LibWeb/DOM/ParentNode.h>
@@ -225,6 +226,7 @@ public:
     void set_inline_style(GC::Ptr<CSS::CSSStyleProperties>);
 
     GC::Ref<CSS::CSSStyleProperties> style_for_bindings();
+    GC::Ref<CSS::StylePropertyMap> attribute_style_map();
 
     CSS::StyleSheetList& document_or_shadow_root_style_sheets();
     ElementByIdMap& document_or_shadow_root_element_by_id_map();
@@ -521,6 +523,8 @@ public:
     void set_had_duplicate_attribute_during_tokenization(Badge<HTML::HTMLParser>);
     bool had_duplicate_attribute_during_tokenization() const { return m_had_duplicate_attribute_during_tokenization; }
 
+    GC::Ref<CSS::StylePropertyMapReadOnly> computed_style_map();
+
 protected:
     Element(Document&, DOM::QualifiedName);
     virtual void initialize(JS::Realm&) override;
@@ -563,6 +567,7 @@ private:
 
     GC::Ptr<NamedNodeMap> m_attributes;
     GC::Ptr<CSS::CSSStyleProperties> m_inline_style;
+    GC::Ptr<CSS::StylePropertyMap> m_attribute_style_map;
     GC::Ptr<DOMTokenList> m_class_list;
     GC::Ptr<ShadowRoot> m_shadow_root;
 
@@ -602,6 +607,11 @@ private:
     // https://www.w3.org/TR/intersection-observer/#dom-element-registeredintersectionobservers-slot
     // Element objects have an internal [[RegisteredIntersectionObservers]] slot, which is initialized to an empty list.
     OwnPtr<Vector<IntersectionObserver::IntersectionObserverRegistration>> m_registered_intersection_observers;
+
+    // https://drafts.css-houdini.org/css-typed-om-1/#dom-element-computedstylemapcache-slot
+    // Every Element has a [[computedStyleMapCache]] internal slot, initially set to null, which caches the result of
+    // the computedStyleMap() method when it is first called.
+    GC::Ptr<CSS::StylePropertyMapReadOnly> m_computed_style_map_cache;
 
     CSSPixelPoint m_scroll_offset;
 

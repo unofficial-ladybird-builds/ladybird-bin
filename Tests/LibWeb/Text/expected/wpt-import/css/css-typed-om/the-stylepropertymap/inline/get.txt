@@ -1,0 +1,13 @@
+Harness status: OK
+
+Found 7 tests
+
+2 Pass
+5 Fail
+Pass	Getting a custom property not in the inline style returns undefined
+Pass	Getting a valid property not in the inline style returns undefined
+Fail	Getting a valid property from inline style returns the correct entry
+Fail	Getting a valid custom property from inline style returns the correct entry
+Fail	Getting a list-valued property from inline style returns only the first value
+Fail	Declared StylePropertyMap.get is not case-sensitive
+Fail	Declared StylePropertyMap.get reflects changes in the inline style

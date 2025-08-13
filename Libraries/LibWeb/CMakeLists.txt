@@ -128,6 +128,7 @@ set(SOURCES
     CSS/CSSStyleProperties.cpp
     CSS/CSSStyleRule.cpp
     CSS/CSSStyleSheet.cpp
+    CSS/CSSStyleValue.cpp
     CSS/CSSSupportsRule.cpp
     CSS/CSSTransition.cpp
     CSS/Descriptor.cpp
@@ -185,6 +186,8 @@ set(SOURCES
     CSS/StyleInvalidation.cpp
     CSS/StyleInvalidationData.cpp
     CSS/StyleProperty.cpp
+    CSS/StylePropertyMapReadOnly.cpp
+    CSS/StylePropertyMap.cpp
     CSS/StyleSheet.cpp
     CSS/StyleSheetIdentifier.cpp
     CSS/StyleSheetList.cpp

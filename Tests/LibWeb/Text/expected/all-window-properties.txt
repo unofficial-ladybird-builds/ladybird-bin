@@ -60,6 +60,7 @@ CSSStyleDeclaration
 CSSStyleProperties
 CSSStyleRule
 CSSStyleSheet
+CSSStyleValue
 CSSSupportsRule
 CSSTransition
 CacheStorage
@@ -408,6 +409,8 @@ Storage
 StorageEvent
 StorageManager
 String
+StylePropertyMap
+StylePropertyMapReadOnly
 StyleSheet
 StyleSheetList
 SubmitEvent

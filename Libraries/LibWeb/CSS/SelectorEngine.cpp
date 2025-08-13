@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2024, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -670,10 +670,7 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
     case CSS::PseudoClass::NthLastChild:
     case CSS::PseudoClass::NthOfType:
     case CSS::PseudoClass::NthLastOfType: {
-        auto const step_size = pseudo_class.nth_child_pattern.step_size;
-        auto const offset = pseudo_class.nth_child_pattern.offset;
-        if (step_size == 0 && offset == 0)
-            return false; // "If both a and b are equal to zero, the pseudo-class represents no element in the document tree."
+        auto& an_plus_b = pseudo_class.an_plus_b_patterns.first();
 
         auto const* parent = element.parent();
         if (!parent)
@@ -729,38 +726,7 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
         default:
             VERIFY_NOT_REACHED();
         }
-
-        // When "step_size == -1", selector represents first "offset" elements in document tree.
-        if (step_size == -1)
-            return !(offset <= 0 || index > offset);
-
-        // When "step_size == 1", selector represents last "offset" elements in document tree.
-        if (step_size == 1)
-            return !(offset < 0 || index < offset);
-
-        // When "step_size == 0", selector picks only the "offset" element.
-        if (step_size == 0)
-            return index == offset;
-
-        // If both are negative, nothing can match.
-        if (step_size < 0 && offset < 0)
-            return false;
-
-        // Like "a % b", but handles negative integers correctly.
-        auto const canonical_modulo = [](int a, int b) -> int {
-            int c = a % b;
-            if ((c < 0 && b > 0) || (c > 0 && b < 0)) {
-                c += b;
-            }
-            return c;
-        };
-
-        // When "step_size < 0", we start at "offset" and count backwards.
-        if (step_size < 0)
-            return index <= offset && canonical_modulo(index - offset, -step_size) == 0;
-
-        // Otherwise, we start at "offset" and count forwards.
-        return index >= offset && canonical_modulo(index - offset, step_size) == 0;
+        return an_plus_b.matches(index);
     }
     case CSS::PseudoClass::Playing: {
         if (!is<HTML::HTMLMediaElement>(element))
@@ -1064,6 +1030,45 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
             return false;
         if (auto* custom_state_set = element.custom_state_set())
             return custom_state_set->has_state(pseudo_class.ident->string_value);
+        return false;
+    }
+    case CSS::PseudoClass::Heading: {
+        // https://html.spec.whatwg.org/multipage/semantics-other.html#selector-heading
+        // The :heading pseudo-class must match all h1, h2, h3, h4, h5, and h6 elements.
+
+        // https://html.spec.whatwg.org/multipage/semantics-other.html#selector-heading-functional
+        // The :heading(An+B#) pseudo-class must match all h1, h2, h3, h4, h5, and h6 elements that have a heading level among An+B. [CSSSYNTAX] [CSSVALUES]
+
+        // NB: We combine the "is this an h* element?" and "what is it's level?" checks together here.
+        if (!element.is_html_element())
+            return false;
+        auto heading_level = [](auto& local_name) -> Optional<int> {
+            if (local_name == HTML::TagNames::h1)
+                return 1;
+            if (local_name == HTML::TagNames::h2)
+                return 2;
+            if (local_name == HTML::TagNames::h3)
+                return 3;
+            if (local_name == HTML::TagNames::h4)
+                return 4;
+            if (local_name == HTML::TagNames::h5)
+                return 5;
+            if (local_name == HTML::TagNames::h6)
+                return 6;
+            return {};
+        }(element.lowercased_local_name());
+
+        if (!heading_level.has_value())
+            return false;
+
+        if (pseudo_class.an_plus_b_patterns.is_empty())
+            return true;
+
+        for (auto const& an_plus_b_pattern : pseudo_class.an_plus_b_patterns) {
+            if (an_plus_b_pattern.matches(heading_level.value()))
+                return true;
+        }
+
         return false;
     }
     }

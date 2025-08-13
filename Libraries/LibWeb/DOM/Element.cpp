@@ -26,6 +26,7 @@
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/CSS/StylePropertyMap.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
@@ -122,6 +123,8 @@ void Element::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_custom_state_set);
     visitor.visit(m_cascaded_properties);
     visitor.visit(m_computed_properties);
+    visitor.visit(m_computed_style_map_cache);
+    visitor.visit(m_attribute_style_map);
     if (m_pseudo_element_data) {
         for (auto& pseudo_element : *m_pseudo_element_data) {
             visitor.visit(pseudo_element.value);
@@ -1108,9 +1111,18 @@ GC::Ref<CSS::CSSStyleProperties> Element::style_for_bindings()
     return *m_inline_style;
 }
 
+GC::Ref<CSS::StylePropertyMap> Element::attribute_style_map()
+{
+    if (!m_attribute_style_map)
+        m_attribute_style_map = CSS::StylePropertyMap::create(realm(), style_for_bindings());
+    return *m_attribute_style_map;
+}
+
 void Element::set_inline_style(GC::Ptr<CSS::CSSStyleProperties> style)
 {
     m_inline_style = style;
+    if (m_attribute_style_map)
+        m_attribute_style_map = nullptr;
     set_needs_style_update(true);
 }
 
@@ -4094,6 +4106,29 @@ bool Element::should_indicate_focus() const
 void Element::set_had_duplicate_attribute_during_tokenization(Badge<HTML::HTMLParser>)
 {
     m_had_duplicate_attribute_during_tokenization = true;
+}
+
+// https://drafts.css-houdini.org/css-typed-om-1/#dom-element-computedstylemap
+GC::Ref<CSS::StylePropertyMapReadOnly> Element::computed_style_map()
+{
+    // The computedStyleMap() method must, when called on an Element this, perform the following steps:
+
+    // 1. If this’s [[computedStyleMapCache]] internal slot is set to null, set its value to a new
+    //    StylePropertyMapReadOnly object, whose [[declarations]] internal slot are the name and computed value of
+    //    every longhand CSS property supported by the User Agent, every registered custom property, and every
+    //    non-registered custom property which is not set to its initial value on this, in the standard order.
+    //
+    //    The computed values in the [[declarations]] of this object must remain up-to-date, changing as style
+    //    resolution changes the properties on this and how they’re computed.
+    //
+    // NOTE: In practice, since the values are "hidden" behind a .get() method call, UAs can delay computing anything
+    //    until a given property is actually requested.
+    if (m_computed_style_map_cache == nullptr) {
+        m_computed_style_map_cache = CSS::StylePropertyMapReadOnly::create_computed_style(realm(), AbstractElement { *this });
+    }
+
+    // 2. Return this’s [[computedStyleMapCache]] internal slot.
+    return *m_computed_style_map_cache;
 }
 
 }
