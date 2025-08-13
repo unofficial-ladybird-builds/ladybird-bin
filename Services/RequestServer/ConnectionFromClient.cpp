@@ -53,7 +53,7 @@ static NonnullRefPtr<Resolver> default_resolver()
                 return Error::from_string_literal("No DNS server configured");
 
             auto resolved = TRY(default_resolver()->dns.lookup(*g_dns_info.server_hostname)->await());
-            if (resolved->cached_addresses().is_empty())
+            if (!resolved->has_cached_addresses())
                 return Error::from_string_literal("Failed to resolve DNS server hostname");
             auto address = resolved->cached_addresses().first().visit([](auto& addr) -> Core::SocketAddress { return { addr, g_dns_info.port }; });
             g_dns_info.server_address = address;
@@ -95,6 +95,8 @@ ByteString build_curl_resolve_list(DNS::LookupResult const& dns_result, StringVi
         first = false;
         resolve_opt_builder.append(formatted_address);
     }
+
+    dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: Resolve list: {}", resolve_opt_builder.string_view());
 
     return resolve_opt_builder.to_byte_string();
 }
@@ -269,8 +271,7 @@ int ConnectionFromClient::on_socket_callback(CURL*, int sockfd, int what, void* 
         client->m_read_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
             auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Read);
             notifier->on_activation = [client, sockfd, multi] {
-                int still_running = 0;
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_IN, &still_running);
+                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_IN, nullptr);
                 VERIFY(result == CURLM_OK);
                 client->check_active_requests();
             };
@@ -283,8 +284,7 @@ int ConnectionFromClient::on_socket_callback(CURL*, int sockfd, int what, void* 
         client->m_write_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
             auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Write);
             notifier->on_activation = [client, sockfd, multi] {
-                int still_running = 0;
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_OUT, &still_running);
+                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_OUT, nullptr);
                 VERIFY(result == CURLM_OK);
                 client->check_active_requests();
             };
@@ -329,8 +329,7 @@ ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transpo
     set_option(CURLMOPT_TIMERDATA, this);
 
     m_timer = Core::Timer::create_single_shot(0, [this] {
-        int still_running = 0;
-        auto result = curl_multi_socket_action(m_curl_multi, CURL_SOCKET_TIMEOUT, 0, &still_running);
+        auto result = curl_multi_socket_action(m_curl_multi, CURL_SOCKET_TIMEOUT, 0, nullptr);
         VERIFY(result == CURLM_OK);
         check_active_requests();
     });
@@ -460,6 +459,7 @@ void ConnectionFromClient::start_request(i32, ByteString, URL::URL, HTTP::Header
 #else
 void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL::URL url, HTTP::HeaderMap request_headers, ByteBuffer request_body, Core::ProxyData proxy_data)
 {
+    dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_request({}, {})", request_id, url);
     auto host = url.serialized_host().to_byte_string();
 
     m_resolver->dns.lookup(host, DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA }, { .validate_dnssec_locally = g_dns_info.validate_dnssec_locally })
@@ -469,12 +469,14 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
             async_request_finished(request_id, 0, {}, Requests::NetworkError::UnableToResolveHost);
         })
         .when_resolved([this, request_id, host = move(host), url = move(url), method = move(method), request_body = move(request_body), request_headers = move(request_headers), proxy_data](auto const& dns_result) mutable {
-            if (dns_result->records().is_empty() || dns_result->cached_addresses().is_empty()) {
+            if (dns_result->is_empty() || !dns_result->has_cached_addresses()) {
                 dbgln("StartRequest: DNS lookup failed for '{}'", host);
                 // FIXME: Implement timing info for DNS lookup failure.
                 async_request_finished(request_id, 0, {}, Requests::NetworkError::UnableToResolveHost);
                 return;
             }
+
+            dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: DNS lookup successful");
 
             auto* easy = curl_easy_init();
             if (!easy) {
@@ -498,11 +500,8 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
 
             auto set_option = [easy](auto option, auto value) {
                 auto result = curl_easy_setopt(easy, option, value);
-                if (result != CURLE_OK) {
+                if (result != CURLE_OK)
                     dbgln("StartRequest: Failed to set curl option: {}", curl_easy_strerror(result));
-                    return false;
-                }
-                return true;
             };
 
             set_option(CURLOPT_PRIVATE, request.ptr());
@@ -517,21 +516,18 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
             set_option(CURLOPT_PIPEWAIT, 1L);
             set_option(CURLOPT_ALTSVC, m_alt_svc_cache_path.characters());
 
-            bool did_set_body = false;
+            set_option(CURLOPT_CUSTOMREQUEST, method.characters());
+            set_option(CURLOPT_FOLLOWLOCATION, 0);
 
-            if (method == "GET"sv) {
-                set_option(CURLOPT_HTTPGET, 1L);
-            } else if (method.is_one_of("POST"sv, "PUT"sv, "PATCH"sv, "DELETE"sv)) {
+            bool did_set_body = false;
+            if (method.is_one_of("POST"sv, "PUT"sv, "PATCH"sv, "DELETE"sv)) {
                 request->body = move(request_body);
                 set_option(CURLOPT_POSTFIELDSIZE, request->body.size());
                 set_option(CURLOPT_POSTFIELDS, request->body.data());
                 did_set_body = true;
-            } else if (method == "HEAD") {
+            } else if (method == "HEAD"sv) {
                 set_option(CURLOPT_NOBODY, 1L);
             }
-            set_option(CURLOPT_CUSTOMREQUEST, method.characters());
-
-            set_option(CURLOPT_FOLLOWLOCATION, 0);
 
             struct curl_slist* curl_headers = nullptr;
 
@@ -554,6 +550,7 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
                 }
 
                 auto header_string = ByteString::formatted("{}: {}", header.name, header.value);
+                dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: Request header: {}", header_string);
                 curl_headers = curl_slist_append(curl_headers, header_string.characters());
             }
 
@@ -821,7 +818,7 @@ void ConnectionFromClient::websocket_connect(i64 websocket_id, URL::URL url, Byt
             async_websocket_errored(websocket_id, static_cast<i32>(Requests::WebSocket::Error::CouldNotEstablishConnection));
         })
         .when_resolved([this, websocket_id, host = move(host), url = move(url), origin = move(origin), protocols = move(protocols), extensions = move(extensions), additional_request_headers = move(additional_request_headers)](auto const& dns_result) mutable {
-            if (dns_result->records().is_empty() || dns_result->cached_addresses().is_empty()) {
+            if (dns_result->is_empty() || !dns_result->has_cached_addresses()) {
                 dbgln("WebSocketConnect: DNS lookup failed for '{}'", host);
                 async_websocket_errored(websocket_id, static_cast<i32>(Requests::WebSocket::Error::CouldNotEstablishConnection));
                 return;
