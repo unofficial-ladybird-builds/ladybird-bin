@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Jamie Mansfield <jmansfield@cadixdev.org>
+ * Copyright (c) 2024-2025, Jamie Mansfield <jmansfield@cadixdev.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -47,12 +47,14 @@ WebIDL::ExceptionOr<GC::Ref<VTTCue>> VTTCue::construct_impl(JS::Realm& realm, do
     // 9. Let cue’s WebVTT cue snap-to-lines flag be true.
     cue->m_snap_to_lines = true;
 
-    // FIXME: 10. Let cue’s WebVTT cue line be auto.
+    // 10. Let cue’s WebVTT cue line be auto.
+    cue->m_line = Bindings::AutoKeyword::Auto;
 
     // 11. Let cue’s WebVTT cue line alignment be start alignment.
     cue->m_line_alignment = Bindings::LineAlignSetting::Start;
 
-    // FIXME: 12. Let cue’s WebVTT cue position be auto.
+    // 12. Let cue’s WebVTT cue position be auto.
+    cue->m_position = Bindings::AutoKeyword::Auto;
 
     // 13. Let cue’s WebVTT cue position alignment be auto.
     cue->m_position_alignment = Bindings::PositionAlignSetting::Auto;
@@ -112,6 +114,67 @@ void VTTCue::set_vertical(Bindings::DirectionSetting vertical)
         m_writing_direction = WritingDirection::VerticalGrowingRight;
         break;
     }
+}
+
+// https://w3c.github.io/webvtt/#cue-computed-line
+double VTTCue::computed_line()
+{
+    // 1. If the line is numeric, the WebVTT cue snap-to-lines flag of the WebVTT cue is false, and the line is negative
+    //    or greater than 100, then return 100 and abort these steps.
+    if (m_line.has<double>() && !m_snap_to_lines && (m_line.get<double>() < 0 || m_line.get<double>() > 100))
+        return 100;
+
+    // 2. If the line is numeric, return the value of the WebVTT cue line and abort these steps. (Either the WebVTT cue
+    //    snap-to-lines flag is true, so any value, not just those in the range 0..100, is valid, or the value is in the
+    //    range 0..100 and is thus valid regardless of the value of that flag.)
+    if (m_line.has<double>())
+        return m_line.get<double>();
+
+    // 3. If the WebVTT cue snap-to-lines flag of the WebVTT cue is false, return the value 100 and abort these steps.
+    //    (The line is the special value auto.)
+    if (!m_snap_to_lines)
+        return 100;
+
+    // FIXME: 4. Let cue be the WebVTT cue.
+
+    // FIXME: 5. If cue is not in a list of cues of a text track, or if that text track is not in the list of text tracks of
+    //    a media element, return −1 and abort these steps.
+
+    // FIXME: 6. Let track be the text track whose list of cues the cue is in.
+
+    // FIXME: 7. Let n be the number of text tracks whose text track mode is showing and that are in the media element’s list
+    //    of text tracks before track.
+    auto n = 0;
+
+    // 8. Increment n by one.
+    n++;
+
+    // 9. Negate n.
+    n = -n;
+
+    // 10. Return n.
+    dbgln("FIXME: Stubbed VTTCue.computed_line()");
+    return n;
+}
+
+// https://w3c.github.io/webvtt/#cue-computed-position
+double VTTCue::computed_position()
+{
+    // 1. If the position is numeric between 0 and 100, then return the value of the position and abort these steps.
+    //    (Otherwise, the position is the special value auto.)
+    if (m_position.has<double>() && m_position.get<double>() >= 0 && m_position.get<double>() <= 100)
+        return m_position.get<double>();
+
+    // 2. If the cue text alignment is left, return 0 and abort these steps.
+    if (m_text_alignment == Bindings::AlignSetting::Left)
+        return 0;
+
+    // 3. If the cue text alignment is right, return 100 and abort these steps.
+    if (m_text_alignment == Bindings::AlignSetting::Right)
+        return 100;
+
+    // 4. Otherwise, return 50 and abort these steps.
+    return 50;
 }
 
 // https://w3c.github.io/webvtt/#cue-computed-position-alignment
