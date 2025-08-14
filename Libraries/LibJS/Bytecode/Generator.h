@@ -202,7 +202,7 @@ public:
         return m_current_basic_block->is_terminated();
     }
 
-    StringTableIndex intern_string(String string)
+    StringTableIndex intern_string(Utf16String string)
     {
         return m_string_table->insert(move(string));
     }
@@ -210,11 +210,6 @@ public:
     RegexTableIndex intern_regex(ParsedRegex regex)
     {
         return m_regex_table->insert(move(regex));
-    }
-
-    IdentifierTableIndex intern_identifier(FlyString const& string)
-    {
-        return intern_identifier(Utf16FlyString::from_utf8(string));
     }
 
     IdentifierTableIndex intern_identifier(Utf16FlyString string)
