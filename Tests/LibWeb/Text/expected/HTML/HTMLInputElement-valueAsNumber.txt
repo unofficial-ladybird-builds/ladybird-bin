@@ -33,9 +33,9 @@ email threw exception: InvalidStateError: valueAsNumber: Invalid input type used
 password threw exception: InvalidStateError: valueAsNumber: Invalid input type used
 date did not throw: 0
 month did not throw: 100
-week did not throw: 345600000
-time did not throw: 0
-datetime-local did not throw: 0
+week did not throw: -259200000
+time did not throw: 100
+datetime-local did not throw: 100
 color threw exception: InvalidStateError: valueAsNumber: Invalid input type used
 checkbox threw exception: InvalidStateError: valueAsNumber: Invalid input type used
 radio threw exception: InvalidStateError: valueAsNumber: Invalid input type used

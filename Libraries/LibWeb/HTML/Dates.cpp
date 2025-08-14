@@ -51,9 +51,9 @@ bool is_valid_week_string(Utf16View const& value)
     if (parts[1].length_in_code_units() != 3)
         return false;
 
-    for (auto digit : parts[0])
-        if (!is_ascii_digit(digit))
-            return false;
+    auto year = parts[0].to_number<u64>();
+    if (!year.has_value() || *year == 0)
+        return false;
 
     if (!parts[1].starts_with('W'))
         return false;
@@ -62,14 +62,8 @@ bool is_valid_week_string(Utf16View const& value)
     if (!is_ascii_digit(parts[1].code_unit_at(2)))
         return false;
 
-    u64 year = 0;
-    for (auto d : parts[0]) {
-        year *= 10;
-        year += parse_ascii_digit(d);
-    }
-
     auto week = (parse_ascii_digit(parts[1].code_unit_at(1)) * 10) + parse_ascii_digit(parts[1].code_unit_at(2));
-    return week >= 1 && week <= week_number_of_the_last_day(year);
+    return week >= 1 && week <= week_number_of_the_last_day(*year);
 }
 
 // https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#valid-month-string
@@ -90,9 +84,9 @@ bool is_valid_month_string(Utf16View const& value)
     if (parts[1].length_in_code_units() != 2)
         return false;
 
-    for (auto digit : parts[0])
-        if (!is_ascii_digit(digit))
-            return false;
+    auto year = parts[0].to_number<u64>();
+    if (!year.has_value() || *year == 0)
+        return false;
 
     if (!is_ascii_digit(parts[1].code_unit_at(0)))
         return false;
@@ -152,13 +146,35 @@ bool is_valid_local_date_and_time_string(Utf16View const& value)
 // https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#valid-normalised-local-date-and-time-string
 Utf16String normalize_local_date_and_time_string(Utf16String const& value)
 {
+    // A string is a valid normalized local date and time string representing a date and time if it consists of the following components in the given order:
+
+    // 1. A valid date string representing the date
+    // 2. A U+0054 LATIN CAPITAL LETTER T character (T)
+    // 3. A valid time string representing the time, expressed as the shortest possible string for the given time (e.g. omitting the seconds component entirely if the given time is zero seconds past the minute)
+
+    auto value_with_normalized_t = value;
     if (auto spaces = value.count(" "sv); spaces > 0) {
         VERIFY(spaces == 1);
-        return value.replace(" "sv, "T"sv, ReplaceMode::FirstOnly);
+        value_with_normalized_t = value.replace(" "sv, "T"sv, ReplaceMode::FirstOnly);
     }
 
-    VERIFY(value.count("T"sv) == 1);
-    return value;
+    auto parts = value_with_normalized_t.split_view('T', SplitBehavior::KeepEmpty);
+    VERIFY(parts.size() == 2);
+
+    auto normalized_length = parts[1].length_in_code_points();
+    while (normalized_length > 9) {
+        if (parts[1].code_point_at(normalized_length - 1) != '0') {
+            return Utf16String::formatted("{}T{}", parts[0], parts[1].unicode_substring_view(0, normalized_length));
+        }
+        normalized_length--;
+    }
+
+    if (normalized_length > 5) {
+        auto time_without_milliseconds = parts[1].unicode_substring_view(0, 8);
+        return Utf16String::formatted("{}T{}", parts[0], parts[1].unicode_substring_view(0, time_without_milliseconds.ends_with(":00"sv) ? 5 : 8));
+    }
+
+    return value_with_normalized_t;
 }
 
 // https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#valid-time-string

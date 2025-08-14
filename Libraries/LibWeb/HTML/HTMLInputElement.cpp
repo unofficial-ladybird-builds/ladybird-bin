@@ -893,13 +893,6 @@ void HTMLInputElement::handle_maxlength_attribute()
     }
 }
 
-// https://html.spec.whatwg.org/multipage/input.html#attr-input-readonly
-void HTMLInputElement::handle_readonly_attribute(Optional<String> const& maybe_value)
-{
-    // The readonly attribute is a boolean attribute that controls whether or not the user can edit the form control. When specified, the element is not mutable.
-    set_is_mutable(!maybe_value.has_value() || !is_allowed_to_be_readonly(m_type));
-}
-
 // https://html.spec.whatwg.org/multipage/input.html#the-input-element:attr-input-placeholder-3
 static bool is_allowed_to_have_placeholder(HTML::HTMLInputElement::TypeAttributeState state)
 {
@@ -1066,7 +1059,6 @@ void HTMLInputElement::create_text_input_shadow_tree()
     MUST(element->append_child(*m_inner_text_element));
 
     m_text_node = realm().create<DOM::Text>(document(), move(initial_value));
-    handle_readonly_attribute(attribute(HTML::AttributeNames::readonly));
     if (type_state() == TypeAttributeState::Password)
         m_text_node->set_is_password_input({}, true);
     handle_maxlength_attribute();
@@ -1414,8 +1406,6 @@ void HTMLInputElement::form_associated_element_attribute_changed(FlyString const
             m_placeholder_text_node->set_data(Utf16String::from_utf8(placeholder()));
             update_placeholder_visibility();
         }
-    } else if (name == HTML::AttributeNames::readonly) {
-        handle_readonly_attribute(value);
     } else if (name == HTML::AttributeNames::src) {
         handle_src_attribute(value.value_or({})).release_value_but_fixme_should_propagate_errors();
     } else if (name == HTML::AttributeNames::alt) {
@@ -1428,6 +1418,11 @@ void HTMLInputElement::form_associated_element_attribute_changed(FlyString const
             m_value = value_sanitization_algorithm(m_value);
         }
         update_shadow_tree();
+    } else if (name == HTML::AttributeNames::min || name == HTML::AttributeNames::max || name == HTML::AttributeNames::step) {
+        if (type_state() == TypeAttributeState::Range) {
+            m_value = value_sanitization_algorithm(m_value);
+            update_shadow_tree();
+        }
     }
 }
 
@@ -1726,19 +1721,61 @@ Utf16String HTMLInputElement::value_sanitization_algorithm(Utf16String const& va
     }
     // https://html.spec.whatwg.org/multipage/input.html#range-state-(type=range):value-sanitization-algorithm
     else if (type_state() == HTMLInputElement::TypeAttributeState::Range) {
-        // If the value of the element is not a valid floating-point number, then set it to the best representation, as
-        // a floating-point number, of the default value.
-        if (auto maybe_value = parse_floating_point_number(value); !is_valid_floating_point_number(value) ||
-            // AD-HOC: The spec doesn't require these checks - but other engines do them.
-            !maybe_value.has_value() || !isfinite(maybe_value.value())) {
-            // The default value is the minimum plus half the difference between the minimum and the maximum, unless the
-            // maximum is less than the minimum, in which case the default value is the minimum.
-            auto minimum = *min();
-            auto maximum = *max();
-            if (maximum < minimum)
-                return JS::number_to_utf16_string(minimum);
-            return JS::number_to_utf16_string(minimum + ((maximum - minimum) / 2.0));
+        auto minimum = *min();
+        auto maximum = *max();
+        auto number_value = [&value, &minimum, &maximum, this] {
+            // If the value of the element is not a valid floating-point number, then set it to the best representation,
+            // as a floating-point number, of the default value.
+            auto maybe_value = parse_floating_point_number(value);
+            if (!is_valid_floating_point_number(value) ||
+                // AD-HOC: Use the default value if the value has not been set.
+                (!m_dirty_value && !has_attribute(AttributeNames::value)) ||
+                // AD-HOC: The spec doesn't require these checks - but other engines do them.
+                !maybe_value.has_value() || !isfinite(maybe_value.value())) {
+                // The default value is the minimum plus half the difference between the minimum and the maximum, unless
+                // the maximum is less than the minimum, in which case the default value is the minimum.
+                if (maximum < minimum)
+                    return minimum;
+                return minimum + ((maximum - minimum) / 2.0);
+            }
+            return maybe_value.value();
+        }();
+
+        // When the element is suffering from an overflow, if the maximum is not less than the minimum, the user agent
+        // must set the element's value to a valid floating-point number that represents the maximum.
+        if (is_number_overflowing(number_value)) {
+            number_value = max().value();
         }
+
+        // When the element is suffering from an underflow, the user agent must set the element's value to the best
+        // representation, as a floating-point number, of the minimum.
+        if (is_number_underflowing(number_value)) {
+            number_value = min().value();
+        }
+
+        // When the element is suffering from a step mismatch, the user agent must round the element's value to the
+        // nearest number for which the element would not suffer from a step mismatch, and which is greater than or
+        // equal to the minimum, and, if the maximum is not less than the minimum, which is less than or equal to the
+        // maximum, if there is a number that matches these constraints. If two numbers match these constraints, then
+        // user agents must use the one nearest to positive infinity.
+        if (is_number_mismatching_step(number_value)) {
+            auto allowed_step = allowed_value_step().value();
+            auto minimum = min().value();
+            auto maximum = max().value();
+            auto step_mismatch = ((number_value - step_base()) / allowed_step) - floor((number_value - step_base()) / allowed_step);
+            if (step_mismatch >= 0.5) {
+                auto nearest_number = step_base() + (allowed_step * ceil((number_value - step_base()) / allowed_step));
+                if (nearest_number >= minimum && (maximum <= minimum || nearest_number <= maximum))
+                    return JS::number_to_utf16_string(nearest_number);
+            }
+            if (step_mismatch <= 0.5) {
+                auto nearest_number = step_base() + (allowed_step * floor((number_value - step_base()) / allowed_step));
+                if (nearest_number >= minimum && (maximum <= minimum || nearest_number <= maximum))
+                    return JS::number_to_utf16_string(nearest_number);
+            }
+        }
+
+        return JS::number_to_utf16_string(number_value);
     }
     // https://html.spec.whatwg.org/multipage/input.html#color-state-(type=color):value-sanitization-algorithm
     else if (type_state() == HTMLInputElement::TypeAttributeState::Color) {
@@ -2338,33 +2375,27 @@ static Utf16String convert_number_to_month_string(double input)
     return Utf16String::formatted("{:04d}-{:02d}", static_cast<int>(year), static_cast<int>(months) + 1);
 }
 
-// https://html.spec.whatwg.org/multipage/input.html#week-state-(type=week):concept-input-value-string-number
+// https://html.spec.whatwg.org/multipage/input.html#concept-input-value-number-string
 static Utf16String convert_number_to_week_string(double input)
 {
-    // The algorithm to convert a number to a string, given a number input, is as follows: Return a valid week string that
-    // that represents the week that, in UTC, is current input milliseconds after midnight UTC on the morning of 1970-01-01
-    // (the time represented by the value "1970-01-01T00:00:00.0Z").
+    // The algorithm to convert a number to a string, given a number input, is as follows: Return a valid week string
+    // that represents the week that, in UTC, is current input milliseconds after midnight UTC on the morning of
+    // 1970-01-01 (the time represented by the value "1970-01-01T00:00:00.0Z").
 
-    int days_since_epoch = static_cast<int>(input / AK::ms_per_day);
-    int year = 1970;
+    auto year = JS::year_from_time(input);
+    auto month = JS::month_from_time(input) + 1; // Adjust for zero-based month
+    auto day = JS::date_from_time(input);
 
-    while (true) {
-        auto days = days_in_year(year);
-        if (days_since_epoch < days)
-            break;
-        days_since_epoch -= days;
+    constexpr Array normalYearDays = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    constexpr Array leapYearDays = { 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335 };
+
+    auto ordinal_day = (is_leap_year(year) ? leapYearDays[month - 1] : normalYearDays[month - 1]) + day;
+
+    unsigned week = (10 + ordinal_day - 1) / 7; // -1 because the day of the week is always monday
+    if (week > iso8061_weeks_in_year(year)) {
         ++year;
+        week = 1;
     }
-
-    auto january_1_weekday = day_of_week(year, 1, 1);
-    int offset_to_week_start = (january_1_weekday <= 3) ? january_1_weekday : january_1_weekday - 7;
-    int week = (days_since_epoch + offset_to_week_start) / 7 + 1;
-
-    if (week < 0) {
-        --year;
-        week = weeks_in_year(year) + week;
-    }
-
     return Utf16String::formatted("{:04d}-W{:02d}", year, week);
 }
 
@@ -2385,11 +2416,10 @@ static Utf16String convert_number_to_time_string(double input)
     // string that represents the time that is input milliseconds after midnight on a day with no time changes.
     auto seconds = JS::sec_from_time(input);
     auto milliseconds = JS::ms_from_time(input);
-    if (seconds > 0) {
-        if (milliseconds > 0)
-            return Utf16String::formatted("{:02d}:{:02d}:{:02d}.{:3d}", JS::hour_from_time(input), JS::min_from_time(input), seconds, milliseconds);
+    if (milliseconds > 0)
+        return Utf16String::formatted("{:02d}:{:02d}:{:02d}.{:03d}", JS::hour_from_time(input), JS::min_from_time(input), seconds, milliseconds);
+    if (seconds > 0)
         return Utf16String::formatted("{:02d}:{:02d}:{:02d}", JS::hour_from_time(input), JS::min_from_time(input), seconds);
-    }
     return Utf16String::formatted("{:02d}:{:02d}", JS::hour_from_time(input), JS::min_from_time(input));
 }
 
@@ -2407,12 +2437,10 @@ static Utf16String convert_number_to_local_date_and_time_string(double input)
     auto seconds = JS::sec_from_time(input);
     auto milliseconds = JS::ms_from_time(input);
 
-    if (seconds > 0) {
-        if (milliseconds > 0)
-            return Utf16String::formatted("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}.{:03d}", year, month, day, hour, minutes, seconds, milliseconds);
+    if (milliseconds > 0)
+        return Utf16String::formatted("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}.{:03d}", year, month, day, hour, minutes, seconds, milliseconds).trim("0"sv, TrimMode::Right);
+    if (seconds > 0)
         return Utf16String::formatted("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}", year, month, day, hour, minutes, seconds);
-    }
-
     return Utf16String::formatted("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}", year, month, day, hour, minutes);
 }
 
@@ -2770,8 +2798,10 @@ WebIDL::ExceptionOr<void> HTMLInputElement::step_up_or_down(bool is_down, WebIDL
     if (maybe_minimum.has_value() && maybe_maximum.has_value() && *maybe_minimum > *maybe_maximum)
         return {};
 
-    // FIXME: 4. If the element has a minimum and a maximum and there is no value greater than or equal to the element's minimum and less than
+    // 4. If the element has a minimum and a maximum and there is no value greater than or equal to the element's minimum and less than
     // or equal to the element's maximum that, when subtracted from the step base, is an integral multiple of the allowed value step, then return.
+    if (maybe_minimum.has_value() && maybe_maximum.has_value() && ceil((*maybe_minimum - step_base()) / allowed_value_step) > floor((*maybe_maximum - step_base()) / allowed_value_step))
+        return {};
 
     // 5. If applying the algorithm to convert a string to a number to the string given by the element's value does not result in an error,
     // then let value be the result of that algorithm. Otherwise, let value be zero.
@@ -2783,13 +2813,14 @@ WebIDL::ExceptionOr<void> HTMLInputElement::step_up_or_down(bool is_down, WebIDL
     // 7. If value subtracted from the step base is not an integral multiple of the allowed value step, then set value to the nearest value that,
     // when subtracted from the step base, is an integral multiple of the allowed value step, and that is less than value if the method invoked was the stepDown() method, and more than value otherwise.
     if (fmod(step_base() - value, allowed_value_step) != 0) {
-        double diff = step_base() - value;
         if (is_down) {
-            value = diff - fmod(diff, allowed_value_step);
+            value = step_base() + floor((value - step_base()) / allowed_value_step) * allowed_value_step;
         } else {
-            value = diff + fmod(diff, allowed_value_step);
+            value = step_base() + ceil((value - step_base()) / allowed_value_step) * allowed_value_step;
         }
-    } else {
+    }
+    // Otherwise (value subtracted from the step base is an integral multiple of the allowed value step):
+    else {
         // 1. Let n be the argument.
         // 2. Let delta be the allowed value step multiplied by n.
         double delta = allowed_value_step * n;
@@ -2806,14 +2837,14 @@ WebIDL::ExceptionOr<void> HTMLInputElement::step_up_or_down(bool is_down, WebIDL
     //    when subtracted from the step base, is an integral multiple of the allowed value step, and that is more than
     //    or equal to that minimum.
     if (maybe_minimum.has_value() && value < *maybe_minimum) {
-        value = AK::max(value, *maybe_minimum);
+        value = step_base() + ceil((*maybe_minimum - step_base()) / allowed_value_step) * allowed_value_step;
     }
 
     // 9. If the element has a maximum, and value is greater than that maximum, then set value to the largest value that,
     //    when subtracted from the step base, is an integral multiple of the allowed value step, and that is less than
     //    or equal to that maximum.
     if (maybe_maximum.has_value() && value > *maybe_maximum) {
-        value = AK::min(value, *maybe_maximum);
+        value = step_base() + floor((*maybe_maximum - step_base()) / allowed_value_step) * allowed_value_step;
     }
 
     // 10. If either the method invoked was the stepDown() method and value is greater than valueBeforeStepping,
@@ -3418,6 +3449,11 @@ bool HTMLInputElement::suffering_from_an_underflow() const
     if (!result.has_value())
         return false;
     auto number = result.value();
+    return is_number_underflowing(number);
+}
+
+bool HTMLInputElement::is_number_underflowing(double number) const
+{
     // https://html.spec.whatwg.org/multipage/input.html#the-min-and-max-attributes%3Asuffering-from-an-underflow-2
     // When the element has a minimum and does not have a reversed range,
     auto minimum = min();
@@ -3446,6 +3482,11 @@ bool HTMLInputElement::suffering_from_an_overflow() const
     if (!result.has_value())
         return false;
     auto number = result.value();
+    return is_number_overflowing(number);
+}
+
+bool HTMLInputElement::is_number_overflowing(double number) const
+{
     auto maximum = max();
     // https://html.spec.whatwg.org/multipage/input.html#the-min-and-max-attributes%3Asuffering-from-an-overflow-2
     // When the element has a maximum and does not have a reversed range,
@@ -3468,17 +3509,22 @@ bool HTMLInputElement::suffering_from_an_overflow() const
 // https://html.spec.whatwg.org/multipage/input.html#the-step-attribute%3Asuffering-from-a-step-mismatch
 bool HTMLInputElement::suffering_from_a_step_mismatch() const
 {
-    // When the element has an allowed value step,
-    auto maybe_allowed_value_step = allowed_value_step();
-    if (!maybe_allowed_value_step.has_value())
-        return false;
-    double allowed_value_step = *maybe_allowed_value_step;
     // and the result of applying the algorithm to convert a string to a number to the string given by the element's
     // value is a number,
     auto maybe_number = convert_string_to_number(value());
     if (!maybe_number.has_value())
         return false;
     double number = maybe_number.value();
+    return is_number_mismatching_step(number);
+}
+
+bool HTMLInputElement::is_number_mismatching_step(double number) const
+{
+    // When the element has an allowed value step,
+    auto maybe_allowed_value_step = allowed_value_step();
+    if (!maybe_allowed_value_step.has_value())
+        return false;
+    double allowed_value_step = *maybe_allowed_value_step;
     // and that number subtracted from the step base is not an integral multiple of the allowed value step, the element
     // is suffering from a step mismatch.
     return fmod(step_base() - number, allowed_value_step) != 0;
@@ -3561,6 +3607,18 @@ void HTMLInputElement::set_is_open(bool is_open)
 
     m_is_open = is_open;
     invalidate_style(DOM::StyleInvalidationReason::HTMLInputElementSetIsOpen);
+}
+
+bool HTMLInputElement::is_mutable() const
+{
+    return
+        // https://html.spec.whatwg.org/multipage/input.html#the-input-element:concept-fe-mutable-3
+        // A select element that is not disabled is mutable.
+        enabled()
+
+        // https://html.spec.whatwg.org/multipage/input.html#the-readonly-attribute:concept-fe-mutable
+        // The readonly attribute is a boolean attribute that controls whether or not the user can edit the form control. When specified, the element is not mutable.
+        && !(has_attribute(AttributeNames::readonly) && is_allowed_to_be_readonly(m_type));
 }
 
 }
