@@ -10,7 +10,7 @@
 
 namespace IDL {
 
-enum ExposedTo {
+enum class ExposedTo {
     Nobody = 0x0,
     DedicatedWorker = 0x1,
     SharedWorker = 0x2,
@@ -19,6 +19,9 @@ enum ExposedTo {
     Window = 0x10,
     ShadowRealm = 0x20,
     Worklet = 0x40,
+    PaintWorklet = 0x80,
+    LayoutWorklet = 0x100,
+    // FIXME: Categorize PaintWorklet and LayoutWorklet once we have them and know what they are.
     AllWorkers = DedicatedWorker | SharedWorker | ServiceWorker | AudioWorklet, // FIXME: Is "AudioWorklet" a Worker? We'll assume it is for now (here, and line below)
     All = AllWorkers | Window | ShadowRealm | Worklet,
 };
