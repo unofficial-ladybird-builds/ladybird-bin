@@ -1410,11 +1410,11 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
         bool has_running_transition = existing_transition && !existing_transition->is_finished();
         bool has_completed_transition = existing_transition && existing_transition->is_finished();
 
-        auto start_a_transition = [&](auto start_time, auto end_time, auto const& start_value, auto const& end_value, auto const& reversing_adjusted_start_value, auto reversing_shortening_factor) {
+        auto start_a_transition = [&](auto delay, auto start_time, auto end_time, auto const& start_value, auto const& end_value, auto const& reversing_adjusted_start_value, auto reversing_shortening_factor) {
             dbgln_if(CSS_TRANSITIONS_DEBUG, "Starting a transition of {} from {} to {}", string_from_property_id(property_id), start_value->to_string(), end_value->to_string());
 
             auto transition = CSSTransition::start_a_transition(element, pseudo_element, property_id,
-                document().transition_generation(), start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
+                document().transition_generation(), delay, start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
             // Immediately set the property's value to the transition's current value, to prevent single-frame jumps.
             collect_animation_into(element, {}, as<Animations::KeyframeEffect>(*transition->effect()), new_style, AnimationRefresh::No);
         };
@@ -1440,8 +1440,11 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
                 element.remove_transition(pseudo_element, property_id);
             // and start a transition whose:
 
+            // AD-HOC: We pass delay to the constructor separately so we can use it to construct the contained KeyframeEffect
+            auto delay = matching_transition_properties->delay;
+
             // - start time is the time of the style change event plus the matching transition delay,
-            auto start_time = style_change_event_time + matching_transition_properties->delay;
+            auto start_time = style_change_event_time;
 
             // - end time is the start time plus the matching transition duration,
             auto end_time = start_time + matching_transition_properties->duration;
@@ -1458,7 +1461,7 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
             // - reversing shortening factor is 1.
             double reversing_shortening_factor = 1;
 
-            start_a_transition(start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
+            start_a_transition(delay, start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
         }
 
         // 2. Otherwise, if the element has a completed transition for the property
@@ -1524,13 +1527,15 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
                 auto term_2 = 1 - existing_transition->reversing_shortening_factor();
                 double reversing_shortening_factor = clamp(abs(term_1 + term_2), 0.0, 1.0);
 
+                // AD-HOC: We pass delay to the constructor separately so we can use it to construct the contained KeyframeEffect
+                auto delay = (matching_transition_properties->delay >= 0
+                        ? (matching_transition_properties->delay)
+                        : (reversing_shortening_factor * matching_transition_properties->delay));
+
                 // - start time is the time of the style change event plus:
                 //   1. if the matching transition delay is nonnegative, the matching transition delay, or
                 //   2. if the matching transition delay is negative, the product of the new transition’s reversing shortening factor and the matching transition delay,
-                auto start_time = style_change_event_time
-                    + (matching_transition_properties->delay >= 0
-                            ? (matching_transition_properties->delay)
-                            : (reversing_shortening_factor * matching_transition_properties->delay));
+                auto start_time = style_change_event_time;
 
                 // - end time is the start time plus the product of the matching transition duration and the new transition’s reversing shortening factor,
                 auto end_time = start_time + (matching_transition_properties->duration * reversing_shortening_factor);
@@ -1541,7 +1546,7 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
                 // - end value is the value of the property in the after-change style,
                 auto const& end_value = after_change_value;
 
-                start_a_transition(start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
+                start_a_transition(delay, start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
             }
 
             // 4. Otherwise,
@@ -1553,8 +1558,11 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
                 // running or completed transition for a property at once.
                 element.remove_transition(pseudo_element, property_id);
 
+                // AD-HOC: We pass delay to the constructor separately so we can use it to construct the contained KeyframeEffect
+                auto delay = matching_transition_properties->delay;
+
                 // - start time is the time of the style change event plus the matching transition delay,
-                auto start_time = style_change_event_time + matching_transition_properties->delay;
+                auto start_time = style_change_event_time;
 
                 // - end time is the start time plus the matching transition duration,
                 auto end_time = start_time + matching_transition_properties->duration;
@@ -1571,7 +1579,7 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
                 // - reversing shortening factor is 1.
                 double reversing_shortening_factor = 1;
 
-                start_a_transition(start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
+                start_a_transition(delay, start_time, end_time, start_value, end_value, reversing_adjusted_start_value, reversing_shortening_factor);
             }
         }
     }
@@ -1670,7 +1678,21 @@ NonnullRefPtr<StyleValue const> StyleComputer::get_inherit_value(CSS::PropertyID
 
     if (!parent_element || !parent_element->computed_properties())
         return property_initial_value(property_id);
-    return parent_element->computed_properties()->property(property_id);
+
+    return parent_element->computed_properties()->property(property_id, CSS::ComputedProperties::WithAnimationsApplied::No);
+}
+
+Optional<NonnullRefPtr<StyleValue const>> StyleComputer::get_animated_inherit_value(CSS::PropertyID property_id, DOM::Element const* element, Optional<CSS::PseudoElement> pseudo_element)
+{
+    auto parent_element = element ? element->element_to_inherit_style_from(pseudo_element) : nullptr;
+
+    if (!parent_element || !parent_element->computed_properties())
+        return {};
+
+    if (auto animated_value = parent_element->computed_properties()->animated_property_values().get(property_id); animated_value.has_value())
+        return *animated_value.value();
+
+    return {};
 }
 
 void StyleComputer::compute_defaulted_property_value(ComputedProperties& style, DOM::Element const* element, CSS::PropertyID property_id, Optional<CSS::PseudoElement> pseudo_element) const
@@ -1678,6 +1700,8 @@ void StyleComputer::compute_defaulted_property_value(ComputedProperties& style, 
     auto& value_slot = style.m_property_values[to_underlying(property_id)];
     if (!value_slot) {
         if (is_inherited_property(property_id)) {
+            if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
+                style.set_animated_property(property_id, animated_inherit_value.value());
             style.set_property(
                 property_id,
                 get_inherit_value(property_id, element, pseudo_element),
@@ -1695,6 +1719,8 @@ void StyleComputer::compute_defaulted_property_value(ComputedProperties& style, 
     }
 
     if (value_slot->is_inherit()) {
+        if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
+            style.set_animated_property(property_id, animated_inherit_value.value());
         value_slot = get_inherit_value(property_id, element, pseudo_element);
         style.set_property_inherited(property_id, ComputedProperties::Inherited::Yes);
         return;
@@ -1705,6 +1731,8 @@ void StyleComputer::compute_defaulted_property_value(ComputedProperties& style, 
     if (value_slot->is_unset()) {
         if (is_inherited_property(property_id)) {
             // then if it is an inherited property, this is treated as inherit,
+            if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
+                style.set_animated_property(property_id, animated_inherit_value.value());
             value_slot = get_inherit_value(property_id, element, pseudo_element);
             style.set_property_inherited(property_id, ComputedProperties::Inherited::Yes);
         } else {
@@ -2640,20 +2668,17 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
         auto property_id = static_cast<CSS::PropertyID>(i);
         auto value = cascaded_properties.property(property_id);
         auto inherited = ComputedProperties::Inherited::No;
+        Optional<NonnullRefPtr<StyleValue const>> animated_value;
 
         // NOTE: We've already handled font-size above.
         if (property_id == PropertyID::FontSize && !value && new_font_size)
             continue;
 
         // FIXME: Logical properties should inherit from their parent's equivalent unmapped logical property.
-        if ((!value && is_inherited_property(property_id))
-            || (value && value->is_inherit())) {
-            if (auto const inheritance_parent = element.element_to_inherit_style_from(pseudo_element)) {
-                value = inheritance_parent->computed_properties()->property(property_id);
-                inherited = ComputedProperties::Inherited::Yes;
-            } else {
-                value = property_initial_value(property_id);
-            }
+        if ((!value && is_inherited_property(property_id)) || (value && value->is_inherit())) {
+            value = get_inherit_value(property_id, &element, pseudo_element);
+            animated_value = get_animated_inherit_value(property_id, &element, pseudo_element);
+            inherited = ComputedProperties::Inherited::Yes;
         }
 
         if (!value || value->is_initial())
@@ -2667,6 +2692,8 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
         }
 
         computed_style->set_property(property_id, value.release_nonnull(), inherited);
+        if (animated_value.has_value())
+            computed_style->set_animated_property(property_id, animated_value.value());
 
         if (property_id == PropertyID::AnimationName) {
             computed_style->set_animation_name_source(cascaded_properties.property_source(property_id));
