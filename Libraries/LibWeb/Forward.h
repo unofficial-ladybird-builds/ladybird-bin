@@ -881,7 +881,6 @@ class PerformanceTiming;
 namespace Web::Painting {
 
 class AudioPaintable;
-class ButtonPaintable;
 class CheckBoxPaintable;
 class FieldSetPaintable;
 class LabelablePaintable;
@@ -896,6 +895,7 @@ class VideoPaintable;
 class ViewportPaintable;
 
 enum class PaintPhase;
+enum class ShouldAntiAlias : bool;
 
 struct BorderRadiiData;
 struct BorderRadiusData;
