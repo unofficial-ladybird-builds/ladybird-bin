@@ -477,14 +477,11 @@ Document::Document(JS::Realm& realm, const URL::URL& url, TemporaryDocumentForFr
         if (!cursor_position)
             return;
 
-        auto node = cursor_position->node();
-        if (!node)
-            return;
-
         auto navigable = this->navigable();
         if (!navigable || !navigable->is_focused())
             return;
 
+        auto node = cursor_position->node();
         node->document().update_layout(UpdateLayoutReason::CursorBlinkTimer);
 
         if (node->paintable()) {
@@ -1178,6 +1175,10 @@ void Document::respond_to_base_url_changes()
 // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#set-the-url
 void Document::set_url(URL::URL const& url)
 {
+    // OPTIMIZATION: Avoid unnecessary work if the URL is already set.
+    if (m_url == url)
+        return;
+
     // To set the URL for a Document document to a URL record url:
 
     // 1. Set document's URL to url.
@@ -1908,6 +1909,8 @@ void Document::set_hovered_node(GC::Ptr<Node> node)
         mouse_event_init.cancelable = true;
         mouse_event_init.composed = true;
         mouse_event_init.related_target = m_hovered_node;
+        if (auto navigable = this->navigable())
+            mouse_event_init.view = navigable->active_window_proxy();
         auto event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseout, mouse_event_init);
         old_hovered_node->dispatch_event(event);
     }
@@ -1930,6 +1933,8 @@ void Document::set_hovered_node(GC::Ptr<Node> node)
         mouse_event_init.cancelable = true;
         mouse_event_init.composed = true;
         mouse_event_init.related_target = old_hovered_node;
+        if (auto navigable = this->navigable())
+            mouse_event_init.view = navigable->active_window_proxy();
         auto event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseover, mouse_event_init);
         m_hovered_node->dispatch_event(event);
     }
