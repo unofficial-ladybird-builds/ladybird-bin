@@ -513,8 +513,8 @@ void PaintableBox::paint(DisplayListRecordingContext& context, PaintPhase phase)
 
         auto paint_inspector_rect = [&](CSSPixelRect const& rect, Color color) {
             auto device_rect = context.enclosing_device_rect(rect).to_type<int>();
-            context.display_list_recorder().fill_rect(device_rect, Color(color).with_alpha(100));
-            context.display_list_recorder().draw_rect(device_rect, Color(color));
+            context.display_list_recorder().fill_rect(device_rect, color.with_alpha(100));
+            context.display_list_recorder().draw_rect(device_rect, color);
         };
 
         paint_inspector_rect(margin_rect, Color::Yellow);
@@ -1049,6 +1049,11 @@ Paintable::DispatchEventOfSameName PaintableBox::handle_mousemove(Badge<EventHan
 
 void PaintableBox::handle_mouseleave(Badge<EventHandler>)
 {
+    // FIXME: early return needed as MacOSX calls this even when user is pressing mouse button
+    // https://github.com/LadybirdBrowser/ladybird/issues/5844
+    if (m_scroll_thumb_dragging_direction.has_value())
+        return;
+
     auto previous_draw_enlarged_horizontal_scrollbar = m_draw_enlarged_horizontal_scrollbar;
     m_draw_enlarged_horizontal_scrollbar = false;
     if (previous_draw_enlarged_horizontal_scrollbar != m_draw_enlarged_horizontal_scrollbar)
