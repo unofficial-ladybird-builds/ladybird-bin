@@ -1695,91 +1695,6 @@ Optional<NonnullRefPtr<StyleValue const>> StyleComputer::get_animated_inherit_va
     return {};
 }
 
-void StyleComputer::compute_defaulted_property_value(ComputedProperties& style, DOM::Element const* element, CSS::PropertyID property_id, Optional<CSS::PseudoElement> pseudo_element) const
-{
-    auto& value_slot = style.m_property_values[to_underlying(property_id)];
-    if (!value_slot) {
-        if (is_inherited_property(property_id)) {
-            if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
-                style.set_animated_property(property_id, animated_inherit_value.value());
-            style.set_property(
-                property_id,
-                get_inherit_value(property_id, element, pseudo_element),
-                ComputedProperties::Inherited::Yes,
-                Important::No);
-        } else {
-            style.set_property(property_id, property_initial_value(property_id));
-        }
-        return;
-    }
-
-    if (value_slot->is_initial()) {
-        value_slot = property_initial_value(property_id);
-        return;
-    }
-
-    if (value_slot->is_inherit()) {
-        if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
-            style.set_animated_property(property_id, animated_inherit_value.value());
-        value_slot = get_inherit_value(property_id, element, pseudo_element);
-        style.set_property_inherited(property_id, ComputedProperties::Inherited::Yes);
-        return;
-    }
-
-    // https://www.w3.org/TR/css-cascade-4/#inherit-initial
-    // If the cascaded value of a property is the unset keyword,
-    if (value_slot->is_unset()) {
-        if (is_inherited_property(property_id)) {
-            // then if it is an inherited property, this is treated as inherit,
-            if (auto animated_inherit_value = get_animated_inherit_value(property_id, element, pseudo_element); animated_inherit_value.has_value())
-                style.set_animated_property(property_id, animated_inherit_value.value());
-            value_slot = get_inherit_value(property_id, element, pseudo_element);
-            style.set_property_inherited(property_id, ComputedProperties::Inherited::Yes);
-        } else {
-            // and if it is not, this is treated as initial.
-            value_slot = property_initial_value(property_id);
-        }
-    }
-}
-
-// https://www.w3.org/TR/css-cascade/#defaulting
-void StyleComputer::compute_defaulted_values(ComputedProperties& style, DOM::Element const* element, Optional<CSS::PseudoElement> pseudo_element) const
-{
-    // Walk the list of all known CSS properties and:
-    // - Add them to `style` if they are missing.
-    // - Resolve `inherit` and `initial` as needed.
-    for (auto i = to_underlying(CSS::first_longhand_property_id); i <= to_underlying(CSS::last_longhand_property_id); ++i) {
-        auto property_id = (CSS::PropertyID)i;
-        compute_defaulted_property_value(style, element, property_id, pseudo_element);
-    }
-
-    // https://www.w3.org/TR/css-color-4/#resolving-other-colors
-    // In the color property, the used value of currentcolor is the inherited value.
-    auto const& color = style.property(CSS::PropertyID::Color);
-    if (color.to_keyword() == Keyword::Currentcolor) {
-        auto const& inherited_value = get_inherit_value(CSS::PropertyID::Color, element, pseudo_element);
-        style.set_property(CSS::PropertyID::Color, inherited_value);
-    }
-
-    // AD-HOC: The -libweb-inherit-or-center style defaults to centering, unless a style value usually would have been
-    //         inherited. This is used to support the ad-hoc default <th> text-align behavior.
-    if (element && element->local_name() == HTML::TagNames::th
-        && style.property(PropertyID::TextAlign).to_keyword() == Keyword::LibwebInheritOrCenter) {
-        auto const* parent_element = element;
-        while ((parent_element = parent_element->element_to_inherit_style_from({}))) {
-            auto parent_computed = parent_element->computed_properties();
-            auto parent_cascaded = parent_element->cascaded_properties({});
-            if (!parent_computed || !parent_cascaded)
-                break;
-            if (parent_cascaded->property(PropertyID::TextAlign)) {
-                auto const& style_value = parent_computed->property(PropertyID::TextAlign);
-                style.set_property(PropertyID::TextAlign, style_value, ComputedProperties::Inherited::Yes);
-                break;
-            }
-        }
-    }
-}
-
 Length::FontMetrics StyleComputer::calculate_root_element_font_metrics(ComputedProperties const& style) const
 {
     auto const& root_value = style.property(CSS::PropertyID::FontSize);
@@ -2146,23 +2061,6 @@ RefPtr<Gfx::FontCascadeList const> StyleComputer::compute_font_for_style_values(
 
 void StyleComputer::compute_font(ComputedProperties& style, DOM::Element const* element, Optional<CSS::PseudoElement> pseudo_element) const
 {
-    // To compute the font, first ensure that we've defaulted the relevant CSS font properties.
-    // FIXME: This should be more sophisticated.
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontFamily, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontSize, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontWidth, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontStyle, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontWeight, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::LineHeight, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariant, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantAlternates, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantCaps, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantEmoji, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantEastAsian, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantLigatures, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantNumeric, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::FontVariantPosition, pseudo_element);
-
     auto const& font_family = style.property(CSS::PropertyID::FontFamily);
     auto const& font_size = style.property(CSS::PropertyID::FontSize);
     auto const& font_style = style.property(CSS::PropertyID::FontStyle);
@@ -2307,11 +2205,13 @@ void StyleComputer::resolve_effective_overflow_values(ComputedProperties& style)
 
 static void compute_text_align(ComputedProperties& style, DOM::Element const& element, Optional<PseudoElement> pseudo_element)
 {
+    auto text_align_keyword = style.property(PropertyID::TextAlign).to_keyword();
+
     // https://drafts.csswg.org/css-text-4/#valdef-text-align-match-parent
     // This value behaves the same as inherit (computes to its parent’s computed value) except that an inherited
     // value of start or end is interpreted against the parent’s direction value and results in a computed value of
     // either left or right. Computes to start when specified on the root element.
-    if (style.property(PropertyID::TextAlign).to_keyword() == Keyword::MatchParent) {
+    if (text_align_keyword == Keyword::MatchParent) {
         auto const parent = element.element_to_inherit_style_from(pseudo_element);
         if (parent) {
             auto const& parent_text_align = parent->computed_properties()->property(PropertyID::TextAlign);
@@ -2338,6 +2238,23 @@ static void compute_text_align(ComputedProperties& style, DOM::Element const& el
             }
         } else {
             style.set_property(PropertyID::TextAlign, KeywordStyleValue::create(Keyword::Start));
+        }
+    }
+
+    // AD-HOC: The -libweb-inherit-or-center style defaults to centering, unless a style value usually would have been
+    //         inherited. This is used to support the ad-hoc default <th> text-align behavior.
+    if (text_align_keyword == Keyword::LibwebInheritOrCenter && element.local_name() == HTML::TagNames::th) {
+        auto const* parent_element = &element;
+        while ((parent_element = parent_element->element_to_inherit_style_from({}))) {
+            auto parent_computed = parent_element->computed_properties();
+            auto parent_cascaded = parent_element->cascaded_properties({});
+            if (!parent_computed || !parent_cascaded)
+                break;
+            if (parent_cascaded->property(PropertyID::TextAlign)) {
+                auto const& style_value = parent_computed->property(PropertyID::TextAlign);
+                style.set_property(PropertyID::TextAlign, style_value, ComputedProperties::Inherited::Yes);
+                break;
+            }
         }
     }
 }
@@ -2472,9 +2389,13 @@ void StyleComputer::transform_box_type_if_needed(ComputedProperties& style, DOM:
 GC::Ref<ComputedProperties> StyleComputer::create_document_style() const
 {
     auto style = document().heap().allocate<CSS::ComputedProperties>();
+    for (auto i = to_underlying(CSS::first_longhand_property_id); i <= to_underlying(CSS::last_longhand_property_id); ++i) {
+        auto property_id = static_cast<PropertyID>(i);
+        style->set_property(property_id, property_initial_value(property_id));
+    }
+
     compute_math_depth(style, nullptr, {});
     compute_font(style, nullptr, {});
-    compute_defaulted_values(style, nullptr, {});
     absolutize_values(style, nullptr);
     style->set_property(CSS::PropertyID::Width, CSS::LengthStyleValue::create(CSS::Length::make_px(viewport_rect().width())));
     style->set_property(CSS::PropertyID::Height, CSS::LengthStyleValue::create(CSS::Length::make_px(viewport_rect().height())));
@@ -2674,26 +2595,33 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
         if (property_id == PropertyID::FontSize && !value && new_font_size)
             continue;
 
+        bool should_inherit = (!value && is_inherited_property(property_id));
+
+        // https://www.w3.org/TR/css-cascade-4/#inherit
+        // If the cascaded value of a property is the inherit keyword, the property’s specified and computed values are the inherited value.
+        should_inherit |= value && value->is_inherit();
+
+        // https://www.w3.org/TR/css-cascade-4/#inherit-initial
+        // If the cascaded value of a property is the unset keyword, then if it is an inherited property, this is treated as inherit, and if it is not, this is treated as initial.
+        should_inherit |= value && value->is_unset() && is_inherited_property(property_id);
+
+        // https://www.w3.org/TR/css-color-4/#resolving-other-colors
+        // In the color property, the used value of currentcolor is the resolved inherited value.
+        should_inherit |= property_id == PropertyID::Color && value && value->to_keyword() == Keyword::Currentcolor;
+
         // FIXME: Logical properties should inherit from their parent's equivalent unmapped logical property.
-        if ((!value && is_inherited_property(property_id)) || (value && value->is_inherit())) {
+        if (should_inherit) {
             value = get_inherit_value(property_id, &element, pseudo_element);
             animated_value = get_animated_inherit_value(property_id, &element, pseudo_element);
             inherited = ComputedProperties::Inherited::Yes;
         }
 
-        if (!value || value->is_initial())
+        if (!value || value->is_initial() || value->is_unset())
             value = property_initial_value(property_id);
-
-        if (value->is_unset()) {
-            if (is_inherited_property(property_id))
-                value = KeywordStyleValue::create(Keyword::Inherit);
-            else
-                value = KeywordStyleValue::create(Keyword::Initial);
-        }
 
         computed_style->set_property(property_id, value.release_nonnull(), inherited);
         if (animated_value.has_value())
-            computed_style->set_animated_property(property_id, animated_value.value());
+            computed_style->set_animated_property(property_id, animated_value.value(), inherited);
 
         if (property_id == PropertyID::AnimationName) {
             computed_style->set_animation_name_source(cascaded_properties.property_source(property_id));
@@ -2782,20 +2710,17 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
     // 4. Absolutize values, turning font/viewport relative lengths into absolute lengths
     absolutize_values(computed_style, element);
 
-    // 5. Default the values, applying inheritance and 'initial' as needed
-    compute_defaulted_values(computed_style, &element, pseudo_element);
-
-    // 6. Run automatic box type transformations
+    // 5. Run automatic box type transformations
     transform_box_type_if_needed(computed_style, element, pseudo_element);
 
-    // 7. Apply any property-specific computed value logic
+    // 6. Apply any property-specific computed value logic
     resolve_effective_overflow_values(computed_style);
     compute_text_align(computed_style, element, pseudo_element);
 
-    // 8. Let the element adjust computed style
+    // 7. Let the element adjust computed style
     element.adjust_computed_style(computed_style);
 
-    // 9. Transition declarations [css-transitions-1]
+    // 8. Transition declarations [css-transitions-1]
     // Theoretically this should be part of the cascade, but it works with computed values, which we don't have until now.
     compute_transitioned_properties(computed_style, element, pseudo_element);
     if (auto previous_style = element.computed_properties(pseudo_element)) {
@@ -3239,11 +3164,6 @@ void StyleComputer::compute_custom_properties(ComputedProperties&, DOM::Abstract
 void StyleComputer::compute_math_depth(ComputedProperties& style, DOM::Element const* element, Optional<CSS::PseudoElement> pseudo_element) const
 {
     // https://w3c.github.io/mathml-core/#propdef-math-depth
-
-    // First, ensure that the relevant CSS properties have been defaulted.
-    // FIXME: This should be more sophisticated.
-    compute_defaulted_property_value(style, element, CSS::PropertyID::MathDepth, pseudo_element);
-    compute_defaulted_property_value(style, element, CSS::PropertyID::MathStyle, pseudo_element);
 
     auto inherited_math_depth = [&]() {
         if (!element || !element->element_to_inherit_style_from(pseudo_element))

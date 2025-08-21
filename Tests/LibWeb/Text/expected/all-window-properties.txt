@@ -45,6 +45,7 @@ CSSGroupingRule
 CSSImportRule
 CSSKeyframeRule
 CSSKeyframesRule
+CSSKeywordValue
 CSSLayerBlockRule
 CSSLayerStatementRule
 CSSMarginRule
@@ -63,6 +64,8 @@ CSSStyleSheet
 CSSStyleValue
 CSSSupportsRule
 CSSTransition
+CSSUnparsedValue
+CSSVariableReferenceValue
 CacheStorage
 CanvasGradient
 CanvasPattern

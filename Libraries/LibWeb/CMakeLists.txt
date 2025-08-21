@@ -112,6 +112,7 @@ set(SOURCES
     CSS/CSSImportRule.cpp
     CSS/CSSKeyframeRule.cpp
     CSS/CSSKeyframesRule.cpp
+    CSS/CSSKeywordValue.cpp
     CSS/CSSLayerBlockRule.cpp
     CSS/CSSLayerStatementRule.cpp
     CSS/CSSMarginRule.cpp
@@ -131,6 +132,8 @@ set(SOURCES
     CSS/CSSStyleValue.cpp
     CSS/CSSSupportsRule.cpp
     CSS/CSSTransition.cpp
+    CSS/CSSUnparsedValue.cpp
+    CSS/CSSVariableReferenceValue.cpp
     CSS/Descriptor.cpp
     CSS/Display.cpp
     CSS/EdgeRect.cpp
@@ -208,6 +211,7 @@ set(SOURCES
     CSS/StyleValues/CounterDefinitionsStyleValue.cpp
     CSS/StyleValues/CounterStyleValue.cpp
     CSS/StyleValues/CursorStyleValue.cpp
+    CSS/StyleValues/CustomIdentStyleValue.cpp
     CSS/StyleValues/DisplayStyleValue.cpp
     CSS/StyleValues/EasingStyleValue.cpp
     CSS/StyleValues/EdgeStyleValue.cpp
