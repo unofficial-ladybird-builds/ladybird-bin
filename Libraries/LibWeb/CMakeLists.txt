@@ -119,7 +119,7 @@ set(SOURCES
     CSS/CSSMediaRule.cpp
     CSS/CSSNamespaceRule.cpp
     CSS/CSSNestedDeclarations.cpp
-    CSS/CSSNumericType.cpp
+    CSS/CSSNumericValue.cpp
     CSS/CSSPageRule.cpp
     CSS/CSSPageDescriptors.cpp
     CSS/CSSPropertyRule.cpp
@@ -132,6 +132,7 @@ set(SOURCES
     CSS/CSSStyleValue.cpp
     CSS/CSSSupportsRule.cpp
     CSS/CSSTransition.cpp
+    CSS/CSSUnitValue.cpp
     CSS/CSSUnparsedValue.cpp
     CSS/CSSVariableReferenceValue.cpp
     CSS/Descriptor.cpp
@@ -153,6 +154,7 @@ set(SOURCES
     CSS/MediaQueryList.cpp
     CSS/MediaQueryListEvent.cpp
     CSS/Number.cpp
+    CSS/NumericType.cpp
     CSS/PageSelector.cpp
     CSS/ParsedFontFace.cpp
     CSS/Parser/ArbitrarySubstitutionFunctions.cpp
@@ -212,6 +214,7 @@ set(SOURCES
     CSS/StyleValues/CounterStyleValue.cpp
     CSS/StyleValues/CursorStyleValue.cpp
     CSS/StyleValues/CustomIdentStyleValue.cpp
+    CSS/StyleValues/DimensionStyleValue.cpp
     CSS/StyleValues/DisplayStyleValue.cpp
     CSS/StyleValues/EasingStyleValue.cpp
     CSS/StyleValues/EdgeStyleValue.cpp
