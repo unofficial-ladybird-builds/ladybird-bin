@@ -16,7 +16,7 @@ namespace AK {
 template<typename OutputType, typename InputType>
 ALWAYS_INLINE bool is(InputType& input)
 {
-    static_assert(!SameAs<OutputType, InputType>);
+    static_assert(!SameAs<RemoveCVReference<OutputType>, RemoveCVReference<InputType>>);
     if constexpr (requires { input.template fast_is<OutputType>(); }) {
         return input.template fast_is<OutputType>();
     }
@@ -40,11 +40,10 @@ ALWAYS_INLINE CopyConst<InputType, OutputType>* as_if(InputType& input)
 {
     if (!is<OutputType>(input))
         return nullptr;
-    if constexpr (IsBaseOf<InputType, OutputType>) {
+    if constexpr (requires { static_cast<CopyConst<InputType, OutputType>*>(&input); }) {
         return static_cast<CopyConst<InputType, OutputType>*>(&input);
-    } else {
-        return dynamic_cast<CopyConst<InputType, OutputType>*>(&input);
     }
+    return dynamic_cast<CopyConst<InputType, OutputType>*>(&input);
 }
 
 template<typename OutputType, typename InputType>
