@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2024, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2025, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -90,6 +91,7 @@ enum class OuterType {
     Root,
     Ptr,
     Ref,
+    Value,
 };
 
 struct QualTypeGCInfo {
@@ -129,10 +131,18 @@ static std::optional<QualTypeGCInfo> validate_qualified_type(clang::QualType con
             return {};
 
         auto const* record_decl = record_type->getAsCXXRecordDecl();
-        if (!record_decl->hasDefinition())
-            return {};
+        if (!record_decl->hasDefinition()) {
+            // If we don't have a definition (this is a forward declaration), assume that the type inherits from
+            // GC::Cell instead of not checking it at all. If it does inherit from GC:Cell, this will make sure it's
+            // visited. If it does not, any attempt to visit it will fail compilation on the visit call itself,
+            // ensuring it's no longer wrapped in a GC::Ptr.
+            return QualTypeGCInfo { outer_type, true };
+        }
 
         return QualTypeGCInfo { outer_type, record_inherits_from_cell(*record_decl) };
+    } else if (auto const* record = type->getAsCXXRecordDecl()) {
+        if (record->getQualifiedNameAsString() == "JS::Value")
+            return QualTypeGCInfo { OuterType::Value, true };
     }
 
     return {};
@@ -202,11 +212,11 @@ bool LibJSGCVisitor::VisitCXXRecordDecl(clang::CXXRecordDecl* record)
                             << "GC::Ptr";
                 }
             }
-        } else if (outer_type == OuterType::GCPtr || outer_type == OuterType::RawPtr) {
+        } else if (outer_type == OuterType::GCPtr || outer_type == OuterType::RawPtr || outer_type == OuterType::Value) {
             if (!base_type_inherits_from_cell) {
                 auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error, "Specialization type must inherit from GC::Cell");
                 diag_engine.Report(field->getLocation(), diag_id);
-            } else if (outer_type == OuterType::GCPtr) {
+            } else if (outer_type != OuterType::RawPtr) {
                 fields_that_need_visiting.push_back(field);
             }
         } else if (outer_type == OuterType::Root) {
