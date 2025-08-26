@@ -89,7 +89,8 @@ static JsonValue serialize_cookie(Web::Cookie::Cookie const& cookie)
     serialized_cookie.set("domain"sv, cookie.domain);
     serialized_cookie.set("secure"sv, cookie.secure);
     serialized_cookie.set("httpOnly"sv, cookie.http_only);
-    serialized_cookie.set("expiry"sv, cookie.expiry_time.seconds_since_epoch());
+    if (cookie.persistent)
+        serialized_cookie.set("expiry"sv, cookie.expiry_time.seconds_since_epoch()); // Must not be set if omitted when adding a cookie.
     serialized_cookie.set("sameSite"sv, Web::Cookie::same_site_to_string(cookie.same_site));
 
     return serialized_cookie;
@@ -1961,7 +1962,7 @@ Web::WebDriver::Response WebDriverConnection::element_send_keys_impl(StringView 
     else if (is<Web::HTML::HTMLElement>(*element) && static_cast<Web::HTML::HTMLElement&>(*element).is_content_editable()) {
         // If element does not currently have focus, set the text insertion caret after any child content.
         auto* document = current_browsing_context().active_document();
-        document->set_focused_element(element);
+        document->set_focused_area(element);
     }
     // -> otherwise
     else if (is<Web::HTML::FormAssociatedTextControlElement>(*element)) {

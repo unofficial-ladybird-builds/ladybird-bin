@@ -3924,6 +3924,17 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.getter_callback@)
     [[maybe_unused]] auto* impl = TRY(impl_from(vm));
 )~~~");
 
+        auto cache_result = false;
+        if (attribute.extended_attributes.contains("CachedAttribute")) {
+            VERIFY(attribute.readonly);
+            cache_result = true;
+            attribute_generator.append(R"~~~(
+    auto cached_@attribute.cpp_name@ = impl->cached_@attribute.cpp_name@();
+    if (cached_@attribute.cpp_name@)
+        return cached_@attribute.cpp_name@;
+)~~~");
+        }
+
         if (attribute.extended_attributes.contains("CEReactions")) {
             // 1. Push a new element queue onto this object's relevant agent's custom element reactions stack.
             attribute_generator.append(R"~~~(
@@ -4268,7 +4279,15 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.getter_callback@)
 )~~~");
         }
 
-        generate_return_statement(generator, *attribute.type, interface);
+        if (cache_result) {
+            generate_wrap_statement(generator, "retval", *attribute.type, interface, ByteString::formatted("cached_{} =", attribute_generator.get("attribute.cpp_name")));
+            attribute_generator.append(R"~~~(
+    impl->set_cached_@attribute.cpp_name@(cached_@attribute.cpp_name@);
+    return cached_@attribute.cpp_name@;
+)~~~");
+        } else {
+            generate_return_statement(generator, *attribute.type, interface);
+        }
 
         if (generated_reflected_element_array) {
             // 3. Let elementsAsFrozenArray be elements, converted to a FrozenArray<T>?.
@@ -4904,6 +4923,27 @@ using namespace Web::XHR;
 )~~~"sv);
 }
 
+// https://webidl.spec.whatwg.org/#define-the-operations
+static void define_the_operations(SourceGenerator& generator, OrderedHashMap<ByteString, Vector<Function&>> const& operations)
+{
+    for (auto const& operation : operations) {
+        auto function_generator = generator.fork();
+        function_generator.set("function.name", operation.key);
+        function_generator.set("function.name:snakecase", make_input_acceptable_cpp(operation.key.to_snakecase()));
+        function_generator.set("function.length", ByteString::number(get_shortest_function_length(operation.value)));
+
+        // NOTE: This assumes that every function in the overload set has the same attribute set.
+        if (operation.value[0].extended_attributes.contains("LegacyUnforgable"sv))
+            function_generator.set("function.attributes", "JS::Attribute::Enumerable");
+        else
+            function_generator.set("function.attributes", "JS::Attribute::Writable | JS::Attribute::Enumerable | JS::Attribute::Configurable");
+
+        function_generator.append(R"~~~(
+    define_native_function(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, @function.attributes@);
+)~~~");
+    }
+}
+
 void generate_namespace_implementation(IDL::Interface const& interface, StringBuilder& builder)
 {
     SourceGenerator generator { builder };
@@ -4958,7 +4998,6 @@ GC_DEFINE_ALLOCATOR(@namespace_class@);
 void @namespace_class@::initialize(JS::Realm& realm)
 {
     [[maybe_unused]] auto& vm = this->vm();
-    [[maybe_unused]] u8 default_attributes = JS::Attribute::Enumerable | JS::Attribute::Configurable | JS::Attribute::Writable;
 
     Base::initialize(realm);
 
@@ -4966,17 +5005,7 @@ void @namespace_class@::initialize(JS::Realm& realm)
 
 )~~~");
 
-    // https://webidl.spec.whatwg.org/#es-operations
-    for (auto const& overload_set : interface.overload_sets) {
-        auto function_generator = generator.fork();
-        function_generator.set("function.name", overload_set.key);
-        function_generator.set("function.name:snakecase", make_input_acceptable_cpp(overload_set.key.to_snakecase()));
-        function_generator.set("function.length", ByteString::number(get_shortest_function_length(overload_set.value)));
-
-        function_generator.append(R"~~~(
-    define_native_function(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, default_attributes);
-)~~~");
-    }
+    define_the_operations(generator, interface.overload_sets);
 
     if (interface.extended_attributes.contains("WithInitializer"sv)) {
         generator.append(R"~~~(
@@ -5099,27 +5128,6 @@ private:
 
 } // namespace Web::Bindings
 )~~~");
-}
-
-// https://webidl.spec.whatwg.org/#define-the-operations
-static void define_the_operations(SourceGenerator& generator, HashMap<ByteString, Vector<Function&>> const& operations)
-{
-    for (auto const& operation : operations) {
-        auto function_generator = generator.fork();
-        function_generator.set("function.name", operation.key);
-        function_generator.set("function.name:snakecase", make_input_acceptable_cpp(operation.key.to_snakecase()));
-        function_generator.set("function.length", ByteString::number(get_shortest_function_length(operation.value)));
-
-        // NOTE: This assumes that every function in the overload set has the same attribute set.
-        if (operation.value[0].extended_attributes.contains("LegacyUnforgable"sv))
-            function_generator.set("function.attributes", "JS::Attribute::Enumerable");
-        else
-            function_generator.set("function.attributes", "JS::Attribute::Writable | JS::Attribute::Enumerable | JS::Attribute::Configurable");
-
-        function_generator.append(R"~~~(
-    define_native_function(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, @function.attributes@);
-)~~~");
-    }
 }
 
 void generate_constructor_implementation(IDL::Interface const& interface, StringBuilder& builder)
