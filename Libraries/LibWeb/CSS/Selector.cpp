@@ -427,22 +427,24 @@ String Selector::SimpleSelector::serialize() const
         auto& pseudo_class = this->pseudo_class();
 
         auto metadata = pseudo_class_metadata(pseudo_class.type);
-        // HACK: `:host()` has both a function and a non-function form, so handle that first.
-        //       It's also not in the spec.
-        if (pseudo_class.type == PseudoClass::Host) {
-            if (pseudo_class.argument_selector_list.is_empty()) {
-                s.append(':');
-                s.append(pseudo_class_name(pseudo_class.type));
-            } else {
-                s.append(':');
-                s.append(pseudo_class_name(pseudo_class.type));
-                s.append('(');
-                s.append(serialize_a_group_of_selectors(pseudo_class.argument_selector_list));
-                s.append(')');
+        bool accepts_arguments = [&]() {
+            if (!metadata.is_valid_as_function)
+                return false;
+            if (!metadata.is_valid_as_identifier)
+                return true;
+            // For pseudo-classes with both a function and identifier form, see if they have arguments.
+            switch (pseudo_class.type) {
+            case PseudoClass::Heading:
+                return !pseudo_class.levels.is_empty();
+            case PseudoClass::Host:
+                return !pseudo_class.argument_selector_list.is_empty();
+            default:
+                VERIFY_NOT_REACHED();
             }
-        }
+        }();
+
         // If the pseudo-class does not accept arguments append ":" (U+003A), followed by the name of the pseudo-class, to s.
-        else if (metadata.is_valid_as_identifier) {
+        if (!accepts_arguments) {
             s.append(':');
             s.append(pseudo_class_name(pseudo_class.type));
         }
@@ -460,12 +462,7 @@ String Selector::SimpleSelector::serialize() const
             case PseudoClassMetadata::ParameterType::ANPlusB:
             case PseudoClassMetadata::ParameterType::ANPlusBOf:
                 // The result of serializing the value using the rules to serialize an <an+b> value.
-                s.append(pseudo_class.an_plus_b_patterns.first().serialize());
-                break;
-            case PseudoClassMetadata::ParameterType::ANPlusBList:
-                serialize_a_comma_separated_list(s, pseudo_class.an_plus_b_patterns, [](auto& builder, ANPlusBPattern const& an_plus_b) {
-                    builder.append(an_plus_b.serialize());
-                });
+                s.append(pseudo_class.an_plus_b_pattern.serialize());
                 break;
             case PseudoClassMetadata::ParameterType::CompoundSelector:
             case PseudoClassMetadata::ParameterType::ForgivingSelectorList:
@@ -481,6 +478,10 @@ String Selector::SimpleSelector::serialize() const
             case PseudoClassMetadata::ParameterType::LanguageRanges:
                 // The serialization of a comma-separated list of each argument’s serialization as a string, preserving relative order.
                 s.join(", "sv, pseudo_class.languages);
+                break;
+            case PseudoClassMetadata::ParameterType::LevelList:
+                // AD-HOC: not in the spec.
+                s.join(", "sv, pseudo_class.levels);
                 break;
             }
             s.append(')');

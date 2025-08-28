@@ -664,7 +664,7 @@ Parser::ParseErrorOr<Selector::SimpleSelector> Parser::parse_pseudo_simple_selec
     }
 
     if (pseudo_class_token.is_function()) {
-        auto parse_an_plus_b_selector = [this](auto pseudo_class, Vector<ComponentValue> const& function_values, bool allow_of) -> ParseErrorOr<Selector::SimpleSelector> {
+        auto parse_an_plus_b_selector = [this](auto pseudo_class, Vector<ComponentValue> const& function_values, bool allow_of = false) -> ParseErrorOr<Selector::SimpleSelector> {
             auto tokens = TokenStream<ComponentValue>(function_values);
             auto an_plus_b_pattern = parse_a_n_plus_b_pattern(tokens);
             if (!an_plus_b_pattern.has_value()) {
@@ -682,7 +682,7 @@ Parser::ParseErrorOr<Selector::SimpleSelector> Parser::parse_pseudo_simple_selec
                     .type = Selector::SimpleSelector::Type::PseudoClass,
                     .value = Selector::SimpleSelector::PseudoClassSelector {
                         .type = pseudo_class,
-                        .an_plus_b_patterns = Vector { an_plus_b_pattern.release_value() } }
+                        .an_plus_b_pattern = an_plus_b_pattern.release_value() }
                 };
             }
 
@@ -705,39 +705,8 @@ Parser::ParseErrorOr<Selector::SimpleSelector> Parser::parse_pseudo_simple_selec
                 .type = Selector::SimpleSelector::Type::PseudoClass,
                 .value = Selector::SimpleSelector::PseudoClassSelector {
                     .type = pseudo_class,
-                    .an_plus_b_patterns = Vector { an_plus_b_pattern.release_value() },
+                    .an_plus_b_pattern = an_plus_b_pattern.release_value(),
                     .argument_selector_list = move(selector_list) }
-            };
-        };
-
-        auto parse_an_plus_b_list_selector = [this](auto pseudo_class, Vector<ComponentValue> const& function_values) -> ParseErrorOr<Selector::SimpleSelector> {
-            TokenStream tokens { function_values };
-            auto list = parse_a_comma_separated_list_of_component_values(tokens);
-            Vector<Selector::SimpleSelector::ANPlusBPattern> an_plus_b_patterns;
-
-            for (auto const& values : list) {
-                TokenStream pattern_tokens { values };
-                auto an_plus_b_pattern = parse_a_n_plus_b_pattern(pattern_tokens);
-                if (!an_plus_b_pattern.has_value()) {
-                    ErrorReporter::the().report(InvalidPseudoClassOrElementError {
-                        .name = MUST(String::formatted(":{}", pseudo_class_name(pseudo_class))),
-                        .value_string = pattern_tokens.dump_string(),
-                        .description = "Invalid An+B format."_string,
-                    });
-                    return ParseError::SyntaxError;
-                }
-                an_plus_b_patterns.append(an_plus_b_pattern.release_value());
-            }
-
-            tokens.discard_whitespace();
-            if (tokens.has_next_token())
-                return ParseError::SyntaxError;
-
-            return Selector::SimpleSelector {
-                .type = Selector::SimpleSelector::Type::PseudoClass,
-                .value = Selector::SimpleSelector::PseudoClassSelector {
-                    .type = pseudo_class,
-                    .an_plus_b_patterns = move(an_plus_b_patterns) }
             };
         };
 
@@ -787,8 +756,6 @@ Parser::ParseErrorOr<Selector::SimpleSelector> Parser::parse_pseudo_simple_selec
         switch (metadata.parameter_type) {
         case PseudoClassMetadata::ParameterType::ANPlusB:
             return parse_an_plus_b_selector(pseudo_class, pseudo_function.value, false);
-        case PseudoClassMetadata::ParameterType::ANPlusBList:
-            return parse_an_plus_b_list_selector(pseudo_class, pseudo_function.value);
         case PseudoClassMetadata::ParameterType::ANPlusBOf:
             return parse_an_plus_b_selector(pseudo_class, pseudo_function.value, true);
         case PseudoClassMetadata::ParameterType::CompoundSelector: {
@@ -897,6 +864,49 @@ Parser::ParseErrorOr<Selector::SimpleSelector> Parser::parse_pseudo_simple_selec
                 .value = Selector::SimpleSelector::PseudoClassSelector {
                     .type = pseudo_class,
                     .languages = move(languages) }
+            };
+        }
+        case PseudoClassMetadata::ParameterType::LevelList: {
+            // https://drafts.csswg.org/selectors-5/#heading-functional-pseudo
+            // :heading() = :heading( <level># )
+            // where <level> is a <number-token> with its type flag set to "integer".
+            Vector<i64> levels;
+            auto function_token_stream = TokenStream(pseudo_function.value);
+            auto level_lists = parse_a_comma_separated_list_of_component_values(function_token_stream);
+
+            for (auto const& level_tokens : level_lists) {
+                TokenStream level_token_stream { level_tokens };
+                level_token_stream.discard_whitespace();
+                auto& maybe_integer = level_token_stream.consume_a_token();
+                level_token_stream.discard_whitespace();
+
+                if (!maybe_integer.is(Token::Type::Number) || !maybe_integer.token().number().is_integer()) {
+                    ErrorReporter::the().report(InvalidPseudoClassOrElementError {
+                        .name = MUST(String::formatted(":{}", pseudo_function.name)),
+                        .value_string = pseudo_class_token.to_string(),
+                        .description = "Failed to parse argument as a <level>: Not an <integer> literal."_string,
+                    });
+                    return ParseError::SyntaxError;
+                }
+
+                if (level_token_stream.has_next_token()) {
+                    ErrorReporter::the().report(InvalidPseudoClassOrElementError {
+                        .name = MUST(String::formatted(":{}", pseudo_function.name)),
+                        .value_string = pseudo_class_token.to_string(),
+                        .description = "Failed to parse argument as a <level>: Has trailing tokens."_string,
+                    });
+                    return ParseError::SyntaxError;
+                }
+
+                levels.append(maybe_integer.token().number().integer_value());
+            }
+
+            return Selector::SimpleSelector {
+                .type = Selector::SimpleSelector::Type::PseudoClass,
+                .value = Selector::SimpleSelector::PseudoClassSelector {
+                    .type = pseudo_class,
+                    .levels = move(levels),
+                }
             };
         }
         case PseudoClassMetadata::ParameterType::RelativeSelectorList:

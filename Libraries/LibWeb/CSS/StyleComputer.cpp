@@ -1098,11 +1098,14 @@ void StyleComputer::collect_animation_into(DOM::Element& element, Optional<CSS::
         };
 
         compute_font(computed_properties, &element, pseudo_element);
-        absolutize_values(computed_properties);
+        compute_property_values(computed_properties);
         Length::FontMetrics font_metrics {
             computed_properties.font_size(),
             computed_properties.first_available_computed_font().pixel_metrics()
         };
+
+        HashMap<PropertyID, RefPtr<StyleValue const>> specified_values;
+
         for (auto const& [property_id, value] : keyframe_values.properties) {
             bool is_use_initial = false;
 
@@ -1118,7 +1121,7 @@ void StyleComputer::collect_animation_into(DOM::Element& element, Optional<CSS::
                 });
 
             if (!style_value) {
-                result.set(property_id, nullptr);
+                specified_values.set(property_id, nullptr);
                 continue;
             }
 
@@ -1135,11 +1138,11 @@ void StyleComputer::collect_animation_into(DOM::Element& element, Optional<CSS::
                 auto physical_longhand_id_bitmap_index = to_underlying(physical_longhand_id) - to_underlying(first_longhand_property_id);
 
                 // Don't overwrite values if this is the result of a UseInitial
-                if (result.contains(physical_longhand_id) && result.get(physical_longhand_id) != nullptr && is_use_initial)
+                if (specified_values.contains(physical_longhand_id) && specified_values.get(physical_longhand_id) != nullptr && is_use_initial)
                     return;
 
                 // Don't overwrite unless the value was originally set by a UseInitial or this property is preferred over the one that set it originally
-                if (result.contains(physical_longhand_id) && result.get(physical_longhand_id) != nullptr && !property_is_set_by_use_initial.get(physical_longhand_id_bitmap_index) && !is_property_preferred(property_id, longhands_set_by_property_id.get(physical_longhand_id).value()))
+                if (specified_values.contains(physical_longhand_id) && specified_values.get(physical_longhand_id) != nullptr && !property_is_set_by_use_initial.get(physical_longhand_id_bitmap_index) && !is_property_preferred(property_id, longhands_set_by_property_id.get(physical_longhand_id).value()))
                     return;
 
                 auto const& specified_value_with_css_wide_keywords_applied = [&]() -> StyleValue const& {
@@ -1161,9 +1164,35 @@ void StyleComputer::collect_animation_into(DOM::Element& element, Optional<CSS::
 
                 longhands_set_by_property_id.set(physical_longhand_id, property_id);
                 property_is_set_by_use_initial.set(physical_longhand_id_bitmap_index, is_use_initial);
-                result.set(physical_longhand_id, { specified_value_with_css_wide_keywords_applied.absolutized(viewport_rect(), font_metrics, m_root_element_font_metrics) });
+                specified_values.set(physical_longhand_id, specified_value_with_css_wide_keywords_applied);
             });
         }
+
+        PropertyValueComputationContext property_value_computation_context {
+            .length_resolution_context = {
+                .viewport_rect = viewport_rect(),
+                .font_metrics = font_metrics,
+                .root_font_metrics = m_root_element_font_metrics },
+            .device_pixels_per_css_pixel = m_document->page().client().device_pixels_per_css_pixel()
+        };
+
+        // NOTE: This doesn't necessarily return the specified value if we reach into computed_properties but that
+        //       doesn't matter as a computed value is always valid as a specified value.
+        Function<NonnullRefPtr<StyleValue const>(PropertyID)> get_property_specified_value = [&](PropertyID property_id) -> NonnullRefPtr<StyleValue const> {
+            if (auto keyframe_value = specified_values.get(property_id); keyframe_value.has_value() && keyframe_value.value())
+                return *keyframe_value.value();
+
+            return computed_properties.property(property_id);
+        };
+
+        for (auto const& [property_id, style_value] : specified_values) {
+            if (!style_value)
+                continue;
+
+            auto const& computed_value = compute_value_of_property(property_id, *style_value, get_property_specified_value, property_value_computation_context);
+            result.set(property_id, computed_value->absolutized(viewport_rect(), font_metrics, m_root_element_font_metrics));
+        }
+
         return result;
     };
     HashMap<PropertyID, RefPtr<StyleValue const>> computed_start_values = compute_keyframe_values(keyframe_values);
@@ -2149,7 +2178,7 @@ Gfx::Font const& StyleComputer::initial_font() const
     return font;
 }
 
-void StyleComputer::absolutize_values(ComputedProperties& style) const
+void StyleComputer::compute_property_values(ComputedProperties& style) const
 {
     Length::FontMetrics font_metrics {
         style.font_size(),
@@ -2169,9 +2198,27 @@ void StyleComputer::absolutize_values(ComputedProperties& style) const
         style.set_property(PropertyID::LineHeight, computed_value, is_inherited);
     }
 
-    style.for_each_property([&](PropertyID property_id, auto& value) {
-        auto const& absolutized_value = value.absolutized(viewport_rect(), font_metrics, m_root_element_font_metrics);
-        auto is_inherited = style.is_property_inherited(property_id) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No;
+    PropertyValueComputationContext computation_context {
+        .length_resolution_context = {
+            .viewport_rect = viewport_rect(),
+            .font_metrics = font_metrics,
+            .root_font_metrics = m_root_element_font_metrics,
+        },
+        .device_pixels_per_css_pixel = m_document->page().client().device_pixels_per_css_pixel()
+    };
+
+    // NOTE: This doesn't necessarily return the specified value if we have already computed this property but that
+    //       doesn't matter as a computed value is always valid as a specified value.
+    Function<NonnullRefPtr<StyleValue const>(PropertyID)> const get_property_specified_value = [&](auto property_id) -> NonnullRefPtr<StyleValue const> {
+        return style.property(property_id);
+    };
+
+    style.for_each_property([&](PropertyID property_id, auto& specified_value) {
+        auto const& computed_value = compute_value_of_property(property_id, specified_value, get_property_specified_value, computation_context);
+
+        // FIXME: Any required absolutization should be done within compute_value_of_property() - we can remove this once that's implemented.
+        auto const& absolutized_value = computed_value->absolutized(viewport_rect(), font_metrics, m_root_element_font_metrics);
+        auto const& is_inherited = style.is_property_inherited(property_id) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No;
 
         style.set_property(property_id, absolutized_value, is_inherited);
     });
@@ -2393,7 +2440,7 @@ GC::Ref<ComputedProperties> StyleComputer::create_document_style() const
 
     compute_math_depth(style, {});
     compute_font(style, nullptr, {});
-    absolutize_values(style);
+    compute_property_values(style);
     style->set_property(CSS::PropertyID::Width, CSS::LengthStyleValue::create(CSS::Length::make_px(viewport_rect().width())));
     style->set_property(CSS::PropertyID::Height, CSS::LengthStyleValue::create(CSS::Length::make_px(viewport_rect().height())));
     style->set_property(CSS::PropertyID::Display, CSS::DisplayStyleValue::create(CSS::Display::from_short(CSS::Display::Short::Block)));
@@ -2702,8 +2749,8 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::Element& elem
     // 3. Compute the font, since that may be needed for font-relative CSS units
     compute_font(computed_style, &element, pseudo_element);
 
-    // 4. Absolutize values, turning font/viewport relative lengths into absolute lengths
-    absolutize_values(computed_style);
+    // 4. Convert properties into their computed forms
+    compute_property_values(computed_style);
 
     // 5. Run automatic box type transformations
     transform_box_type_if_needed(computed_style, element, pseudo_element);
@@ -3155,6 +3202,88 @@ void StyleComputer::compute_custom_properties(ComputedProperties&, DOM::Abstract
             });
     }
     abstract_element.set_custom_properties(move(resolved_custom_properties));
+}
+
+static CSSPixels line_width_keyword_to_css_pixels(Keyword keyword)
+{
+    // https://drafts.csswg.org/css-backgrounds/#typedef-line-width
+    //	The thin, medium, and thick keywords are equivalent to 1px, 3px, and 5px, respectively.
+    switch (keyword) {
+    case Keyword::Thin:
+        return CSSPixels { 1 };
+    case Keyword::Medium:
+        return CSSPixels { 3 };
+    case Keyword::Thick:
+        return CSSPixels { 5 };
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+// https://www.w3.org/TR/css-values-4/#snap-a-length-as-a-border-width
+static CSSPixels snap_a_length_as_a_border_width(double device_pixels_per_css_pixel, CSSPixels length)
+{
+    // 1. Assert: len is non-negative.
+    VERIFY(length >= 0);
+
+    // 2. If len is an integer number of device pixels, do nothing.
+    auto device_pixels = length.to_double() * device_pixels_per_css_pixel;
+    if (device_pixels == trunc(device_pixels))
+        return length;
+
+    // 3. If len is greater than zero, but less than 1 device pixel, round len up to 1 device pixel.
+    if (device_pixels > 0 && device_pixels < 1)
+        return CSSPixels::nearest_value_for(1 / device_pixels_per_css_pixel);
+
+    // 4. If len is greater than 1 device pixel, round it down to the nearest integer number of device pixels.
+    if (device_pixels > 1)
+        return CSSPixels::nearest_value_for(floor(device_pixels) / device_pixels_per_css_pixel);
+
+    return length;
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(PropertyID property_id, NonnullRefPtr<StyleValue const> const& specified_value, Function<NonnullRefPtr<StyleValue const>(PropertyID)> const& get_property_specified_value, PropertyValueComputationContext const& computation_context)
+{
+    switch (property_id) {
+    case PropertyID::BorderBottomWidth:
+        return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderBottomStyle), computation_context);
+    case PropertyID::BorderLeftWidth:
+        return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderLeftStyle), computation_context);
+    case PropertyID::BorderRightWidth:
+        return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderRightStyle), computation_context);
+    case PropertyID::BorderTopWidth:
+        return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderTopStyle), computation_context);
+    case PropertyID::OutlineWidth:
+        return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::OutlineStyle), computation_context);
+    default:
+        // FIXME: We should replace this with a VERIFY_NOT_REACHED() once all properties have their own handling.
+        return specified_value;
+    }
+
+    VERIFY_NOT_REACHED();
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_border_or_outline_width(NonnullRefPtr<StyleValue const> const& specified_value, NonnullRefPtr<StyleValue const> const& style_specified_value, PropertyValueComputationContext const& computation_context)
+{
+    // https://drafts.csswg.org/css-backgrounds/#border-width
+    // absolute length, snapped as a border width; zero if the border style is none or hidden
+    if (first_is_one_of(style_specified_value->to_keyword(), Keyword::None, Keyword::Hidden))
+        return LengthStyleValue::create(Length::make_px(0));
+
+    auto const absolute_length = [&]() -> CSSPixels {
+        if (specified_value->is_calculated())
+            return specified_value->as_calculated().resolve_length({ .length_resolution_context = computation_context.length_resolution_context })->absolute_length_to_px();
+
+        if (specified_value->is_length())
+            return specified_value->as_length().length().to_px(computation_context.length_resolution_context);
+
+        if (specified_value->is_keyword())
+            return line_width_keyword_to_css_pixels(specified_value->to_keyword());
+
+        VERIFY_NOT_REACHED();
+    }();
+
+    return LengthStyleValue::create(Length::make_px(snap_a_length_as_a_border_width(computation_context.device_pixels_per_css_pixel, absolute_length)));
 }
 
 void StyleComputer::compute_math_depth(ComputedProperties& style, Optional<DOM::AbstractElement> element) const

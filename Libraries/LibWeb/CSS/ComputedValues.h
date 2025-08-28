@@ -118,6 +118,8 @@ using CursorData = Variant<NonnullRefPtr<CursorStyleValue const>, CursorPredefin
 
 using ListStyleType = Variant<CounterStyleNameKeyword, String>;
 
+using PaintOrderList = Array<PaintOrder, 3>;
+
 class InitialValues {
 public:
     static AspectRatio aspect_ratio() { return AspectRatio { true, {} }; }
@@ -223,7 +225,7 @@ public:
     static Color outline_color() { return Color::Black; }
     static CSS::Length outline_offset() { return CSS::Length::make_px(0); }
     static CSS::OutlineStyle outline_style() { return CSS::OutlineStyle::None; }
-    static CSS::Length outline_width() { return CSS::Length::make_px(3); }
+    static CSSPixels outline_width() { return 3; }
     static CSS::TableLayout table_layout() { return CSS::TableLayout::Auto; }
     static QuotesData quotes() { return QuotesData { .type = QuotesData::Type::Auto }; }
     static CSS::TransformBox transform_box() { return CSS::TransformBox::ViewBox; }
@@ -259,6 +261,7 @@ public:
     }
     static CSS::ScrollbarWidth scrollbar_width() { return CSS::ScrollbarWidth::Auto; }
     static CSS::ShapeRendering shape_rendering() { return CSS::ShapeRendering::Auto; }
+    static PaintOrderList paint_order() { return { PaintOrder::Fill, PaintOrder::Stroke, PaintOrder::Markers }; }
     static WillChange will_change() { return WillChange::make_auto(); }
 };
 
@@ -590,6 +593,7 @@ public:
     CSS::ClipRule clip_rule() const { return m_inherited.clip_rule; }
     Color flood_color() const { return m_noninherited.flood_color; }
     float flood_opacity() const { return m_noninherited.flood_opacity; }
+    PaintOrderList paint_order() const { return m_inherited.paint_order; }
 
     LengthPercentage const& cx() const { return m_noninherited.cx; }
     LengthPercentage const& cy() const { return m_noninherited.cy; }
@@ -626,7 +630,7 @@ public:
     Color outline_color() const { return m_noninherited.outline_color; }
     CSS::Length outline_offset() const { return m_noninherited.outline_offset; }
     CSS::OutlineStyle outline_style() const { return m_noninherited.outline_style; }
-    CSS::Length outline_width() const { return m_noninherited.outline_width; }
+    CSSPixels outline_width() const { return m_noninherited.outline_width; }
 
     CSS::TableLayout table_layout() const { return m_noninherited.table_layout; }
 
@@ -702,6 +706,7 @@ protected:
         CSS::FillRule fill_rule { InitialValues::fill_rule() };
         Optional<SVGPaint> stroke;
         float fill_opacity { InitialValues::fill_opacity() };
+        PaintOrderList paint_order { InitialValues::paint_order() };
         Vector<Variant<LengthPercentage, NumberOrCalculated>> stroke_dasharray;
         LengthPercentage stroke_dashoffset { InitialValues::stroke_dashoffset() };
         CSS::StrokeLinecap stroke_linecap { InitialValues::stroke_linecap() };
@@ -801,7 +806,7 @@ protected:
         Color outline_color { InitialValues::outline_color() };
         CSS::Length outline_offset { InitialValues::outline_offset() };
         CSS::OutlineStyle outline_style { InitialValues::outline_style() };
-        CSS::Length outline_width { InitialValues::outline_width() };
+        CSSPixels outline_width { InitialValues::outline_width() };
         CSS::TableLayout table_layout { InitialValues::table_layout() };
         CSS::ObjectFit object_fit { InitialValues::object_fit() };
         CSS::ObjectPosition object_position { InitialValues::object_position() };
@@ -1023,7 +1028,7 @@ public:
     void set_outline_color(Color value) { m_noninherited.outline_color = value; }
     void set_outline_offset(CSS::Length value) { m_noninherited.outline_offset = value; }
     void set_outline_style(CSS::OutlineStyle value) { m_noninherited.outline_style = value; }
-    void set_outline_width(CSS::Length value) { m_noninherited.outline_width = value; }
+    void set_outline_width(CSSPixels value) { m_noninherited.outline_width = value; }
     void set_mask(MaskReference value) { m_noninherited.mask = value; }
     void set_mask_type(CSS::MaskType value) { m_noninherited.mask_type = value; }
     void set_mask_image(CSS::AbstractImageStyleValue const& value) { m_noninherited.mask_image = value; }
@@ -1032,6 +1037,7 @@ public:
     void set_flood_color(Color value) { m_noninherited.flood_color = value; }
     void set_flood_opacity(float value) { m_noninherited.flood_opacity = value; }
     void set_shape_rendering(CSS::ShapeRendering value) { m_noninherited.shape_rendering = value; }
+    void set_paint_order(PaintOrderList value) { m_inherited.paint_order = value; }
 
     void set_cx(LengthPercentage cx) { m_noninherited.cx = move(cx); }
     void set_cy(LengthPercentage cy) { m_noninherited.cy = move(cy); }

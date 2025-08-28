@@ -670,8 +670,6 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
     case CSS::PseudoClass::NthLastChild:
     case CSS::PseudoClass::NthOfType:
     case CSS::PseudoClass::NthLastOfType: {
-        auto& an_plus_b = pseudo_class.an_plus_b_patterns.first();
-
         auto const* parent = element.parent();
         if (!parent)
             return false;
@@ -726,7 +724,7 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
         default:
             VERIFY_NOT_REACHED();
         }
-        return an_plus_b.matches(index);
+        return pseudo_class.an_plus_b_pattern.matches(index);
     }
     case CSS::PseudoClass::Playing: {
         if (!is<HTML::HTMLMediaElement>(element))
@@ -1037,7 +1035,7 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
         // The :heading pseudo-class must match all h1, h2, h3, h4, h5, and h6 elements.
 
         // https://html.spec.whatwg.org/multipage/semantics-other.html#selector-heading-functional
-        // The :heading(An+B#) pseudo-class must match all h1, h2, h3, h4, h5, and h6 elements that have a heading level among An+B. [CSSSYNTAX] [CSSVALUES]
+        // The :heading(integer#) pseudo-class must match all h1, h2, h3, h4, h5, and h6 elements that have a heading level of integer. [CSSSYNTAX] [CSSVALUES]
 
         // NB: We combine the "is this an h* element?" and "what is it's level?" checks together here.
         if (!element.is_html_element())
@@ -1061,15 +1059,10 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
         if (!heading_level.has_value())
             return false;
 
-        if (pseudo_class.an_plus_b_patterns.is_empty())
+        if (pseudo_class.levels.is_empty())
             return true;
 
-        for (auto const& an_plus_b_pattern : pseudo_class.an_plus_b_patterns) {
-            if (an_plus_b_pattern.matches(heading_level.value()))
-                return true;
-        }
-
-        return false;
+        return pseudo_class.levels.contains_slow(heading_level.value());
     }
     }
 
