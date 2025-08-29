@@ -384,9 +384,6 @@ void StackingContext::paint(DisplayListRecordingContext& context) const
 
 TraversalDecision StackingContext::hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const
 {
-    if (!paintable_box().visible_for_hit_testing())
-        return TraversalDecision::Continue;
-
     auto const inverse_transform = affine_transform_matrix().inverse().value_or({});
     auto const transform_origin = paintable_box().transform_origin();
     // NOTE: This CSSPixels -> Float -> CSSPixels conversion is because we can't AffineTransform::map() a CSSPixelPoint.
@@ -398,11 +395,10 @@ TraversalDecision StackingContext::hit_test(CSSPixelPoint position, HitTestType 
 
     // 7. the child stacking contexts with positive stack levels (least positive first).
     // NOTE: Hit testing follows reverse painting order, that's why the conditions here are reversed.
-    for (ssize_t i = m_children.size() - 1; i >= 0; --i) {
-        auto const& child = *m_children[i];
-        if (child.paintable_box().computed_values().z_index().value_or(0) <= 0)
+    for (auto const* child : m_children.in_reverse()) {
+        if (child->paintable_box().computed_values().z_index().value_or(0) <= 0)
             break;
-        if (child.hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+        if (child->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
             return TraversalDecision::Break;
     }
 
@@ -449,13 +445,15 @@ TraversalDecision StackingContext::hit_test(CSSPixelPoint position, HitTestType 
 
     // 2. the child stacking contexts with negative stack levels (most negative first).
     // NOTE: Hit testing follows reverse painting order, that's why the conditions here are reversed.
-    for (ssize_t i = m_children.size() - 1; i >= 0; --i) {
-        auto const& child = *m_children[i];
-        if (child.paintable_box().computed_values().z_index().value_or(0) >= 0)
+    for (auto const* child : m_children.in_reverse()) {
+        if (child->paintable_box().computed_values().z_index().value_or(0) >= 0)
             break;
-        if (child.hit_test(transformed_position, type, callback) == TraversalDecision::Break)
+        if (child->hit_test(transformed_position, type, callback) == TraversalDecision::Break)
             return TraversalDecision::Break;
     }
+
+    if (!paintable_box().visible_for_hit_testing())
+        return TraversalDecision::Continue;
 
     auto const enclosing_scroll_offset = paintable_box().cumulative_offset_of_enclosing_scroll_frame();
     auto const raw_position_adjusted_by_scroll_offset = position.translated(-enclosing_scroll_offset);
