@@ -116,9 +116,18 @@ set(SOURCES
     CSS/CSSLayerBlockRule.cpp
     CSS/CSSLayerStatementRule.cpp
     CSS/CSSMarginRule.cpp
+    CSS/CSSMathClamp.cpp
+    CSS/CSSMathInvert.cpp
+    CSS/CSSMathMax.cpp
+    CSS/CSSMathMin.cpp
+    CSS/CSSMathNegate.cpp
+    CSS/CSSMathProduct.cpp
+    CSS/CSSMathSum.cpp
+    CSS/CSSMathValue.cpp
     CSS/CSSMediaRule.cpp
     CSS/CSSNamespaceRule.cpp
     CSS/CSSNestedDeclarations.cpp
+    CSS/CSSNumericArray.cpp
     CSS/CSSNumericValue.cpp
     CSS/CSSPageRule.cpp
     CSS/CSSPageDescriptors.cpp
@@ -874,6 +883,7 @@ set(SOURCES
     SVG/SVGFEBlendElement.cpp
     SVG/SVGFEFloodElement.cpp
     SVG/SVGFEGaussianBlurElement.cpp
+    SVG/SVGFEImageElement.cpp
     SVG/SVGFEMergeElement.cpp
     SVG/SVGFEMergeNodeElement.cpp
     SVG/SVGFEOffsetElement.cpp
