@@ -587,7 +587,9 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
             HANDLE_INSTRUCTION(Call);
             HANDLE_INSTRUCTION(CallBuiltin);
             HANDLE_INSTRUCTION(CallConstruct);
+            HANDLE_INSTRUCTION(CallConstructWithArgumentArray);
             HANDLE_INSTRUCTION(CallDirectEval);
+            HANDLE_INSTRUCTION(CallDirectEvalWithArgumentArray);
             HANDLE_INSTRUCTION(CallWithArgumentArray);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(Catch);
             HANDLE_INSTRUCTION(ConcatString);
@@ -1560,29 +1562,6 @@ inline Value new_regexp(VM& vm, ParsedRegex const& parsed_regex, Utf16String pat
     return regexp_object;
 }
 
-// 13.3.8.1 https://tc39.es/ecma262/#sec-runtime-semantics-argumentlistevaluation
-inline Span<Value> argument_list_evaluation(Interpreter& interpreter, Value arguments)
-{
-    // Note: Any spreading and actual evaluation is handled in preceding opcodes
-    // Note: The spec uses the concept of a list, while we create a temporary array
-    //       in the preceding opcodes, so we have to convert in a manner that is not
-    //       visible to the user
-
-    auto& argument_array = arguments.as_array();
-    auto array_length = argument_array.indexed_properties().array_like_size();
-
-    auto argument_values = interpreter.allocate_argument_values(array_length);
-
-    for (size_t i = 0; i < array_length; ++i) {
-        if (auto maybe_value = argument_array.indexed_properties().get(i); maybe_value.has_value())
-            argument_values[i] = maybe_value.release_value().value;
-        else
-            argument_values[i] = js_undefined();
-    }
-
-    return argument_values;
-}
-
 inline ThrowCompletionOr<void> create_variable(VM& vm, Utf16FlyString const& name, Op::EnvironmentMode mode, bool is_global, bool is_immutable, bool is_strict)
 {
     if (mode == Op::EnvironmentMode::Lexical) {
@@ -1627,59 +1606,6 @@ inline ThrowCompletionOr<ECMAScriptFunctionObject*> new_class(VM& vm, Value supe
     }
 
     return TRY(class_expression.create_class_constructor(vm, class_environment, vm.lexical_environment(), super_class, element_keys, binding_name, class_name));
-}
-
-// 13.3.7.1 Runtime Semantics: Evaluation, https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
-inline ThrowCompletionOr<GC::Ref<Object>> super_call_with_argument_array(Interpreter& interpreter, Value argument_array, bool is_synthetic)
-{
-    auto& vm = interpreter.vm();
-
-    // 1. Let newTarget be GetNewTarget().
-    auto new_target = vm.get_new_target();
-
-    // 2. Assert: Type(newTarget) is Object.
-    VERIFY(new_target.is_object());
-
-    // 3. Let func be GetSuperConstructor().
-    auto* func = get_super_constructor(vm);
-
-    // 4. Let argList be ? ArgumentListEvaluation of Arguments.
-    Span<Value> arg_list;
-    if (is_synthetic) {
-        VERIFY(argument_array.is_object() && is<Array>(argument_array.as_object()));
-        auto const& array_value = static_cast<Array const&>(argument_array.as_object());
-        auto length = MUST(length_of_array_like(vm, array_value));
-        arg_list = interpreter.allocate_argument_values(length);
-        for (size_t i = 0; i < length; ++i)
-            arg_list[i] = array_value.get_without_side_effects(PropertyKey { i });
-    } else {
-        arg_list = argument_list_evaluation(interpreter, argument_array);
-    }
-
-    // 5. If IsConstructor(func) is false, throw a TypeError exception.
-    if (!Value(func).is_constructor())
-        return vm.throw_completion<TypeError>(ErrorType::NotAConstructor, "Super constructor");
-
-    // 6. Let result be ? Construct(func, argList, newTarget).
-    auto result = TRY(construct(vm, static_cast<FunctionObject&>(*func), arg_list, &new_target.as_function()));
-
-    // 7. Let thisER be GetThisEnvironment().
-    auto& this_environment = as<FunctionEnvironment>(*get_this_environment(vm));
-
-    // 8. Perform ? thisER.BindThisValue(result).
-    TRY(this_environment.bind_this_value(vm, result));
-
-    // 9. Let F be thisER.[[FunctionObject]].
-    auto& f = this_environment.function_object();
-
-    // 10. Assert: F is an ECMAScript function object.
-    // NOTE: This is implied by the strong C++ type.
-
-    // 11. Perform ? InitializeInstanceElements(result, F).
-    TRY(result->initialize_instance_elements(f));
-
-    // 12. Return result.
-    return result;
 }
 
 inline ThrowCompletionOr<GC::Ref<Array>> iterator_to_array(VM& vm, Value iterator)
@@ -2836,95 +2762,215 @@ static ThrowCompletionOr<Value> dispatch_builtin_call(Bytecode::Interpreter& int
     VERIFY_NOT_REACHED();
 }
 
-ThrowCompletionOr<void> Call::execute_impl(Bytecode::Interpreter& interpreter) const
+template<CallType call_type>
+static ThrowCompletionOr<void> execute_call(
+    Bytecode::Interpreter& interpreter,
+    Value callee,
+    Value this_value,
+    ReadonlySpan<Operand> arguments,
+    Operand dst,
+    Optional<StringTableIndex> const& expression_string)
 {
-    auto callee = interpreter.get(m_callee);
-
-    if (!callee.is_function()) [[unlikely]] {
-        return throw_type_error_for_callee(interpreter, callee, "function"sv, m_expression_string);
-    }
+    TRY(throw_if_needed_for_call(interpreter, callee, call_type, expression_string));
 
     auto& function = callee.as_function();
 
     ExecutionContext* callee_context = nullptr;
     size_t registers_and_constants_and_locals_count = 0;
-    size_t argument_count = m_argument_count;
+    size_t argument_count = arguments.size();
     TRY(function.get_stack_frame_size(registers_and_constants_and_locals_count, argument_count));
-    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(m_argument_count, argument_count));
+    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(arguments.size(), argument_count));
 
     auto* callee_context_argument_values = callee_context->arguments.data();
     auto const callee_context_argument_count = callee_context->arguments.size();
-    auto const insn_argument_count = m_argument_count;
+    auto const insn_argument_count = arguments.size();
 
     for (size_t i = 0; i < insn_argument_count; ++i)
-        callee_context_argument_values[i] = interpreter.get(m_arguments[i]);
+        callee_context_argument_values[i] = interpreter.get(arguments[i]);
     for (size_t i = insn_argument_count; i < callee_context_argument_count; ++i)
         callee_context_argument_values[i] = js_undefined();
     callee_context->passed_argument_count = insn_argument_count;
 
-    auto retval = TRY(function.internal_call(*callee_context, interpreter.get(m_this_value)));
-    interpreter.set(m_dst, retval);
+    Value retval;
+    if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {
+        retval = TRY(perform_eval(interpreter.vm(), !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), interpreter.vm().in_strict_mode() ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
+    } else if (call_type == CallType::Construct) {
+        retval = TRY(function.internal_construct(*callee_context, function));
+    } else {
+        retval = TRY(function.internal_call(*callee_context, this_value));
+    }
+    interpreter.set(dst, retval);
     return {};
 }
 
-ThrowCompletionOr<void> CallConstruct::execute_impl(Bytecode::Interpreter& interpreter) const
+ThrowCompletionOr<void> Call::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
+    return execute_call<CallType::Call>(interpreter, interpreter.get(m_callee), interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string);
+}
 
-    TRY(throw_if_needed_for_call(interpreter, callee, CallType::Construct, expression_string()));
-
-    auto argument_values = interpreter.allocate_argument_values(m_argument_count);
-    for (size_t i = 0; i < m_argument_count; ++i)
-        argument_values[i] = interpreter.get(m_arguments[i]);
-    interpreter.set(dst(), TRY(perform_call(interpreter, Value(), CallType::Construct, callee, argument_values)));
-    return {};
+NEVER_INLINE ThrowCompletionOr<void> CallConstruct::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    return execute_call<CallType::Construct>(interpreter, interpreter.get(m_callee), js_undefined(), { m_arguments, m_argument_count }, m_dst, m_expression_string);
 }
 
 ThrowCompletionOr<void> CallDirectEval::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
-
-    TRY(throw_if_needed_for_call(interpreter, callee, CallType::DirectEval, expression_string()));
-
-    auto argument_values = interpreter.allocate_argument_values(m_argument_count);
-    for (size_t i = 0; i < m_argument_count; ++i)
-        argument_values[i] = interpreter.get(m_arguments[i]);
-    interpreter.set(dst(), TRY(perform_call(interpreter, interpreter.get(m_this_value), CallType::DirectEval, callee, argument_values)));
-    return {};
+    return execute_call<CallType::DirectEval>(interpreter, interpreter.get(m_callee), interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string);
 }
 
 ThrowCompletionOr<void> CallBuiltin::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto callee = interpreter.get(m_callee);
 
-    TRY(throw_if_needed_for_call(interpreter, callee, CallType::Call, expression_string()));
-
     if (m_argument_count == Bytecode::builtin_argument_count(m_builtin) && callee.is_object() && interpreter.realm().get_builtin_value(m_builtin) == &callee.as_object()) {
         interpreter.set(dst(), TRY(dispatch_builtin_call(interpreter, m_builtin, { m_arguments, m_argument_count })));
-
         return {};
     }
 
-    auto argument_values = interpreter.allocate_argument_values(m_argument_count);
-    for (size_t i = 0; i < m_argument_count; ++i)
-        argument_values[i] = interpreter.get(m_arguments[i]);
-    interpreter.set(dst(), TRY(perform_call(interpreter, interpreter.get(m_this_value), CallType::Call, callee, argument_values)));
+    return execute_call<CallType::Call>(interpreter, callee, interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string);
+}
+
+template<CallType call_type>
+static ThrowCompletionOr<void> call_with_argument_array(
+    Bytecode::Interpreter& interpreter,
+    Value callee,
+    Value this_value,
+    Value arguments,
+    Operand dst,
+    Optional<StringTableIndex> const& expression_string)
+{
+    TRY(throw_if_needed_for_call(interpreter, callee, call_type, expression_string));
+
+    auto& function = callee.as_function();
+
+    auto& argument_array = arguments.as_array();
+    auto argument_array_length = argument_array.indexed_properties().array_like_size();
+
+    ExecutionContext* callee_context = nullptr;
+    size_t argument_count = argument_array_length;
+    size_t registers_and_constants_and_locals_count = 0;
+    TRY(function.get_stack_frame_size(registers_and_constants_and_locals_count, argument_count));
+    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(argument_array_length, argument_count));
+
+    auto* callee_context_argument_values = callee_context->arguments.data();
+    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto const insn_argument_count = argument_array_length;
+
+    for (size_t i = 0; i < insn_argument_count; ++i) {
+        if (auto maybe_value = argument_array.indexed_properties().get(i); maybe_value.has_value())
+            callee_context_argument_values[i] = maybe_value.release_value().value;
+        else
+            callee_context_argument_values[i] = js_undefined();
+    }
+    for (size_t i = insn_argument_count; i < callee_context_argument_count; ++i)
+        callee_context_argument_values[i] = js_undefined();
+    callee_context->passed_argument_count = insn_argument_count;
+
+    Value retval;
+    if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {
+        auto& vm = interpreter.vm();
+        retval = TRY(perform_eval(vm, !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), vm.in_strict_mode() ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
+    } else if (call_type == CallType::Construct) {
+        retval = TRY(function.internal_construct(*callee_context, function));
+    } else {
+        retval = TRY(function.internal_call(*callee_context, this_value));
+    }
+
+    interpreter.set(dst, retval);
     return {};
 }
 
 ThrowCompletionOr<void> CallWithArgumentArray::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
-    TRY(throw_if_needed_for_call(interpreter, callee, call_type(), expression_string()));
-    auto argument_values = argument_list_evaluation(interpreter, interpreter.get(arguments()));
-    interpreter.set(dst(), TRY(perform_call(interpreter, interpreter.get(m_this_value), call_type(), callee, move(argument_values))));
-    return {};
+    return call_with_argument_array<CallType::Call>(interpreter, interpreter.get(callee()), interpreter.get(this_value()), interpreter.get(arguments()), dst(), expression_string());
+}
+
+ThrowCompletionOr<void> CallDirectEvalWithArgumentArray::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    return call_with_argument_array<CallType::DirectEval>(interpreter, interpreter.get(callee()), interpreter.get(this_value()), interpreter.get(arguments()), dst(), expression_string());
+}
+
+ThrowCompletionOr<void> CallConstructWithArgumentArray::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    return call_with_argument_array<CallType::Construct>(interpreter, interpreter.get(callee()), js_undefined(), interpreter.get(arguments()), dst(), expression_string());
 }
 
 // 13.3.7.1 Runtime Semantics: Evaluation, https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
 ThrowCompletionOr<void> SuperCallWithArgumentArray::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    interpreter.set(dst(), TRY(super_call_with_argument_array(interpreter, interpreter.get(arguments()), m_is_synthetic)));
+    auto& vm = interpreter.vm();
+
+    // 1. Let newTarget be GetNewTarget().
+    auto new_target = vm.get_new_target();
+
+    // 2. Assert: Type(newTarget) is Object.
+    VERIFY(new_target.is_object());
+
+    // 3. Let func be GetSuperConstructor().
+    auto* func = get_super_constructor(vm);
+
+    // NON-STANDARD: We're doing this step earlier to streamline control flow.
+    // 5. If IsConstructor(func) is false, throw a TypeError exception.
+    if (!Value(func).is_constructor())
+        return vm.throw_completion<TypeError>(ErrorType::NotAConstructor, "Super constructor");
+
+    auto& function = static_cast<FunctionObject&>(*func);
+
+    // 4. Let argList be ? ArgumentListEvaluation of Arguments.
+    auto& argument_array = interpreter.get(m_arguments).as_array();
+    size_t argument_array_length = 0;
+
+    if (m_is_synthetic) {
+        argument_array_length = MUST(length_of_array_like(vm, argument_array));
+    } else {
+        argument_array_length = argument_array.indexed_properties().array_like_size();
+    }
+
+    ExecutionContext* callee_context = nullptr;
+    size_t argument_count = argument_array_length;
+    size_t registers_and_constants_and_locals_count = 0;
+    TRY(function.get_stack_frame_size(registers_and_constants_and_locals_count, argument_count));
+    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(argument_array_length, argument_count));
+
+    auto* callee_context_argument_values = callee_context->arguments.data();
+    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto const insn_argument_count = argument_array_length;
+
+    if (m_is_synthetic) {
+        for (size_t i = 0; i < insn_argument_count; ++i)
+            callee_context_argument_values[i] = argument_array.get_without_side_effects(PropertyKey { i });
+    } else {
+        for (size_t i = 0; i < insn_argument_count; ++i) {
+            if (auto maybe_value = argument_array.indexed_properties().get(i); maybe_value.has_value())
+                callee_context_argument_values[i] = maybe_value.release_value().value;
+            else
+                callee_context_argument_values[i] = js_undefined();
+        }
+    }
+    for (size_t i = insn_argument_count; i < callee_context_argument_count; ++i)
+        callee_context_argument_values[i] = js_undefined();
+    callee_context->passed_argument_count = insn_argument_count;
+
+    // 6. Let result be ? Construct(func, argList, newTarget).
+    auto result = TRY(function.internal_construct(*callee_context, new_target.as_function()));
+
+    // 7. Let thisER be GetThisEnvironment().
+    auto& this_environment = as<FunctionEnvironment>(*get_this_environment(vm));
+
+    // 8. Perform ? thisER.BindThisValue(result).
+    TRY(this_environment.bind_this_value(vm, result));
+
+    // 9. Let F be thisER.[[FunctionObject]].
+    auto& f = this_environment.function_object();
+
+    // 10. Assert: F is an ECMAScript function object.
+    // NOTE: This is implied by the strong C++ type.
+
+    // 11. Perform ? InitializeInstanceElements(result, F).
+    TRY(result->initialize_instance_elements(f));
+
+    // 12. Return result.
+    interpreter.set(m_dst, result);
     return {};
 }
 
@@ -3653,19 +3699,6 @@ ByteString JumpUndefined::to_byte_string_impl(Bytecode::Executable const& execut
         m_false_target);
 }
 
-static StringView call_type_to_string(CallType type)
-{
-    switch (type) {
-    case CallType::Call:
-        return ""sv;
-    case CallType::Construct:
-        return " (Construct)"sv;
-    case CallType::DirectEval:
-        return " (DirectEval)"sv;
-    }
-    VERIFY_NOT_REACHED();
-}
-
 ByteString Call::to_byte_string_impl(Bytecode::Executable const& executable) const
 {
     StringBuilder builder;
@@ -3737,13 +3770,38 @@ ByteString CallBuiltin::to_byte_string_impl(Bytecode::Executable const& executab
 
 ByteString CallWithArgumentArray::to_byte_string_impl(Bytecode::Executable const& executable) const
 {
-    auto type = call_type_to_string(m_type);
     StringBuilder builder;
-    builder.appendff("CallWithArgumentArray{} {}, {}, {}, {}",
-        type,
+    builder.appendff("CallWithArgumentArray {}, {}, {}, {}",
         format_operand("dst"sv, m_dst, executable),
         format_operand("callee"sv, m_callee, executable),
         format_operand("this"sv, m_this_value, executable),
+        format_operand("arguments"sv, m_arguments, executable));
+
+    if (m_expression_string.has_value())
+        builder.appendff(" ({})", executable.get_string(m_expression_string.value()));
+    return builder.to_byte_string();
+}
+
+ByteString CallDirectEvalWithArgumentArray::to_byte_string_impl(Bytecode::Executable const& executable) const
+{
+    StringBuilder builder;
+    builder.appendff("CallDirectEvalWithArgumentArray {}, {}, {}, {}",
+        format_operand("dst"sv, m_dst, executable),
+        format_operand("callee"sv, m_callee, executable),
+        format_operand("this"sv, m_this_value, executable),
+        format_operand("arguments"sv, m_arguments, executable));
+
+    if (m_expression_string.has_value())
+        builder.appendff(" ({})", executable.get_string(m_expression_string.value()));
+    return builder.to_byte_string();
+}
+
+ByteString CallConstructWithArgumentArray::to_byte_string_impl(Bytecode::Executable const& executable) const
+{
+    StringBuilder builder;
+    builder.appendff("CallConstructWithArgumentArray {}, {}, {}",
+        format_operand("dst"sv, m_dst, executable),
+        format_operand("callee"sv, m_callee, executable),
         format_operand("arguments"sv, m_arguments, executable));
 
     if (m_expression_string.has_value())
