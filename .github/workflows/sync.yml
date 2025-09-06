@@ -1,4 +1,4 @@
-name: Sync with upstream (preserve .github)
+name: Sync with upstream (preserve .github and README.md)
 
 on:
   schedule:
@@ -28,20 +28,17 @@ jobs:
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream
 
-      - name: Sync with upstream but skip .github
+      - name: Sync with upstream but skip .github and README.md
         run: |
-          # Make sure we’re on master
           git checkout master
-
-          # Create a temp worktree to stage changes
           git fetch upstream master
-          git checkout upstream/master -- .  # Bring in everything
 
-          # Restore our own .github folder
-          git restore --source=HEAD --staged --worktree .github || true
-          git restore --staged --worktree -- README.md  # Keeps README as-is
-          
-          # Commit the sync
-          git add -A
-          git commit -m "Sync with upstream (excluding .github)" || echo "No changes to commit"
+          # Merge upstream changes without committing yet
+          git merge upstream/master --no-commit --no-ff || true
+
+          # Restore our files
+          git restore --source=HEAD --staged --worktree .github README.md
+
+          # Commit if there are changes
+          git commit -m "Sync with upstream (excluding .github and README.md)" || echo "No changes to commit"
           git push origin master
