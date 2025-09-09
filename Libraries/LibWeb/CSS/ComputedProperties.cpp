@@ -445,43 +445,14 @@ Optional<int> ComputedProperties::z_index() const
     return {};
 }
 
-float ComputedProperties::resolve_opacity_value(StyleValue const& value)
-{
-    float unclamped_opacity = 1.0f;
-
-    if (value.is_number()) {
-        unclamped_opacity = value.as_number().number();
-    } else if (value.is_calculated()) {
-        auto const& calculated = value.as_calculated();
-        CalculationResolutionContext context {};
-        if (calculated.resolves_to_percentage()) {
-            auto maybe_percentage = value.as_calculated().resolve_percentage_deprecated(context);
-            if (maybe_percentage.has_value())
-                unclamped_opacity = maybe_percentage->as_fraction();
-            else
-                dbgln("Unable to resolve calc() as opacity (percentage): {}", value.to_string(SerializationMode::Normal));
-        } else if (calculated.resolves_to_number()) {
-            auto maybe_number = value.as_calculated().resolve_number_deprecated(context);
-            if (maybe_number.has_value())
-                unclamped_opacity = maybe_number.value();
-            else
-                dbgln("Unable to resolve calc() as opacity (number): {}", value.to_string(SerializationMode::Normal));
-        }
-    }
-
-    return clamp(unclamped_opacity, 0.0f, 1.0f);
-}
-
 float ComputedProperties::opacity() const
 {
-    auto const& value = property(PropertyID::Opacity);
-    return resolve_opacity_value(value);
+    return property(PropertyID::Opacity).as_number().number();
 }
 
 float ComputedProperties::fill_opacity() const
 {
-    auto const& value = property(PropertyID::FillOpacity);
-    return resolve_opacity_value(value);
+    return property(PropertyID::FillOpacity).as_number().number();
 }
 
 StrokeLinecap ComputedProperties::stroke_linecap() const
@@ -511,14 +482,12 @@ NumberOrCalculated ComputedProperties::stroke_miterlimit() const
 
 float ComputedProperties::stroke_opacity() const
 {
-    auto const& value = property(PropertyID::StrokeOpacity);
-    return resolve_opacity_value(value);
+    return property(PropertyID::StrokeOpacity).as_number().number();
 }
 
 float ComputedProperties::stop_opacity() const
 {
-    auto const& value = property(PropertyID::StopOpacity);
-    return resolve_opacity_value(value);
+    return property(PropertyID::StopOpacity).as_number().number();
 }
 
 FillRule ComputedProperties::fill_rule() const
@@ -535,8 +504,7 @@ ClipRule ComputedProperties::clip_rule() const
 
 float ComputedProperties::flood_opacity() const
 {
-    auto const& value = property(PropertyID::FloodOpacity);
-    return resolve_opacity_value(value);
+    return property(PropertyID::FloodOpacity).as_number().number();
 }
 
 FlexDirection ComputedProperties::flex_direction() const
