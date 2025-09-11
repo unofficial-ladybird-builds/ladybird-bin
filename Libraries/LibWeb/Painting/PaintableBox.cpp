@@ -1537,7 +1537,8 @@ void PaintableBox::resolve_paint_properties()
 
         // Section 2.11.2: If the computed value of background-image on the root element is none and its background-color is transparent,
         // user agents must instead propagate the computed values of the background properties from that element’s first HTML BODY child element.
-        if (document().html_element()->should_use_body_background_properties()) {
+        auto& html_element = as<HTML::HTMLHtmlElement>(*layout_node_with_style_and_box_metrics().dom_node());
+        if (html_element.should_use_body_background_properties()) {
             background_layers = document().background_layers();
             background_color = document().background_color();
         }
@@ -1588,7 +1589,8 @@ void PaintableWithLines::resolve_paint_properties()
                     return max(glyph_height.scaled(0.1), 1);
                 },
                 [&](CSS::LengthPercentage const& length_percentage) {
-                    return length_percentage.resolved(text_node, CSS::Length(1, CSS::Length::Type::Em).to_px(text_node)).to_px(*fragment.m_layout_node);
+                    auto resolved_length = length_percentage.resolved(text_node, CSS::Length(1, CSS::Length::Type::Em).to_px(text_node)).to_px(*fragment.m_layout_node);
+                    return max(resolved_length, 1);
                 });
         }();
         fragment.set_text_decoration_thickness(css_line_thickness);

@@ -354,7 +354,7 @@
     ]
   },
   "background-blend-mode": {
-    "animation-type": "none",
+    "animation-type": "discrete",
     "inherited": false,
     "initial": "normal",
     "valid-types": [
@@ -780,7 +780,8 @@
     ],
     "valid-identifiers": [
       "auto"
-    ]
+    ],
+    "percentages-resolve-to": "length"
   },
   "border-inline": {
     "inherited": false,
@@ -2124,7 +2125,7 @@
     "max-values": 1
   },
   "isolation": {
-    "animation-type": "none",
+    "animation-type": "discrete",
     "inherited": false,
     "initial": "auto",
     "valid-types": [
@@ -2633,7 +2634,7 @@
     ]
   },
   "mix-blend-mode": {
-    "animation-type": "none",
+    "animation-type": "discrete",
     "inherited": false,
     "initial": "normal",
     "valid-types": [

@@ -111,8 +111,8 @@ public:
     WhiteSpaceCollapse white_space_collapse() const;
     WhiteSpaceTrimData white_space_trim() const;
     WordBreak word_break() const;
-    Optional<LengthPercentage> word_spacing() const;
-    Optional<LengthOrCalculated> letter_spacing() const;
+    CSSPixels word_spacing() const;
+    CSSPixels letter_spacing() const;
     LineStyle line_style(PropertyID) const;
     OutlineStyle outline_style() const;
     Vector<TextDecorationLine> text_decoration_line() const;
