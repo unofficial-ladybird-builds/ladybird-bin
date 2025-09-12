@@ -699,7 +699,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
     m_sibling_invalidation_distance = 0;
 
     auto& style_computer = document().style_computer();
-    auto new_computed_properties = style_computer.compute_style(*this, {}, did_change_custom_properties);
+    auto new_computed_properties = style_computer.compute_style({ *this }, did_change_custom_properties);
 
     // Tables must not inherit -libweb-* values for text-align.
     // FIXME: Find the spec for this.
@@ -739,7 +739,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
         style_computer.push_ancestor(*this);
 
         auto pseudo_element_style = computed_properties(pseudo_element);
-        auto new_pseudo_element_style = style_computer.compute_pseudo_element_style_if_needed(*this, pseudo_element, did_change_custom_properties);
+        auto new_pseudo_element_style = style_computer.compute_pseudo_element_style_if_needed({ *this, pseudo_element }, did_change_custom_properties);
 
         // TODO: Can we be smarter about invalidation?
         if (pseudo_element_style && new_pseudo_element_style) {
@@ -818,7 +818,9 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
             continue;
 
         RefPtr<CSS::StyleValue const> old_animated_value = computed_properties->animated_property_values().get(property_id).value_or({});
-        RefPtr<CSS::StyleValue const> new_animated_value = CSS::StyleComputer::get_animated_inherit_value(property_id, this).map([&](auto& value) { return value.ptr(); }).value_or({});
+        RefPtr<CSS::StyleValue const> new_animated_value = CSS::StyleComputer::get_animated_inherit_value(property_id, { *this })
+                                                               .map([&](auto& value) { return value.ptr(); })
+                                                               .value_or({});
 
         invalidation |= CSS::compute_property_invalidation(property_id, old_animated_value, new_animated_value);
 
@@ -827,7 +829,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
         else if (old_animated_value && computed_properties->is_animated_property_inherited(property_id))
             computed_properties->remove_animated_property(property_id);
 
-        RefPtr new_value = CSS::StyleComputer::get_inherit_value(property_id, this);
+        RefPtr new_value = CSS::StyleComputer::get_inherit_value(property_id, { *this });
         computed_properties->set_property(property_id, *new_value, CSS::ComputedProperties::Inherited::Yes);
         invalidation |= CSS::compute_property_invalidation(property_id, old_value, new_value);
     }
@@ -835,7 +837,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
     if (invalidation.is_none() && old_values_with_relative_units.is_empty())
         return invalidation;
 
-    document().style_computer().compute_font(*computed_properties, this, {});
+    document().style_computer().compute_font(*computed_properties, AbstractElement { *this });
     document().style_computer().compute_property_values(*computed_properties);
 
     for (auto [property_id, old_value] : old_values_with_relative_units) {

@@ -124,7 +124,7 @@ struct RuleCache {
     HashMap<FlyString, NonnullRefPtr<Animations::KeyframeEffect::KeyFrameSet>> rules_by_animation_keyframes;
 
     void add_rule(MatchingRule const&, Optional<PseudoElement>, bool contains_root_pseudo_class);
-    void for_each_matching_rules(DOM::Element const&, Optional<PseudoElement>, Function<IterationDecision(Vector<MatchingRule> const&)> callback) const;
+    void for_each_matching_rules(DOM::AbstractElement, Function<IterationDecision(Vector<MatchingRule> const&)> callback) const;
 };
 
 class FontLoader;
@@ -135,8 +135,8 @@ class WEB_API StyleComputer final : public GC::Cell {
 
 public:
     static void for_each_property_expanding_shorthands(PropertyID, StyleValue const&, Function<void(PropertyID, StyleValue const&)> const& set_longhand_property);
-    static NonnullRefPtr<StyleValue const> get_inherit_value(CSS::PropertyID, DOM::Element const*, Optional<CSS::PseudoElement> = {});
-    static Optional<NonnullRefPtr<StyleValue const>> get_animated_inherit_value(CSS::PropertyID, DOM::Element const*, Optional<CSS::PseudoElement> = {});
+    static NonnullRefPtr<StyleValue const> get_inherit_value(PropertyID, DOM::AbstractElement);
+    static Optional<NonnullRefPtr<StyleValue const>> get_animated_inherit_value(PropertyID, DOM::AbstractElement);
 
     static Optional<String> user_agent_style_sheet_source(StringView name);
 
@@ -152,12 +152,12 @@ public:
 
     [[nodiscard]] GC::Ref<ComputedProperties> create_document_style() const;
 
-    [[nodiscard]] GC::Ref<ComputedProperties> compute_style(DOM::Element&, Optional<CSS::PseudoElement> = {}, Optional<bool&> did_change_custom_properties = {}) const;
-    [[nodiscard]] GC::Ptr<ComputedProperties> compute_pseudo_element_style_if_needed(DOM::Element&, Optional<CSS::PseudoElement>, Optional<bool&> did_change_custom_properties) const;
+    [[nodiscard]] GC::Ref<ComputedProperties> compute_style(DOM::AbstractElement, Optional<bool&> did_change_custom_properties = {}) const;
+    [[nodiscard]] GC::Ptr<ComputedProperties> compute_pseudo_element_style_if_needed(DOM::AbstractElement, Optional<bool&> did_change_custom_properties) const;
 
     [[nodiscard]] RuleCache const& get_pseudo_class_rule_cache(PseudoClass) const;
 
-    [[nodiscard]] Vector<MatchingRule const*> collect_matching_rules(DOM::Element const&, CascadeOrigin, Optional<CSS::PseudoElement>, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name = {}) const;
+    [[nodiscard]] Vector<MatchingRule const*> collect_matching_rules(DOM::AbstractElement, CascadeOrigin, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name = {}) const;
 
     InvalidationSet invalidation_set_for_properties(Vector<InvalidationSet::Property> const&) const;
     bool invalidation_property_used_in_has_selector(InvalidationSet::Property const&) const;
@@ -176,23 +176,23 @@ public:
 
     static CSSPixels default_user_font_size();
     static CSSPixelFraction absolute_size_mapping(Keyword);
-    RefPtr<Gfx::FontCascadeList const> compute_font_for_style_values(DOM::Element const* element, Optional<CSS::PseudoElement> pseudo_element, StyleValue const& font_family, StyleValue const& font_size, StyleValue const& font_style, StyleValue const& font_weight, StyleValue const& font_stretch, int math_depth = 0) const;
+    RefPtr<Gfx::FontCascadeList const> compute_font_for_style_values(Optional<DOM::AbstractElement>, StyleValue const& font_family, StyleValue const& font_size, StyleValue const& font_style, StyleValue const& font_weight, StyleValue const& font_stretch, int math_depth = 0) const;
 
-    [[nodiscard]] RefPtr<StyleValue const> recascade_font_size_if_needed(DOM::Element&, Optional<CSS::PseudoElement> pseudo_element, CascadedProperties&) const;
+    [[nodiscard]] RefPtr<StyleValue const> recascade_font_size_if_needed(DOM::AbstractElement, CascadedProperties&) const;
 
     void set_viewport_rect(Badge<DOM::Document>, CSSPixelRect const& viewport_rect) { m_viewport_rect = viewport_rect; }
 
-    void collect_animation_into(DOM::Element&, Optional<CSS::PseudoElement>, GC::Ref<Animations::KeyframeEffect> animation, ComputedProperties&) const;
+    void collect_animation_into(DOM::AbstractElement, GC::Ref<Animations::KeyframeEffect> animation, ComputedProperties&) const;
 
     [[nodiscard]] bool may_have_has_selectors() const;
     [[nodiscard]] bool have_has_selectors() const;
 
     size_t number_of_css_font_faces_with_loading_in_progress() const;
 
-    [[nodiscard]] GC::Ref<ComputedProperties> compute_properties(DOM::Element&, Optional<PseudoElement>, CascadedProperties&) const;
+    [[nodiscard]] GC::Ref<ComputedProperties> compute_properties(DOM::AbstractElement, CascadedProperties&) const;
 
     void compute_property_values(ComputedProperties&) const;
-    void compute_font(ComputedProperties&, DOM::Element const*, Optional<CSS::PseudoElement>) const;
+    void compute_font(ComputedProperties&, Optional<DOM::AbstractElement>) const;
 
     [[nodiscard]] inline bool should_reject_with_ancestor_filter(Selector const&) const;
 
@@ -227,19 +227,19 @@ private:
         Vector<LayerMatchingRules> author_rules;
     };
 
-    [[nodiscard]] MatchingRuleSet build_matching_rule_set(DOM::Element const&, Optional<PseudoElement>, PseudoClassBitmap& attempted_pseudo_class_matches, bool& did_match_any_pseudo_element_rules, ComputeStyleMode) const;
+    [[nodiscard]] MatchingRuleSet build_matching_rule_set(DOM::AbstractElement, PseudoClassBitmap& attempted_pseudo_class_matches, bool& did_match_any_pseudo_element_rules, ComputeStyleMode) const;
 
-    LogicalAliasMappingContext compute_logical_alias_mapping_context(DOM::Element&, Optional<CSS::PseudoElement>, ComputeStyleMode, MatchingRuleSet const&) const;
-    [[nodiscard]] GC::Ptr<ComputedProperties> compute_style_impl(DOM::Element&, Optional<CSS::PseudoElement>, ComputeStyleMode, Optional<bool&> did_change_custom_properties) const;
-    [[nodiscard]] GC::Ref<CascadedProperties> compute_cascaded_values(DOM::Element&, Optional<CSS::PseudoElement>, bool did_match_any_pseudo_element_rules, ComputeStyleMode, MatchingRuleSet const&, Optional<LogicalAliasMappingContext>, ReadonlySpan<PropertyID> properties_to_cascade) const;
+    LogicalAliasMappingContext compute_logical_alias_mapping_context(DOM::AbstractElement, ComputeStyleMode, MatchingRuleSet const&) const;
+    [[nodiscard]] GC::Ptr<ComputedProperties> compute_style_impl(DOM::AbstractElement, ComputeStyleMode, Optional<bool&> did_change_custom_properties) const;
+    [[nodiscard]] GC::Ref<CascadedProperties> compute_cascaded_values(DOM::AbstractElement, bool did_match_any_pseudo_element_rules, ComputeStyleMode, MatchingRuleSet const&, Optional<LogicalAliasMappingContext>, ReadonlySpan<PropertyID> properties_to_cascade) const;
     static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_ascending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
     static RefPtr<Gfx::FontCascadeList const> find_matching_font_weight_descending(Vector<MatchingFontCandidate> const& candidates, int target_weight, float font_size_in_pt, bool inclusive);
     RefPtr<Gfx::FontCascadeList const> font_matching_algorithm(FlyString const& family_name, int weight, int slope, float font_size_in_pt) const;
     void compute_custom_properties(ComputedProperties&, DOM::AbstractElement) const;
     void compute_math_depth(ComputedProperties&, Optional<DOM::AbstractElement>) const;
-    void start_needed_transitions(ComputedProperties const& old_style, ComputedProperties& new_style, DOM::Element&, Optional<PseudoElement>) const;
+    void start_needed_transitions(ComputedProperties const& old_style, ComputedProperties& new_style, DOM::AbstractElement) const;
     void resolve_effective_overflow_values(ComputedProperties&) const;
-    void transform_box_type_if_needed(ComputedProperties&, DOM::Element const&, Optional<CSS::PseudoElement>) const;
+    void transform_box_type_if_needed(ComputedProperties&, DOM::AbstractElement) const;
 
     template<typename Callback>
     void for_each_stylesheet(CascadeOrigin, Callback) const;
@@ -253,8 +253,7 @@ private:
 
     void cascade_declarations(
         CascadedProperties&,
-        DOM::Element&,
-        Optional<CSS::PseudoElement>,
+        DOM::AbstractElement,
         Vector<MatchingRule const*> const&,
         CascadeOrigin,
         Important,
