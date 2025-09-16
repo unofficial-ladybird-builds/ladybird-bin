@@ -57,6 +57,7 @@
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
+#include <LibWeb/CSS/StyleValues/TextUnderlinePositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransitionStyleValue.h>
@@ -749,6 +750,10 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         if (auto parsed_value = parse_shadow_value(tokens, AllowInsetKeyword::No); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
+    case PropertyID::TextUnderlinePosition:
+        if (auto parsed_value = parse_text_underline_position_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
     case PropertyID::TouchAction:
         if (auto parsed_value = parse_touch_action_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
@@ -848,7 +853,7 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
 
     auto stream = TokenStream { component_values };
 
-    HashMap<UnderlyingType<PropertyID>, Vector<ValueComparingNonnullRefPtr<StyleValue const>>> assigned_values;
+    OrderedHashMap<UnderlyingType<PropertyID>, Vector<ValueComparingNonnullRefPtr<StyleValue const>>> assigned_values;
 
     while (stream.has_next_token() && !unassigned_properties.is_empty()) {
         auto property_and_value = parse_css_value_for_properties(unassigned_properties, stream);
@@ -1570,6 +1575,7 @@ RefPtr<StyleValue const> Parser::parse_single_background_size_value(PropertyID p
     return BackgroundSizeStyleValue::create(x_size.release_value(), y_size.release_value());
 }
 
+// https://drafts.csswg.org/css-backgrounds-3/#propdef-border
 RefPtr<StyleValue const> Parser::parse_border_value(PropertyID property_id, TokenStream<ComponentValue>& tokens)
 {
     RefPtr<StyleValue const> border_width;
@@ -1639,11 +1645,17 @@ RefPtr<StyleValue const> Parser::parse_border_value(PropertyID property_id, Toke
     if (!border_color)
         border_color = property_initial_value(color_property);
 
-    // FIXME: Also reset border-image, in line with the spec: https://www.w3.org/TR/css-backgrounds-3/#border-shorthands
     transaction.commit();
+
+    if (first_is_one_of(property_id, PropertyID::BorderBlock, PropertyID::BorderInline))
+        return ShorthandStyleValue::create(property_id,
+            { width_property, style_property, color_property },
+            { border_width.release_nonnull(), border_style.release_nonnull(), border_color.release_nonnull() });
+
+    // The border shorthand also resets border-image to its initial value
     return ShorthandStyleValue::create(property_id,
-        { width_property, style_property, color_property },
-        { border_width.release_nonnull(), border_style.release_nonnull(), border_color.release_nonnull() });
+        { width_property, style_property, color_property, PropertyID::BorderImage },
+        { border_width.release_nonnull(), border_style.release_nonnull(), border_color.release_nonnull(), property_initial_value(PropertyID::BorderImage) });
 }
 
 // https://drafts.csswg.org/css-backgrounds/#border-image
@@ -4274,6 +4286,51 @@ RefPtr<StyleValue const> Parser::parse_text_decoration_line_value(TokenStream<Co
     });
 
     return StyleValueList::create(move(style_values), StyleValueList::Separator::Space);
+}
+
+// https://drafts.csswg.org/css-text-decor-4/#text-underline-position-property
+RefPtr<StyleValue const> Parser::parse_text_underline_position_value(TokenStream<ComponentValue>& tokens)
+{
+    // auto | [ from-font | under ] || [ left | right ]
+    auto transaction = tokens.begin_transaction();
+
+    if (parse_all_as_single_keyword_value(tokens, Keyword::Auto)) {
+        transaction.commit();
+        return TextUnderlinePositionStyleValue::create(TextUnderlinePositionHorizontal::Auto, TextUnderlinePositionVertical::Auto);
+    }
+
+    Optional<TextUnderlinePositionHorizontal> horizontal_value;
+    Optional<TextUnderlinePositionVertical> vertical_value;
+
+    while (tokens.has_next_token()) {
+        auto keyword_value = parse_keyword_value(tokens);
+
+        if (!keyword_value)
+            return nullptr;
+
+        if (auto maybe_horizontal_value = keyword_to_text_underline_position_horizontal(keyword_value->to_keyword()); maybe_horizontal_value.has_value()) {
+            if (maybe_horizontal_value == TextUnderlinePositionHorizontal::Auto || horizontal_value.has_value())
+                return nullptr;
+
+            horizontal_value = maybe_horizontal_value;
+
+            continue;
+        }
+
+        if (auto maybe_vertical_value = keyword_to_text_underline_position_vertical(keyword_value->to_keyword()); maybe_vertical_value.has_value()) {
+            if (maybe_vertical_value == TextUnderlinePositionVertical::Auto || vertical_value.has_value())
+                return nullptr;
+
+            vertical_value = maybe_vertical_value;
+
+            continue;
+        }
+
+        return nullptr;
+    }
+
+    transaction.commit();
+    return TextUnderlinePositionStyleValue::create(horizontal_value.value_or(TextUnderlinePositionHorizontal::Auto), vertical_value.value_or(TextUnderlinePositionVertical::Auto));
 }
 
 // https://www.w3.org/TR/pointerevents/#the-touch-action-css-property

@@ -498,7 +498,8 @@
     "longhands": [
       "border-width",
       "border-style",
-      "border-color"
+      "border-color",
+      "border-image"
     ],
     "needs-layout-for-getcomputedstyle": true
   },
@@ -722,7 +723,7 @@
   },
   "border-image": {
     "inherited": false,
-    "initial": "none 100% 1 0 stretch",
+    "initial": "none 100% / 1 / 0 stretch",
     "longhands": [
       "border-image-source",
       "border-image-slice",
@@ -3381,6 +3382,15 @@
       "percentage [-∞,∞]"
     ],
     "percentages-resolve-to": "length"
+  },
+  "text-underline-position": {
+    "animation-type": "discrete",
+    "inherited": true,
+    "initial": "auto",
+    "valid-types": [
+      "text-underline-position-horizontal",
+      "text-underline-position-vertical"
+    ]
   },
   "text-wrap": {
     "inherited": true,

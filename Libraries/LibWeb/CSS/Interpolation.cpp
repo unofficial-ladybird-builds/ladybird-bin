@@ -1024,132 +1024,161 @@ RefPtr<StyleValue const> interpolate_box_shadow(DOM::Element& element, Calculati
     return StyleValueList::create(move(result_shadows), StyleValueList::Separator::Comma);
 }
 
+static RefPtr<StyleValue const> interpolate_mixed_value(CalculationContext const& calculation_context, StyleValue const& from, StyleValue const& to, float delta)
+{
+    auto get_value_type_of_numeric_style_value = [&calculation_context](StyleValue const& value) -> Optional<ValueType> {
+        switch (value.type()) {
+        case StyleValue::Type::Angle:
+            return ValueType::Angle;
+        case StyleValue::Type::Frequency:
+            return ValueType::Frequency;
+        case StyleValue::Type::Integer:
+            return ValueType::Integer;
+        case StyleValue::Type::Length:
+            return ValueType::Length;
+        case StyleValue::Type::Number:
+            return ValueType::Number;
+        case StyleValue::Type::Percentage:
+            return calculation_context.percentages_resolve_as.value_or(ValueType::Percentage);
+        case StyleValue::Type::Resolution:
+            return ValueType::Resolution;
+        case StyleValue::Type::Time:
+            return ValueType::Time;
+        case StyleValue::Type::Calculated: {
+            auto const& calculated = value.as_calculated();
+            if (calculated.resolves_to_angle_percentage())
+                return ValueType::Angle;
+            if (calculated.resolves_to_frequency_percentage())
+                return ValueType::Frequency;
+            if (calculated.resolves_to_length_percentage())
+                return ValueType::Length;
+            if (calculated.resolves_to_resolution())
+                return ValueType::Resolution;
+            if (calculated.resolves_to_number())
+                return calculation_context.resolve_numbers_as_integers ? ValueType::Integer : ValueType::Number;
+            if (calculated.resolves_to_percentage())
+                return calculation_context.percentages_resolve_as.value_or(ValueType::Percentage);
+            if (calculated.resolves_to_time_percentage())
+                return ValueType::Time;
+
+            return {};
+        }
+        default:
+            return {};
+        }
+    };
+
+    auto from_value_type = get_value_type_of_numeric_style_value(from);
+    auto to_value_type = get_value_type_of_numeric_style_value(to);
+
+    if (from_value_type.has_value() && from_value_type == to_value_type) {
+        auto to_calculation_node = [&calculation_context](StyleValue const& value) -> NonnullRefPtr<CalculationNode const> {
+            switch (value.type()) {
+            case StyleValue::Type::Angle:
+                return NumericCalculationNode::create(value.as_angle().angle(), calculation_context);
+            case StyleValue::Type::Frequency:
+                return NumericCalculationNode::create(value.as_frequency().frequency(), calculation_context);
+            case StyleValue::Type::Integer:
+                // https://drafts.csswg.org/css-values-4/#combine-integers
+                // Interpolation of <integer> is defined as Vresult = round((1 - p) × VA + p × VB); that is,
+                // interpolation happens in the real number space as for <number>s, and the result is converted to an
+                // <integer> by rounding to the nearest integer.
+                return NumericCalculationNode::create(Number { Number::Type::Number, static_cast<double>(value.as_integer().integer()) }, calculation_context);
+            case StyleValue::Type::Length:
+                return NumericCalculationNode::create(value.as_length().length(), calculation_context);
+            case StyleValue::Type::Number:
+                return NumericCalculationNode::create(Number { Number::Type::Number, value.as_number().number() }, calculation_context);
+            case StyleValue::Type::Percentage:
+                return NumericCalculationNode::create(value.as_percentage().percentage(), calculation_context);
+            case StyleValue::Type::Time:
+                return NumericCalculationNode::create(value.as_time().time(), calculation_context);
+            case StyleValue::Type::Calculated:
+                return value.as_calculated().calculation();
+            default:
+                VERIFY_NOT_REACHED();
+            }
+        };
+
+        // https://drafts.csswg.org/css-values-4/#combine-mixed
+        // The computed value of a percentage-dimension mix is defined as
+        // FIXME: a computed dimension if the percentage component is zero or is defined specifically to compute to a dimension value
+        // a computed percentage if the dimension component is zero
+        // a computed calc() expression otherwise
+        if (auto const* from_dimension_value = as_if<DimensionStyleValue>(from); from_dimension_value && to.type() == StyleValue::Type::Percentage) {
+            auto dimension_component = from_dimension_value->raw_value() * (1.f - delta);
+            auto percentage_component = to.as_percentage().raw_value() * delta;
+            if (dimension_component == 0.f)
+                return PercentageStyleValue::create(Percentage { percentage_component });
+        } else if (auto const* to_dimension_value = as_if<DimensionStyleValue>(to); to_dimension_value && from.type() == StyleValue::Type::Percentage) {
+            auto dimension_component = to_dimension_value->raw_value() * delta;
+            auto percentage_component = from.as_percentage().raw_value() * (1.f - delta);
+            if (dimension_component == 0)
+                return PercentageStyleValue::create(Percentage { percentage_component });
+        }
+
+        auto from_node = to_calculation_node(from);
+        auto to_node = to_calculation_node(to);
+
+        // https://drafts.csswg.org/css-values-4/#combine-math
+        // Interpolation of math functions, with each other or with numeric values and other numeric-valued functions, is defined as Vresult = calc((1 - p) * VA + p * VB).
+        auto from_contribution = ProductCalculationNode::create({
+            from_node,
+            NumericCalculationNode::create(Number { Number::Type::Number, 1.f - delta }, calculation_context),
+        });
+
+        auto to_contribution = ProductCalculationNode::create({
+            to_node,
+            NumericCalculationNode::create(Number { Number::Type::Number, delta }, calculation_context),
+        });
+
+        return CalculatedStyleValue::create(
+            simplify_a_calculation_tree(SumCalculationNode::create({ from_contribution, to_contribution }), calculation_context, {}),
+            *from_node->numeric_type()->added_to(*to_node->numeric_type()),
+            calculation_context);
+    }
+
+    return {};
+}
+
 static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, CalculationContext const& calculation_context, StyleValue const& from, StyleValue const& to, float delta, AllowDiscrete allow_discrete)
 {
     if (from.type() != to.type() || from.is_calculated() || to.is_calculated()) {
         // Handle mixed percentage and dimension types, as well as CalculatedStyleValues
         // https://www.w3.org/TR/css-values-4/#mixed-percentages
-        auto get_value_type_of_numeric_style_value = [&calculation_context](StyleValue const& value) -> Optional<ValueType> {
-            switch (value.type()) {
-            case StyleValue::Type::Angle:
-                return ValueType::Angle;
-            case StyleValue::Type::Frequency:
-                return ValueType::Frequency;
-            case StyleValue::Type::Integer:
-                return ValueType::Integer;
-            case StyleValue::Type::Length:
-                return ValueType::Length;
-            case StyleValue::Type::Number:
-                return ValueType::Number;
-            case StyleValue::Type::Percentage:
-                return calculation_context.percentages_resolve_as.value_or(ValueType::Percentage);
-            case StyleValue::Type::Resolution:
-                return ValueType::Resolution;
-            case StyleValue::Type::Time:
-                return ValueType::Time;
-            case StyleValue::Type::Calculated: {
-                auto const& calculated = value.as_calculated();
-                if (calculated.resolves_to_angle_percentage())
-                    return ValueType::Angle;
-                if (calculated.resolves_to_frequency_percentage())
-                    return ValueType::Frequency;
-                if (calculated.resolves_to_length_percentage())
-                    return ValueType::Length;
-                if (calculated.resolves_to_resolution())
-                    return ValueType::Resolution;
-                if (calculated.resolves_to_number())
-                    return calculation_context.resolve_numbers_as_integers ? ValueType::Integer : ValueType::Number;
-                if (calculated.resolves_to_percentage())
-                    return calculation_context.percentages_resolve_as.value_or(ValueType::Percentage);
-                if (calculated.resolves_to_time_percentage())
-                    return ValueType::Time;
-
-                return {};
-            }
-            default:
-                return {};
-            }
-        };
-
-        auto from_value_type = get_value_type_of_numeric_style_value(from);
-        auto to_value_type = get_value_type_of_numeric_style_value(to);
-
-        if (from_value_type.has_value() && from_value_type == to_value_type) {
-            auto to_calculation_node = [&calculation_context](StyleValue const& value) -> NonnullRefPtr<CalculationNode const> {
-                switch (value.type()) {
-                case StyleValue::Type::Angle:
-                    return NumericCalculationNode::create(value.as_angle().angle(), calculation_context);
-                case StyleValue::Type::Frequency:
-                    return NumericCalculationNode::create(value.as_frequency().frequency(), calculation_context);
-                case StyleValue::Type::Integer:
-                    // https://drafts.csswg.org/css-values-4/#combine-integers
-                    // Interpolation of <integer> is defined as Vresult = round((1 - p) × VA + p × VB); that is,
-                    // interpolation happens in the real number space as for <number>s, and the result is converted to an
-                    // <integer> by rounding to the nearest integer.
-                    return NumericCalculationNode::create(Number { Number::Type::Number, static_cast<double>(value.as_integer().integer()) }, calculation_context);
-                case StyleValue::Type::Length:
-                    return NumericCalculationNode::create(value.as_length().length(), calculation_context);
-                case StyleValue::Type::Number:
-                    return NumericCalculationNode::create(Number { Number::Type::Number, value.as_number().number() }, calculation_context);
-                case StyleValue::Type::Percentage:
-                    return NumericCalculationNode::create(value.as_percentage().percentage(), calculation_context);
-                case StyleValue::Type::Time:
-                    return NumericCalculationNode::create(value.as_time().time(), calculation_context);
-                case StyleValue::Type::Calculated:
-                    return value.as_calculated().calculation();
-                default:
-                    VERIFY_NOT_REACHED();
-                }
-            };
-
-            // https://drafts.csswg.org/css-values-4/#combine-mixed
-            // The computed value of a percentage-dimension mix is defined as
-            // FIXME: a computed dimension if the percentage component is zero or is defined specifically to compute to a dimension value
-            // a computed percentage if the dimension component is zero
-            // a computed calc() expression otherwise
-            if (auto const* from_dimension_value = as_if<DimensionStyleValue>(from); from_dimension_value && to.type() == StyleValue::Type::Percentage) {
-                auto dimension_component = from_dimension_value->raw_value() * (1.f - delta);
-                auto percentage_component = to.as_percentage().raw_value() * delta;
-                if (dimension_component == 0.f)
-                    return PercentageStyleValue::create(Percentage { percentage_component });
-            } else if (auto const* to_dimension_value = as_if<DimensionStyleValue>(to); to_dimension_value && from.type() == StyleValue::Type::Percentage) {
-                auto dimension_component = to_dimension_value->raw_value() * delta;
-                auto percentage_component = from.as_percentage().raw_value() * (1.f - delta);
-                if (dimension_component == 0)
-                    return PercentageStyleValue::create(Percentage { percentage_component });
-            }
-
-            auto from_node = to_calculation_node(from);
-            auto to_node = to_calculation_node(to);
-
-            // https://drafts.csswg.org/css-values-4/#combine-math
-            // Interpolation of math functions, with each other or with numeric values and other numeric-valued functions, is defined as Vresult = calc((1 - p) * VA + p * VB).
-            auto from_contribution = ProductCalculationNode::create({
-                from_node,
-                NumericCalculationNode::create(Number { Number::Type::Number, 1.f - delta }, calculation_context),
-            });
-
-            auto to_contribution = ProductCalculationNode::create({
-                to_node,
-                NumericCalculationNode::create(Number { Number::Type::Number, delta }, calculation_context),
-            });
-
-            return CalculatedStyleValue::create(
-                simplify_a_calculation_tree(SumCalculationNode::create({ from_contribution, to_contribution }), calculation_context, {}),
-                *from_node->numeric_type()->added_to(*to_node->numeric_type()),
-                calculation_context);
-        }
-
-        return {};
+        return interpolate_mixed_value(calculation_context, from, to, delta);
     }
+
+    static auto length_percentage_or_auto_to_style_value = [](auto const& value) -> NonnullRefPtr<StyleValue const> {
+        if constexpr (requires { value.is_auto(); }) {
+            if (value.is_auto())
+                return KeywordStyleValue::create(Keyword::Auto);
+        }
+        if (value.is_length())
+            return LengthStyleValue::create(value.length());
+        if (value.is_percentage())
+            return PercentageStyleValue::create(value.percentage());
+        if (value.is_calculated())
+            return value.calculated();
+        VERIFY_NOT_REACHED();
+    };
 
     static auto interpolate_length_percentage = [](CalculationContext const& calculation_context, LengthPercentage const& from, LengthPercentage const& to, float delta) -> Optional<LengthPercentage> {
         if (from.is_length() && to.is_length())
             return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
         if (from.is_percentage() && to.is_percentage())
             return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
-        // FIXME: Interpolate calculations
-        return {};
+        auto from_style_value = length_percentage_or_auto_to_style_value(from);
+        auto to_style_value = length_percentage_or_auto_to_style_value(to);
+        auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
+        if (!interpolated_style_value)
+            return {};
+        if (interpolated_style_value->is_length())
+            return interpolated_style_value->as_length().length();
+        if (interpolated_style_value->is_percentage())
+            return interpolated_style_value->as_percentage().percentage();
+        if (interpolated_style_value->is_calculated())
+            return LengthPercentage { interpolated_style_value->as_calculated() };
+        VERIFY_NOT_REACHED();
     };
 
     static auto interpolate_length_percentage_or_auto = [](CalculationContext const& calculation_context, LengthPercentageOrAuto const& from, LengthPercentageOrAuto const& to, float delta) -> Optional<LengthPercentageOrAuto> {
@@ -1159,8 +1188,21 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
             return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
         if (from.is_percentage() && to.is_percentage())
             return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
-        // FIXME: Interpolate calculations
-        return {};
+
+        auto from_style_value = length_percentage_or_auto_to_style_value(from);
+        auto to_style_value = length_percentage_or_auto_to_style_value(to);
+        auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
+        if (!interpolated_style_value)
+            return {};
+        if (interpolated_style_value->to_keyword() == Keyword::Auto)
+            return LengthPercentageOrAuto::make_auto();
+        if (interpolated_style_value->is_length())
+            return interpolated_style_value->as_length().length();
+        if (interpolated_style_value->is_percentage())
+            return interpolated_style_value->as_percentage().percentage();
+        if (interpolated_style_value->is_calculated())
+            return LengthPercentage { interpolated_style_value->as_calculated() };
+        VERIFY_NOT_REACHED();
     };
 
     switch (from.type()) {
@@ -1193,6 +1235,113 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
             interpolated_bottom.release_nonnull(),
             interpolated_left.release_nonnull(),
             from_border_image_slice.fill());
+    }
+    case StyleValue::Type::BasicShape: {
+        // https://drafts.csswg.org/css-shapes-1/#basic-shape-interpolation
+        auto& from_shape = from.as_basic_shape().basic_shape();
+        auto& to_shape = to.as_basic_shape().basic_shape();
+        if (from_shape.index() != to_shape.index())
+            return {};
+
+        auto interpolate_length_box = [](CalculationContext const& calculation_context, LengthBox const& from, LengthBox const& to, float delta) -> Optional<LengthBox> {
+            auto interpolated_top = interpolate_length_percentage_or_auto(calculation_context, from.top(), to.top(), delta);
+            auto interpolated_right = interpolate_length_percentage_or_auto(calculation_context, from.right(), to.right(), delta);
+            auto interpolated_bottom = interpolate_length_percentage_or_auto(calculation_context, from.bottom(), to.bottom(), delta);
+            auto interpolated_left = interpolate_length_percentage_or_auto(calculation_context, from.left(), to.left(), delta);
+            if (!interpolated_top.has_value() || !interpolated_right.has_value() || !interpolated_bottom.has_value() || !interpolated_left.has_value())
+                return {};
+            return LengthBox { *interpolated_top, *interpolated_right, *interpolated_bottom, *interpolated_left };
+        };
+
+        auto interpolated_shape = from_shape.visit(
+            [&](Inset const& from_inset) -> Optional<BasicShape> {
+                // If both shapes are of type inset(), interpolate between each value in the shape functions.
+                auto& to_inset = to_shape.get<Inset>();
+                auto interpolated_inset_box = interpolate_length_box(calculation_context, from_inset.inset_box, to_inset.inset_box, delta);
+                if (!interpolated_inset_box.has_value())
+                    return {};
+                return Inset { *interpolated_inset_box };
+            },
+            [&](Xywh const& from_xywh) -> Optional<BasicShape> {
+                auto& to_xywh = to_shape.get<Xywh>();
+                auto interpolated_x = interpolate_length_percentage(calculation_context, from_xywh.x, to_xywh.x, delta);
+                auto interpolated_y = interpolate_length_percentage(calculation_context, from_xywh.x, to_xywh.x, delta);
+                auto interpolated_width = interpolate_length_percentage(calculation_context, from_xywh.width, to_xywh.width, delta);
+                auto interpolated_height = interpolate_length_percentage(calculation_context, from_xywh.height, to_xywh.height, delta);
+                if (!interpolated_x.has_value() || !interpolated_y.has_value() || !interpolated_width.has_value() || !interpolated_height.has_value())
+                    return {};
+                return Xywh { *interpolated_x, *interpolated_y, *interpolated_width, *interpolated_height };
+            },
+            [&](Rect const& from_rect) -> Optional<BasicShape> {
+                auto const& to_rect = to_shape.get<Rect>();
+                auto from_rect_box = from_rect.box;
+                auto to_rect_box = to_rect.box;
+                auto interpolated_rect_box = interpolate_length_box(calculation_context, from_rect_box, to_rect_box, delta);
+                if (!interpolated_rect_box.has_value())
+                    return {};
+                return Rect { *interpolated_rect_box };
+            },
+            [&](Circle const& from_circle) -> Optional<BasicShape> {
+                // If both shapes are the same type, that type is ellipse() or circle(), and the radiuses are specified
+                // as <length-percentage> (rather than keywords), interpolate between each value in the shape functions.
+                auto const& to_circle = to_shape.get<Circle>();
+                if (!from_circle.radius.has<LengthPercentage>() || !to_circle.radius.has<LengthPercentage>())
+                    return {};
+                auto interpolated_radius = interpolate_length_percentage(calculation_context, from_circle.radius.get<LengthPercentage>(), to_circle.radius.get<LengthPercentage>(), delta);
+                if (!interpolated_radius.has_value())
+                    return {};
+                auto interpolated_position = interpolate_value(element, calculation_context, from_circle.position, to_circle.position, delta, allow_discrete);
+                if (!interpolated_position)
+                    return {};
+                return Circle { *interpolated_radius, interpolated_position->as_position() };
+            },
+            [&](Ellipse const& from_ellipse) -> Optional<BasicShape> {
+                auto const& to_ellipse = to_shape.get<Ellipse>();
+                if (!from_ellipse.radius_x.has<LengthPercentage>() || !to_ellipse.radius_x.has<LengthPercentage>())
+                    return {};
+                if (!from_ellipse.radius_y.has<LengthPercentage>() || !to_ellipse.radius_y.has<LengthPercentage>())
+                    return {};
+                auto interpolated_radius_x = interpolate_length_percentage(calculation_context, from_ellipse.radius_x.get<LengthPercentage>(), to_ellipse.radius_x.get<LengthPercentage>(), delta);
+                if (!interpolated_radius_x.has_value())
+                    return {};
+                auto interpolated_radius_y = interpolate_length_percentage(calculation_context, from_ellipse.radius_y.get<LengthPercentage>(), to_ellipse.radius_y.get<LengthPercentage>(), delta);
+                if (!interpolated_radius_y.has_value())
+                    return {};
+                auto interpolated_position = interpolate_value(element, calculation_context, from_ellipse.position, to_ellipse.position, delta, allow_discrete);
+                if (!interpolated_position)
+                    return {};
+                return Ellipse { *interpolated_radius_x, *interpolated_radius_y, interpolated_position->as_position() };
+            },
+            [&](Polygon const& from_polygon) -> Optional<BasicShape> {
+                // If both shapes are of type polygon(), both polygons have the same number of vertices, and use the
+                // same <'fill-rule'>, interpolate between each value in the shape functions.
+                auto const& to_polygon = to_shape.get<Polygon>();
+                if (from_polygon.fill_rule != to_polygon.fill_rule)
+                    return {};
+                if (from_polygon.points.size() != to_polygon.points.size())
+                    return {};
+                Vector<Polygon::Point> interpolated_points;
+                interpolated_points.ensure_capacity(from_polygon.points.size());
+                for (size_t i = 0; i < from_polygon.points.size(); i++) {
+                    auto const& from_point = from_polygon.points[i];
+                    auto const& to_point = to_polygon.points[i];
+                    auto interpolated_point_x = interpolate_length_percentage(calculation_context, from_point.x, to_point.x, delta);
+                    auto interpolated_point_y = interpolate_length_percentage(calculation_context, from_point.y, to_point.y, delta);
+                    if (!interpolated_point_x.has_value() || !interpolated_point_y.has_value())
+                        return {};
+                    interpolated_points.unchecked_append(Polygon::Point { *interpolated_point_x, *interpolated_point_y });
+                }
+
+                return Polygon { from_polygon.fill_rule, move(interpolated_points) };
+            },
+            [](auto&) -> Optional<BasicShape> {
+                return {};
+            });
+
+        if (!interpolated_shape.has_value())
+            return {};
+
+        return BasicShapeStyleValue::create(*interpolated_shape);
     }
     case StyleValue::Type::BorderRadius: {
         auto const& from_horizontal_radius = from.as_border_radius().horizontal_radius();
