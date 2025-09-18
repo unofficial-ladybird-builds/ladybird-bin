@@ -148,7 +148,7 @@ ThrowCompletionOr<void> Object::set(PropertyKey const& property_key, Value value
 }
 
 // 7.3.5 CreateDataProperty ( O, P, V ), https://tc39.es/ecma262/#sec-createdataproperty
-ThrowCompletionOr<bool> Object::create_data_property(PropertyKey const& property_key, Value value)
+ThrowCompletionOr<bool> Object::create_data_property(PropertyKey const& property_key, Value value, Optional<u32>* new_property_offset)
 {
     // 1. Let newDesc be the PropertyDescriptor { [[Value]]: V, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }.
     auto new_descriptor = PropertyDescriptor {
@@ -159,7 +159,10 @@ ThrowCompletionOr<bool> Object::create_data_property(PropertyKey const& property
     };
 
     // 2. Return ? O.[[DefineOwnProperty]](P, newDesc).
-    return internal_define_own_property(property_key, new_descriptor);
+    auto result = internal_define_own_property(property_key, new_descriptor);
+    if (new_property_offset && new_descriptor.property_offset.has_value())
+        *new_property_offset = new_descriptor.property_offset.value();
+    return result;
 }
 
 // 7.3.6 CreateMethodProperty ( O, P, V ), https://tc39.es/ecma262/#sec-createmethodproperty
@@ -220,7 +223,7 @@ void Object::create_non_enumerable_data_property_or_throw(PropertyKey const& pro
 }
 
 // 7.3.9 DefinePropertyOrThrow ( O, P, desc ), https://tc39.es/ecma262/#sec-definepropertyorthrow
-ThrowCompletionOr<void> Object::define_property_or_throw(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor)
+ThrowCompletionOr<void> Object::define_property_or_throw(PropertyKey const& property_key, PropertyDescriptor& property_descriptor)
 {
     auto& vm = this->vm();
 
@@ -298,7 +301,8 @@ ThrowCompletionOr<bool> Object::set_integrity_level(IntegrityLevel level)
             auto property_key = MUST(PropertyKey::from_value(vm, key));
 
             // i. Perform ? DefinePropertyOrThrow(O, k, PropertyDescriptor { [[Configurable]]: false }).
-            TRY(define_property_or_throw(property_key, { .configurable = false }));
+            PropertyDescriptor descriptor { .configurable = false };
+            TRY(define_property_or_throw(property_key, descriptor));
         }
     }
     // 5. Else,
@@ -851,7 +855,7 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> Object::internal_get_own_propert
 
 // 10.1.6 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-defineownproperty-p-desc
 // 10.1.6.1 OrdinaryDefineOwnProperty ( O, P, Desc ), https://tc39.es/ecma262/#sec-ordinarydefineownproperty
-ThrowCompletionOr<bool> Object::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> Object::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
 {
     // 1. Let current be ? O.[[GetOwnProperty]](P).
     auto current = precomputed_get_own_property ? *precomputed_get_own_property : TRY(internal_get_own_property(property_key));
@@ -889,7 +893,7 @@ ThrowCompletionOr<bool> Object::internal_has_property(PropertyKey const& propert
 
 // 10.1.8 [[Get]] ( P, Receiver ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-get-p-receiver
 // 10.1.8.1 OrdinaryGet ( O, P, Receiver ), https://tc39.es/ecma262/#sec-ordinaryget
-ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, Value receiver, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase) const
+ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, Value receiver, CacheableGetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase) const
 {
     VERIFY(!receiver.is_special_empty_value());
 
@@ -916,16 +920,16 @@ ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, V
         if (!cacheable_metadata || !descriptor->property_offset.has_value() || !shape().is_cacheable())
             return;
         if (phase == PropertyLookupPhase::OwnProperty) {
-            *cacheable_metadata = CacheablePropertyMetadata {
-                .type = CacheablePropertyMetadata::Type::OwnProperty,
+            *cacheable_metadata = CacheableGetPropertyMetadata {
+                .type = CacheableGetPropertyMetadata::Type::GetOwnProperty,
                 .property_offset = descriptor->property_offset.value(),
                 .prototype = nullptr,
             };
         } else if (phase == PropertyLookupPhase::PrototypeChain) {
             VERIFY(shape().is_prototype_shape());
             VERIFY(shape().prototype_chain_validity()->is_valid());
-            *cacheable_metadata = CacheablePropertyMetadata {
-                .type = CacheablePropertyMetadata::Type::InPrototypeChain,
+            *cacheable_metadata = CacheableGetPropertyMetadata {
+                .type = CacheableGetPropertyMetadata::Type::GetPropertyInPrototypeChain,
                 .property_offset = descriptor->property_offset.value(),
                 .prototype = this,
             };
@@ -956,7 +960,7 @@ ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, V
 
 // 10.1.9 [[Set]] ( P, V, Receiver ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-set-p-v-receiver
 // 10.1.9.1 OrdinarySet ( O, P, V, Receiver ), https://tc39.es/ecma262/#sec-ordinaryset
-ThrowCompletionOr<bool> Object::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
+ThrowCompletionOr<bool> Object::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheableSetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
 {
     VERIFY(!value.is_special_empty_value());
     VERIFY(!receiver.is_special_empty_value());
@@ -969,7 +973,7 @@ ThrowCompletionOr<bool> Object::internal_set(PropertyKey const& property_key, Va
 }
 
 // 10.1.9.2 OrdinarySetWithOwnDescriptor ( O, P, V, Receiver, ownDesc ), https://tc39.es/ecma262/#sec-ordinarysetwithowndescriptor
-ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey const& property_key, Value value, Value receiver, Optional<PropertyDescriptor> own_descriptor, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
+ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey const& property_key, Value value, Value receiver, Optional<PropertyDescriptor> own_descriptor, CacheableSetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
 {
     VERIFY(!value.is_special_empty_value());
     VERIFY(!receiver.is_special_empty_value());
@@ -998,21 +1002,21 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
         }
     }
 
-    auto update_inline_cache = [&] {
+    auto update_inline_cache_for_property_change = [&] {
         // Non-standard: If the caller has requested cacheable metadata and the property is an own property, fill it in.
         if (!cacheable_metadata || !own_descriptor->property_offset.has_value() || !shape().is_cacheable())
             return;
         if (phase == PropertyLookupPhase::OwnProperty) {
-            *cacheable_metadata = CacheablePropertyMetadata {
-                .type = CacheablePropertyMetadata::Type::OwnProperty,
+            *cacheable_metadata = CacheableSetPropertyMetadata {
+                .type = CacheableSetPropertyMetadata::Type::ChangeOwnProperty,
                 .property_offset = own_descriptor->property_offset.value(),
                 .prototype = nullptr,
             };
         } else if (phase == PropertyLookupPhase::PrototypeChain) {
             VERIFY(shape().is_prototype_shape());
             VERIFY(shape().prototype_chain_validity()->is_valid());
-            *cacheable_metadata = CacheablePropertyMetadata {
-                .type = CacheablePropertyMetadata::Type::InPrototypeChain,
+            *cacheable_metadata = CacheableSetPropertyMetadata {
+                .type = CacheableSetPropertyMetadata::Type::ChangePropertyInPrototypeChain,
                 .property_offset = own_descriptor->property_offset.value(),
                 .prototype = this,
             };
@@ -1050,7 +1054,7 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
             // NOTE: We don't cache non-setter properties in the prototype chain, as that's a weird
             //       use-case, and doesn't seem like something in need of optimization.
             if (phase == PropertyLookupPhase::OwnProperty)
-                update_inline_cache();
+                update_inline_cache_for_property_change();
 
             // iv. Return ? Receiver.[[DefineOwnProperty]](P, valueDesc).
             return TRY(receiver_object.internal_define_own_property(property_key, value_descriptor, &existing_descriptor));
@@ -1061,7 +1065,18 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
             VERIFY(!receiver_object.storage_has(property_key));
 
             // ii. Return ? CreateDataProperty(Receiver, P, V).
-            return TRY(receiver_object.create_data_property(property_key, value));
+            Optional<u32> new_property_offset;
+            auto result = TRY(receiver_object.create_data_property(property_key, value, &new_property_offset));
+            auto& receiver_shape = receiver_object.shape();
+            if (cacheable_metadata && new_property_offset.has_value() && !receiver_shape.is_dictionary() && receiver_shape.is_cacheable()) {
+                VERIFY(!property_key.is_number());
+                *cacheable_metadata = CacheableSetPropertyMetadata {
+                    .type = CacheableSetPropertyMetadata::Type::AddOwnProperty,
+                    .property_offset = *new_property_offset,
+                    .prototype = receiver_object.prototype(),
+                };
+            }
+            return result;
         }
     }
 
@@ -1075,7 +1090,7 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
     if (!setter)
         return false;
 
-    update_inline_cache();
+    update_inline_cache_for_property_change();
 
     // 6. Perform ? Call(setter, Receiver, « V »).
     (void)TRY(call(vm, *setter, receiver, value));
@@ -1211,14 +1226,14 @@ bool Object::storage_has(PropertyKey const& property_key) const
     return shape().lookup(property_key).has_value();
 }
 
-void Object::storage_set(PropertyKey const& property_key, ValueAndAttributes const& value_and_attributes)
+Optional<u32> Object::storage_set(PropertyKey const& property_key, ValueAndAttributes const& value_and_attributes)
 {
     auto [value, attributes, _] = value_and_attributes;
 
     if (property_key.is_number()) {
         auto index = property_key.as_number();
         m_indexed_properties.put(index, value, attributes);
-        return;
+        return {};
     }
 
     if (m_has_intrinsic_accessors && property_key.is_string()) {
@@ -1238,7 +1253,7 @@ void Object::storage_set(PropertyKey const& property_key, ValueAndAttributes con
         else
             set_shape(*m_shape->create_put_transition(property_key, attributes));
         m_storage.append(value);
-        return;
+        return m_storage.size() - 1;
     }
 
     if (attributes != metadata->attributes) {
@@ -1249,6 +1264,7 @@ void Object::storage_set(PropertyKey const& property_key, ValueAndAttributes con
     }
 
     m_storage[metadata->offset] = value;
+    return metadata->offset;
 }
 
 void Object::storage_delete(PropertyKey const& property_key)
@@ -1315,7 +1331,7 @@ void Object::define_intrinsic_accessor(PropertyKey const& property_key, Property
 {
     VERIFY(property_key.is_string());
 
-    storage_set(property_key, { {}, attributes });
+    (void)storage_set(property_key, { {}, attributes });
 
     m_has_intrinsic_accessors = true;
     auto& intrinsics = s_intrinsics.ensure(this);

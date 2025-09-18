@@ -215,7 +215,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> PlatformObject::internal
 }
 
 // https://webidl.spec.whatwg.org/#legacy-platform-object-set
-JS::ThrowCompletionOr<bool> PlatformObject::internal_set(JS::PropertyKey const& property_name, JS::Value value, JS::Value receiver, JS::CacheablePropertyMetadata* metadata, PropertyLookupPhase phase)
+JS::ThrowCompletionOr<bool> PlatformObject::internal_set(JS::PropertyKey const& property_name, JS::Value value, JS::Value receiver, JS::CacheableSetPropertyMetadata* metadata, PropertyLookupPhase phase)
 {
     if (!m_legacy_platform_object_flags.has_value() || m_legacy_platform_object_flags->has_global_interface_extended_attribute)
         return Base::internal_set(property_name, value, receiver, metadata, phase);
@@ -253,7 +253,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_set(JS::PropertyKey const& 
 }
 
 // https://webidl.spec.whatwg.org/#legacy-platform-object-defineownproperty
-JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::PropertyKey const& property_name, JS::PropertyDescriptor const& property_descriptor, Optional<JS::PropertyDescriptor>* precomputed_get_own_property)
+JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::PropertyKey const& property_name, JS::PropertyDescriptor& property_descriptor, Optional<JS::PropertyDescriptor>* precomputed_get_own_property)
 {
     Optional<JS::PropertyDescriptor> get_own_property_result = {};
 

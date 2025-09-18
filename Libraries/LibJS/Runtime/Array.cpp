@@ -38,7 +38,8 @@ ThrowCompletionOr<GC::Ref<Array>> Array::create(Realm& realm, u64 length, Object
     auto array = realm.create<Array>(realm, *prototype);
 
     // 6. Perform ! OrdinaryDefineOwnProperty(A, "length", PropertyDescriptor { [[Value]]: 𝔽(length), [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }).
-    MUST(array->internal_define_own_property(vm.names.length, { .value = Value(length), .writable = true, .enumerable = false, .configurable = false }));
+    PropertyDescriptor descriptor { .value = Value(length), .writable = true, .enumerable = false, .configurable = false };
+    MUST(array->internal_define_own_property(vm.names.length, descriptor));
 
     // 7. Return A.
     return array;
@@ -325,7 +326,7 @@ bool Array::default_prototype_chain_intact() const
     return true;
 }
 
-ThrowCompletionOr<bool> Array::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
+ThrowCompletionOr<bool> Array::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheableSetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
 {
     auto& vm = this->vm();
 
@@ -367,7 +368,7 @@ ThrowCompletionOr<bool> Array::internal_set(PropertyKey const& property_key, Val
 }
 
 // 10.4.2.1 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-array-exotic-objects-defineownproperty-p-desc
-ThrowCompletionOr<bool> Array::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> Array::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
 {
     auto& vm = this->vm();
 

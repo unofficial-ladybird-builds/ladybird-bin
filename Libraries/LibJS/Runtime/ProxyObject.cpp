@@ -327,7 +327,7 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
 }
 
 // 10.5.6 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-proxy-object-internal-methods-and-internal-slots-defineownproperty-p-desc
-ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor, Optional<PropertyDescriptor>*)
+ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>*)
 {
     LIMIT_PROXY_RECURSION_DEPTH();
 
@@ -470,7 +470,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_has_property(PropertyKey const& pr
 }
 
 // 10.5.8 [[Get]] ( P, Receiver ), https://tc39.es/ecma262/#sec-proxy-object-internal-methods-and-internal-slots-get-p-receiver
-ThrowCompletionOr<Value> ProxyObject::internal_get(PropertyKey const& property_key, Value receiver, CacheablePropertyMetadata*, PropertyLookupPhase) const
+ThrowCompletionOr<Value> ProxyObject::internal_get(PropertyKey const& property_key, Value receiver, CacheableGetPropertyMetadata*, PropertyLookupPhase) const
 {
     LIMIT_PROXY_RECURSION_DEPTH();
 
@@ -539,7 +539,7 @@ ThrowCompletionOr<Value> ProxyObject::internal_get(PropertyKey const& property_k
 }
 
 // 10.5.9 [[Set]] ( P, V, Receiver ), https://tc39.es/ecma262/#sec-proxy-object-internal-methods-and-internal-slots-set-p-v-receiver
-ThrowCompletionOr<bool> ProxyObject::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheablePropertyMetadata*, PropertyLookupPhase)
+ThrowCompletionOr<bool> ProxyObject::internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheableSetPropertyMetadata*, PropertyLookupPhase)
 {
     LIMIT_PROXY_RECURSION_DEPTH();
 

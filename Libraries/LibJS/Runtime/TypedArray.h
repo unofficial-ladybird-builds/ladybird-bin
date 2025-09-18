@@ -278,7 +278,7 @@ public:
     }
 
     // 10.4.5.4 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-defineownproperty-p-desc
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor const& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override
     {
         // NOTE: If the property name is a number type (An implementation-defined optimized
         // property key type), it can be treated as a string property that will transparently be
@@ -325,7 +325,7 @@ public:
     }
 
     // 10.4.5.5 [[Get]] ( P, Receiver ), https://tc39.es/ecma262/#sec-typedarray-get
-    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const& property_key, Value receiver, CacheablePropertyMetadata* cacheable_metadata, PropertyLookupPhase phase) const override
+    virtual ThrowCompletionOr<Value> internal_get(PropertyKey const& property_key, Value receiver, CacheableGetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase) const override
     {
         VERIFY(!receiver.is_special_empty_value());
 
@@ -350,7 +350,7 @@ public:
     }
 
     // 10.4.5.6 [[Set]] ( P, V, Receiver ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-set-p-v-receiver
-    virtual ThrowCompletionOr<bool> internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheablePropertyMetadata*, PropertyLookupPhase) override
+    virtual ThrowCompletionOr<bool> internal_set(PropertyKey const& property_key, Value value, Value receiver, CacheableSetPropertyMetadata*, PropertyLookupPhase) override
     {
         VERIFY(!value.is_special_empty_value());
         VERIFY(!receiver.is_special_empty_value());
