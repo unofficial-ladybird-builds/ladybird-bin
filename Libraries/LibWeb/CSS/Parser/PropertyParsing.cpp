@@ -510,7 +510,7 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
     case PropertyID::BoxShadow:
-        if (auto parsed_value = parse_shadow_value(tokens, AllowInsetKeyword::Yes); parsed_value && !tokens.has_next_token())
+        if (auto parsed_value = parse_shadow_value(tokens, ShadowStyleValue::ShadowType::Normal); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
     case PropertyID::ColorScheme:
@@ -747,7 +747,7 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
     case PropertyID::TextShadow:
-        if (auto parsed_value = parse_shadow_value(tokens, AllowInsetKeyword::No); parsed_value && !tokens.has_next_token())
+        if (auto parsed_value = parse_shadow_value(tokens, ShadowStyleValue::ShadowType::Text); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
     case PropertyID::TextUnderlinePosition:
@@ -2062,18 +2062,18 @@ RefPtr<StyleValue const> Parser::parse_columns_value(TokenStream<ComponentValue>
         { column_count.release_nonnull(), column_width.release_nonnull(), column_height.release_nonnull() });
 }
 
-RefPtr<StyleValue const> Parser::parse_shadow_value(TokenStream<ComponentValue>& tokens, AllowInsetKeyword allow_inset_keyword)
+RefPtr<StyleValue const> Parser::parse_shadow_value(TokenStream<ComponentValue>& tokens, ShadowStyleValue::ShadowType shadow_type)
 {
     // "none"
     if (auto none = parse_all_as_single_keyword_value(tokens, Keyword::None))
         return none;
 
-    return parse_comma_separated_value_list(tokens, [this, allow_inset_keyword](auto& tokens) {
-        return parse_single_shadow_value(tokens, allow_inset_keyword);
+    return parse_comma_separated_value_list(tokens, [this, shadow_type](auto& tokens) {
+        return parse_single_shadow_value(tokens, shadow_type);
     });
 }
 
-RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<ComponentValue>& tokens, AllowInsetKeyword allow_inset_keyword)
+RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<ComponentValue>& tokens, ShadowStyleValue::ShadowType shadow_type)
 {
     auto transaction = tokens.begin_transaction();
 
@@ -2084,14 +2084,6 @@ RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<Component
     RefPtr<StyleValue const> spread_distance;
     Optional<ShadowPlacement> placement;
 
-    auto possibly_dynamic_length = [&](ComponentValue const& token) -> RefPtr<StyleValue const> {
-        auto tokens = TokenStream<ComponentValue>::of_single_token(token);
-        auto maybe_length = parse_length(tokens);
-        if (!maybe_length.has_value())
-            return nullptr;
-        return maybe_length->as_style_value();
-    };
-
     while (tokens.has_next_token()) {
         if (auto maybe_color = parse_color_value(tokens); maybe_color) {
             if (color)
@@ -2101,26 +2093,27 @@ RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<Component
         }
 
         auto const& token = tokens.next_token();
-        if (auto maybe_offset_x = possibly_dynamic_length(token); maybe_offset_x) {
+        if (auto maybe_offset_x = parse_length_value(tokens); maybe_offset_x) {
             // horizontal offset
             if (offset_x)
                 return nullptr;
             offset_x = maybe_offset_x;
-            tokens.discard_a_token();
 
             // vertical offset
             if (!tokens.has_next_token())
                 return nullptr;
-            auto maybe_offset_y = possibly_dynamic_length(tokens.next_token());
+            auto maybe_offset_y = parse_length_value(tokens);
             if (!maybe_offset_y)
                 return nullptr;
             offset_y = maybe_offset_y;
-            tokens.discard_a_token();
 
             // blur radius (optional)
             if (!tokens.has_next_token())
                 break;
-            auto maybe_blur_radius = possibly_dynamic_length(tokens.next_token());
+
+            m_value_context.append(SpecialContext::ShadowBlurRadius);
+            auto maybe_blur_radius = parse_length_value(tokens);
+            m_value_context.take_last();
             if (!maybe_blur_radius)
                 continue;
             blur_radius = maybe_blur_radius;
@@ -2128,21 +2121,23 @@ RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<Component
                 return nullptr;
             if (blur_radius->is_percentage() && blur_radius->as_percentage().raw_value() < 0)
                 return nullptr;
-            tokens.discard_a_token();
 
             // spread distance (optional)
             if (!tokens.has_next_token())
                 break;
-            auto maybe_spread_distance = possibly_dynamic_length(tokens.next_token());
+            auto maybe_spread_distance = parse_length_value(tokens);
             if (!maybe_spread_distance)
                 continue;
+
+            if (shadow_type == ShadowStyleValue::ShadowType::Text)
+                return nullptr;
+
             spread_distance = maybe_spread_distance;
-            tokens.discard_a_token();
 
             continue;
         }
 
-        if (allow_inset_keyword == AllowInsetKeyword::Yes && token.is_ident("inset"sv)) {
+        if (shadow_type == ShadowStyleValue::ShadowType::Normal && token.is_ident("inset"sv)) {
             if (placement.has_value())
                 return nullptr;
             placement = ShadowPlacement::Inner;
@@ -2165,7 +2160,7 @@ RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<Component
         placement = ShadowPlacement::Outer;
 
     transaction.commit();
-    return ShadowStyleValue::create(color, offset_x.release_nonnull(), offset_y.release_nonnull(), blur_radius, spread_distance, placement.release_value());
+    return ShadowStyleValue::create(shadow_type, color, offset_x.release_nonnull(), offset_y.release_nonnull(), blur_radius, spread_distance, placement.release_value());
 }
 
 RefPtr<StyleValue const> Parser::parse_rotate_value(TokenStream<ComponentValue>& tokens)

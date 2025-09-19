@@ -32,7 +32,7 @@ namespace Web::CSS {
 
 GC_DEFINE_ALLOCATOR(CSSStyleProperties);
 
-GC::Ref<CSSStyleProperties> CSSStyleProperties::create(JS::Realm& realm, Vector<StyleProperty> properties, HashMap<FlyString, StyleProperty> custom_properties)
+GC::Ref<CSSStyleProperties> CSSStyleProperties::create(JS::Realm& realm, Vector<StyleProperty> properties, OrderedHashMap<FlyString, StyleProperty> custom_properties)
 {
     // https://drafts.csswg.org/cssom/#dom-cssstylerule-style
     // The style attribute must return a CSSStyleProperties object for the style rule, with the following properties:
@@ -54,10 +54,10 @@ GC::Ref<CSSStyleProperties> CSSStyleProperties::create_resolved_style(JS::Realm&
     //     parent CSS rule: Null.
     //     owner node: obj.
     // AD-HOC: Rather than instantiate with a list of decls, they're generated on demand.
-    return realm.create<CSSStyleProperties>(realm, Computed::Yes, Readonly::Yes, Vector<StyleProperty> {}, HashMap<FlyString, StyleProperty> {}, move(element_reference));
+    return realm.create<CSSStyleProperties>(realm, Computed::Yes, Readonly::Yes, Vector<StyleProperty> {}, OrderedHashMap<FlyString, StyleProperty> {}, move(element_reference));
 }
 
-GC::Ref<CSSStyleProperties> CSSStyleProperties::create_element_inline_style(DOM::AbstractElement element_reference, Vector<StyleProperty> properties, HashMap<FlyString, StyleProperty> custom_properties)
+GC::Ref<CSSStyleProperties> CSSStyleProperties::create_element_inline_style(DOM::AbstractElement element_reference, Vector<StyleProperty> properties, OrderedHashMap<FlyString, StyleProperty> custom_properties)
 {
     // https://drafts.csswg.org/cssom/#dom-elementcssinlinestyle-style
     // The style attribute must return a CSS declaration block object whose readonly flag is unset, whose parent CSS
@@ -66,7 +66,7 @@ GC::Ref<CSSStyleProperties> CSSStyleProperties::create_element_inline_style(DOM:
     return realm.create<CSSStyleProperties>(realm, Computed::No, Readonly::No, convert_declarations_to_specified_order(properties), move(custom_properties), move(element_reference));
 }
 
-CSSStyleProperties::CSSStyleProperties(JS::Realm& realm, Computed computed, Readonly readonly, Vector<StyleProperty> properties, HashMap<FlyString, StyleProperty> custom_properties, Optional<DOM::AbstractElement> owner_node)
+CSSStyleProperties::CSSStyleProperties(JS::Realm& realm, Computed computed, Readonly readonly, Vector<StyleProperty> properties, OrderedHashMap<FlyString, StyleProperty> custom_properties, Optional<DOM::AbstractElement> owner_node)
     : CSSStyleDeclaration(realm, computed, readonly)
     , m_properties(move(properties))
     , m_custom_properties(move(custom_properties))
@@ -123,22 +123,20 @@ void CSSStyleProperties::visit_edges(Visitor& visitor)
 size_t CSSStyleProperties::length() const
 {
     // The length attribute must return the number of CSS declarations in the declarations.
-    // FIXME: Include the number of custom properties.
-
     if (is_computed()) {
         if (!owner_node().has_value())
             return 0;
         return number_of_longhand_properties;
     }
 
-    return m_properties.size();
+    return m_properties.size() + m_custom_properties.size();
 }
 
 String CSSStyleProperties::item(size_t index) const
 {
     // The item(index) method must return the property name of the CSS declaration at position index.
     // If there is no indexth object in the collection, then the method must return the empty string.
-    // FIXME: Include custom properties.
+    auto custom_properties_count = m_custom_properties.size();
 
     if (index >= length())
         return {};
@@ -148,7 +146,13 @@ String CSSStyleProperties::item(size_t index) const
         return string_from_property_id(property_id).to_string();
     }
 
-    return CSS::string_from_property_id(m_properties[index].property_id).to_string();
+    if (index < custom_properties_count) {
+        auto keys = m_custom_properties.keys();
+        auto custom_property = m_custom_properties.get(keys[index]);
+        return custom_property.ptr()->custom_name.to_string();
+    }
+
+    return CSS::string_from_property_id(m_properties[index - custom_properties_count].property_id).to_string();
 }
 
 Optional<StyleProperty> CSSStyleProperties::property(PropertyID property_id) const
@@ -356,13 +360,14 @@ static NonnullRefPtr<StyleValue const> style_value_for_size(Size const& size)
     TODO();
 }
 
-static RefPtr<StyleValue const> style_value_for_shadow(Vector<ShadowData> const& shadow_data)
+static RefPtr<StyleValue const> style_value_for_shadow(ShadowStyleValue::ShadowType shadow_type, Vector<ShadowData> const& shadow_data)
 {
     if (shadow_data.is_empty())
         return KeywordStyleValue::create(Keyword::None);
 
-    auto make_shadow_style_value = [](ShadowData const& shadow) {
+    auto make_shadow_style_value = [shadow_type](ShadowData const& shadow) {
         return ShadowStyleValue::create(
+            shadow_type,
             ColorStyleValue::create_from_color(shadow.color, ColorSyntax::Modern),
             style_value_for_length_percentage(shadow.offset_x),
             style_value_for_length_percentage(shadow.offset_y),
@@ -578,7 +583,7 @@ RefPtr<StyleValue const> CSSStyleProperties::style_value_for_computed_property(L
     case PropertyID::BorderTopColor:
         return resolve_color_style_value(get_computed_value(property_id), layout_node.computed_values().border_top().color);
     case PropertyID::BoxShadow:
-        return style_value_for_shadow(layout_node.computed_values().box_shadow());
+        return style_value_for_shadow(ShadowStyleValue::ShadowType::Normal, layout_node.computed_values().box_shadow());
     case PropertyID::CaretColor:
         return resolve_color_style_value(get_computed_value(property_id), layout_node.computed_values().caret_color());
     case PropertyID::Color:
@@ -589,7 +594,7 @@ RefPtr<StyleValue const> CSSStyleProperties::style_value_for_computed_property(L
         return resolve_color_style_value(get_computed_value(property_id), layout_node.computed_values().text_decoration_color());
         // NB: text-shadow isn't listed, but is computed the same as box-shadow.
     case PropertyID::TextShadow:
-        return style_value_for_shadow(layout_node.computed_values().text_shadow());
+        return style_value_for_shadow(ShadowStyleValue::ShadowType::Text, layout_node.computed_values().text_shadow());
 
         // -> line-height
         //    The resolved value is normal if the computed value is normal, or the used value otherwise.
@@ -957,7 +962,7 @@ String CSSStyleProperties::serialized() const
     // NB: The spec treats custom properties the same as any other property, and expects the above loop to handle them.
     //       However, our implementation separates them from regular properties, so we need to handle them separately here.
     // FIXME: Is the relative order of custom properties and regular properties supposed to be preserved?
-    for (auto& declaration : m_custom_properties) {
+    for (auto const& declaration : m_custom_properties) {
         // 1. Let property be declaration’s property name.
         auto const& property = declaration.key;
 
@@ -1308,7 +1313,7 @@ void CSSStyleProperties::empty_the_declarations()
     m_custom_properties.clear();
 }
 
-void CSSStyleProperties::set_the_declarations(Vector<StyleProperty> properties, HashMap<FlyString, StyleProperty> custom_properties)
+void CSSStyleProperties::set_the_declarations(Vector<StyleProperty> properties, OrderedHashMap<FlyString, StyleProperty> custom_properties)
 {
     m_properties = convert_declarations_to_specified_order(properties);
     m_custom_properties = move(custom_properties);

@@ -97,6 +97,12 @@ Optional<WebView::ViewImplementation&> Application::active_web_view() const
     return {};
 }
 
+Optional<WebView::ViewImplementation&> Application::open_blank_new_tab(Web::HTML::ActivateTab activate_tab) const
+{
+    auto& tab = active_window().create_new_tab(activate_tab);
+    return tab.view();
+}
+
 Optional<ByteString> Application::ask_user_for_download_folder() const
 {
     auto path = QFileDialog::getExistingDirectory(nullptr, "Select download directory", QDir::homePath());
@@ -126,6 +132,22 @@ void Application::display_download_confirmation_dialog(StringView download_name,
 void Application::display_error_dialog(StringView error_message) const
 {
     QMessageBox::warning(active_tab(), "Ladybird", qstring_from_ak_string(error_message));
+}
+
+void Application::on_devtools_enabled() const
+{
+    WebView::Application::on_devtools_enabled();
+
+    if (m_active_window)
+        m_active_window->on_devtools_enabled();
+}
+
+void Application::on_devtools_disabled() const
+{
+    WebView::Application::on_devtools_disabled();
+
+    if (m_active_window)
+        m_active_window->on_devtools_disabled();
 }
 
 }

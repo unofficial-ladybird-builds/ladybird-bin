@@ -2,14 +2,13 @@ Harness status: OK
 
 Found 12 tests
 
-8 Pass
-4 Fail
-Fail	Trailing declarations
-Fail	Mixed declarations
-Fail	CSSNestedDeclarations.style
+12 Pass
+Pass	Trailing declarations
+Pass	Mixed declarations
+Pass	CSSNestedDeclarations.style
 Pass	Nested group rule
 Pass	Nested @scope rule
-Fail	Inner rule starting with an ident
+Pass	Inner rule starting with an ident
 Pass	Inserting a CSSNestedDeclaration rule into style rule
 Pass	Inserting a CSSNestedDeclaration rule into nested group rule
 Pass	Attempting to insert a CSSNestedDeclaration rule into top-level @media rule

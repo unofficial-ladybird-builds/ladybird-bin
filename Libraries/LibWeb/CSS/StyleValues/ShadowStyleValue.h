@@ -22,7 +22,15 @@ enum class ShadowPlacement {
 
 class ShadowStyleValue final : public StyleValueWithDefaultOperators<ShadowStyleValue> {
 public:
+    enum class ShadowType : u8 {
+        // none | <shadow>#
+        Normal,
+        // none | [ <color>? && <length>{2,3} ]#
+        Text
+    };
+
     static ValueComparingNonnullRefPtr<ShadowStyleValue const> create(
+        ShadowType shadow_type,
         ValueComparingRefPtr<StyleValue const> color,
         ValueComparingNonnullRefPtr<StyleValue const> offset_x,
         ValueComparingNonnullRefPtr<StyleValue const> offset_y,
@@ -30,10 +38,11 @@ public:
         ValueComparingRefPtr<StyleValue const> spread_distance,
         ShadowPlacement placement)
     {
-        return adopt_ref(*new (nothrow) ShadowStyleValue(move(color), move(offset_x), move(offset_y), move(blur_radius), move(spread_distance), placement));
+        return adopt_ref(*new (nothrow) ShadowStyleValue(shadow_type, move(color), move(offset_x), move(offset_y), move(blur_radius), move(spread_distance), placement));
     }
     virtual ~ShadowStyleValue() override = default;
 
+    ShadowType shadow_type() const { return m_properties.shadow_type; }
     ValueComparingNonnullRefPtr<StyleValue const> color() const;
     ValueComparingNonnullRefPtr<StyleValue const> offset_x() const { return m_properties.offset_x; }
     ValueComparingNonnullRefPtr<StyleValue const> offset_y() const { return m_properties.offset_y; }
@@ -47,6 +56,7 @@ public:
 
 private:
     ShadowStyleValue(
+        ShadowType shadow_type,
         ValueComparingRefPtr<StyleValue const> color,
         ValueComparingNonnullRefPtr<StyleValue const> offset_x,
         ValueComparingNonnullRefPtr<StyleValue const> offset_y,
@@ -55,6 +65,7 @@ private:
         ShadowPlacement placement)
         : StyleValueWithDefaultOperators(Type::Shadow)
         , m_properties {
+            .shadow_type = shadow_type,
             .color = move(color),
             .offset_x = move(offset_x),
             .offset_y = move(offset_y),
@@ -68,6 +79,7 @@ private:
     virtual ValueComparingNonnullRefPtr<StyleValue const> absolutized(CSSPixelRect const& viewport_rect, Length::FontMetrics const& font_metrics, Length::FontMetrics const& root_font_metrics) const override;
 
     struct Properties {
+        ShadowType shadow_type;
         ValueComparingRefPtr<StyleValue const> color;
         ValueComparingNonnullRefPtr<StyleValue const> offset_x;
         ValueComparingNonnullRefPtr<StyleValue const> offset_y;

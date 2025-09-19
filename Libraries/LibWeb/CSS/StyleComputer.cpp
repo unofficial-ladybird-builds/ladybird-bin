@@ -849,7 +849,7 @@ void StyleComputer::cascade_declarations(
     }
 }
 
-static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vector<MatchingRule const*> const& matching_rules, HashMap<FlyString, StyleProperty>& custom_properties)
+static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vector<MatchingRule const*> const& matching_rules, OrderedHashMap<FlyString, StyleProperty>& custom_properties)
 {
     size_t needed_capacity = 0;
     for (auto const& matching_rule : matching_rules)
@@ -1072,6 +1072,22 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
     };
     HashMap<PropertyID, RefPtr<StyleValue const>> computed_start_values = compute_keyframe_values(keyframe_values);
     HashMap<PropertyID, RefPtr<StyleValue const>> computed_end_values = compute_keyframe_values(keyframe_end_values);
+    auto to_composite_operation = [&](Bindings::CompositeOperationOrAuto composite_operation_or_auto) {
+        switch (composite_operation_or_auto) {
+        case Bindings::CompositeOperationOrAuto::Accumulate:
+            return Bindings::CompositeOperation::Accumulate;
+        case Bindings::CompositeOperationOrAuto::Add:
+            return Bindings::CompositeOperation::Add;
+        case Bindings::CompositeOperationOrAuto::Replace:
+            return Bindings::CompositeOperation::Replace;
+        case Bindings::CompositeOperationOrAuto::Auto:
+            return effect->composite();
+        }
+        VERIFY_NOT_REACHED();
+    };
+
+    auto start_composite_operation = to_composite_operation(keyframe_values.composite);
+    auto end_composite_operation = to_composite_operation(keyframe_end_values.composite);
 
     for (auto const& it : computed_start_values) {
         auto resolved_start_property = it.value;
@@ -1097,6 +1113,13 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
         if (computed_properties.is_property_important(it.key)) {
             continue;
         }
+
+        auto const& underlying_value = computed_properties.property(it.key);
+        if (auto composited_start_value = composite_value(underlying_value, start, start_composite_operation))
+            start = *composited_start_value;
+
+        if (auto composited_end_value = composite_value(underlying_value, end, end_composite_operation))
+            end = *composited_end_value;
 
         if (auto next_value = interpolate_property(*effect->target(), it.key, *start, *end, progress_in_keyframe, AllowDiscrete::Yes)) {
             dbgln_if(LIBWEB_CSS_ANIMATION_DEBUG, "Interpolated value for property {} at {}: {} -> {} = {}", string_from_property_id(it.key), progress_in_keyframe, start->to_string(SerializationMode::Normal), end->to_string(SerializationMode::Normal), next_value->to_string(SerializationMode::Normal));
@@ -2375,7 +2398,7 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
     // Resolve all the CSS custom properties ("variables") for this element:
     // FIXME: Also resolve !important custom properties, in a second cascade.
     if (!abstract_element.pseudo_element().has_value() || pseudo_element_supports_property(*abstract_element.pseudo_element(), PropertyID::Custom)) {
-        HashMap<FlyString, StyleProperty> custom_properties;
+        OrderedHashMap<FlyString, StyleProperty> custom_properties;
         for (auto& layer : matching_rule_set.author_rules) {
             cascade_custom_properties(abstract_element, layer.rules, custom_properties);
         }

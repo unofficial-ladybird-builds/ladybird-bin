@@ -166,14 +166,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     QObject::connect(m_find_in_page_action, &QAction::triggered, this, &BrowserWindow::show_find_in_page);
 
     edit_menu->addSeparator();
-
-    auto* settings_action = new QAction("&Settings", this);
-    settings_action->setIcon(load_icon_from_uri("resource://icons/16x16/settings.png"sv));
-    settings_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Preferences));
-    edit_menu->addAction(settings_action);
-    QObject::connect(settings_action, &QAction::triggered, this, [this] {
-        new_tab_from_url(URL::URL::about("settings"_string), Web::HTML::ActivateTab::Yes);
-    });
+    edit_menu->addAction(create_application_action(*edit_menu, Application::the().open_settings_page_action()));
 
     auto* view_menu = m_hamburger_menu->addMenu("&View");
     menuBar()->addMenu(view_menu);
@@ -206,42 +199,9 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
         Settings::the()->set_show_menubar(checked);
     });
 
-    auto* inspect_menu = m_hamburger_menu->addMenu("&Inspect");
+    auto* inspect_menu = create_application_menu(*m_hamburger_menu, Application::the().inspect_menu());
+    m_hamburger_menu->addMenu(inspect_menu);
     menuBar()->addMenu(inspect_menu);
-
-    edit_menu->addAction(create_application_action(*this, Application::the().view_source_action()));
-
-    m_enable_devtools_action = new QAction("Enable &DevTools", this);
-    m_enable_devtools_action->setIcon(load_icon_from_uri("resource://icons/browser/dom-tree.png"sv));
-    m_enable_devtools_action->setShortcuts({
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_I),
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C),
-        QKeySequence(Qt::Key_F12),
-    });
-    inspect_menu->addAction(m_enable_devtools_action);
-    QObject::connect(m_enable_devtools_action, &QAction::triggered, this, [this] {
-        if (auto result = WebView::Application::the().toggle_devtools_enabled(); result.is_error()) {
-            auto error_message = MUST(String::formatted("Unable to start DevTools: {}", result.error()));
-            QMessageBox::warning(this, "Ladybird", qstring_from_ak_string(error_message));
-        } else {
-            switch (result.value()) {
-            case WebView::Application::DevtoolsState::Disabled:
-                devtools_disabled();
-                break;
-            case WebView::Application::DevtoolsState::Enabled:
-                devtools_enabled();
-                break;
-            }
-        }
-    });
-
-    auto* task_manager_action = new QAction("Open Task &Manager", this);
-    task_manager_action->setIcon(load_icon_from_uri("resource://icons/16x16/app-system-monitor.png"sv));
-    task_manager_action->setShortcuts({ QKeySequence("Ctrl+Shift+M") });
-    inspect_menu->addAction(task_manager_action);
-    QObject::connect(task_manager_action, &QAction::triggered, this, [this]() {
-        new_tab_from_url(URL::URL::about("processes"_string), Web::HTML::ActivateTab::Yes);
-    });
 
     auto* debug_menu = create_application_menu(*m_hamburger_menu, Application::the().debug_menu());
     m_hamburger_menu->addMenu(debug_menu);
@@ -250,11 +210,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     auto* help_menu = m_hamburger_menu->addMenu("&Help");
     menuBar()->addMenu(help_menu);
 
-    auto* about_action = new QAction("&About Ladybird", this);
-    help_menu->addAction(about_action);
-    QObject::connect(about_action, &QAction::triggered, this, [this] {
-        new_tab_from_url(URL::about_version(), Web::HTML::ActivateTab::Yes);
-    });
+    help_menu->addAction(create_application_action(*help_menu, Application::the().open_about_page_action()));
 
     m_hamburger_menu->addSeparator();
     file_menu->addSeparator();
@@ -318,42 +274,32 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     setContextMenuPolicy(Qt::PreventContextMenu);
 
     if (browser_options.devtools_port.has_value())
-        devtools_enabled();
+        on_devtools_enabled();
 }
 
-void BrowserWindow::devtools_disabled()
-{
-    m_enable_devtools_action->setText("Enable &DevTools");
-    setStatusBar(nullptr);
-}
-
-void BrowserWindow::devtools_enabled()
+void BrowserWindow::on_devtools_enabled()
 {
     auto* disable_button = new QPushButton("Disable", this);
 
-    connect(disable_button, &QPushButton::clicked, this, [this]() {
+    connect(disable_button, &QPushButton::clicked, this, []() {
         MUST(WebView::Application::the().toggle_devtools_enabled());
-        devtools_disabled();
     });
 
-    m_enable_devtools_action->setText("Disable &DevTools");
     statusBar()->addPermanentWidget(disable_button);
 
     auto message = MUST(String::formatted("DevTools is enabled on port {}", WebView::Application::browser_options().devtools_port));
     statusBar()->showMessage(qstring_from_ak_string(message));
 }
 
+void BrowserWindow::on_devtools_disabled()
+{
+    setStatusBar(nullptr);
+}
+
 Tab& BrowserWindow::new_tab_from_url(URL::URL const& url, Web::HTML::ActivateTab activate_tab)
 {
     auto& tab = create_new_tab(activate_tab);
     tab.navigate(url);
-    return tab;
-}
-
-Tab& BrowserWindow::new_tab_from_content(StringView html, Web::HTML::ActivateTab activate_tab)
-{
-    auto& tab = create_new_tab(activate_tab);
-    tab.load_html(html);
     return tab;
 }
 
@@ -421,27 +367,6 @@ void BrowserWindow::initialize_tab(Tab* tab)
         }
         auto& new_tab = new_child_tab(activate_tab, *tab, page_index);
         return new_tab.view().handle();
-    };
-
-    tab->view().on_tab_open_request = [this](auto url, auto activate_tab) {
-        auto& tab = new_tab_from_url(url, activate_tab);
-        return tab.view().handle();
-    };
-
-    tab->view().on_link_click = [this](auto url, auto target, unsigned modifiers) {
-        // TODO: maybe activate tabs according to some configuration, this is just normal current browser behavior
-        if (modifiers == Web::UIEvents::Mod_Ctrl) {
-            m_current_tab->view().on_tab_open_request(url, Web::HTML::ActivateTab::No);
-        } else if (target == "_blank") {
-            m_current_tab->view().on_tab_open_request(url, Web::HTML::ActivateTab::Yes);
-        } else {
-            m_current_tab->view().load(url);
-        }
-    };
-
-    tab->view().on_link_middle_click = [this](auto url, auto target, unsigned modifiers) {
-        m_current_tab->view().on_link_click(url, target, Web::UIEvents::Mod_Ctrl);
-        (void)modifiers;
     };
 
     m_tabs_container->setTabIcon(m_tabs_container->indexOf(tab), tab->favicon());

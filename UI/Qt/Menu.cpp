@@ -78,11 +78,11 @@ static void initialize_native_control(WebView::Action& action, QAction& qaction,
     switch (action.id()) {
     case WebView::ActionID::NavigateBack:
         qaction.setIcon(create_tvg_icon_with_theme_colors("back", palette));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Back));
+        qaction.setShortcut(QKeySequence::StandardKey::Back);
         break;
     case WebView::ActionID::NavigateForward:
         qaction.setIcon(create_tvg_icon_with_theme_colors("forward", palette));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Forward));
+        qaction.setShortcut(QKeySequence::StandardKey::Forward);
         break;
     case WebView::ActionID::Reload:
         qaction.setIcon(create_tvg_icon_with_theme_colors("reload", palette));
@@ -91,21 +91,37 @@ static void initialize_native_control(WebView::Action& action, QAction& qaction,
 
     case WebView::ActionID::CopySelection:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/edit-copy.png"sv));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Copy));
+        qaction.setShortcut(QKeySequence::StandardKey::Copy);
         break;
     case WebView::ActionID::Paste:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/paste.png"sv));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Paste));
+        qaction.setShortcut(QKeySequence::StandardKey::Paste);
         break;
     case WebView::ActionID::SelectAll:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/select-all.png"sv));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::SelectAll));
+        qaction.setShortcut(QKeySequence::StandardKey::SelectAll);
         break;
 
     case WebView::ActionID::SearchSelectedText:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/find.png"sv));
         break;
 
+    case WebView::ActionID::OpenProcessesPage:
+        qaction.setIcon(load_icon_from_uri("resource://icons/16x16/app-system-monitor.png"sv));
+        qaction.setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
+        break;
+    case WebView::ActionID::OpenSettingsPage:
+        qaction.setIcon(load_icon_from_uri("resource://icons/16x16/settings.png"sv));
+        qaction.setShortcut(QKeySequence::StandardKey::Preferences);
+        break;
+    case WebView::ActionID::ToggleDevTools:
+        qaction.setIcon(load_icon_from_uri("resource://icons/browser/dom-tree.png"sv));
+        qaction.setShortcuts({
+            QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_I),
+            QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C),
+            QKeySequence(Qt::Key_F12),
+        });
+        break;
     case WebView::ActionID::ViewSource:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/filetype-html.png"sv));
         qaction.setShortcut(QKeySequence(Qt::CTRL | Qt::Key_U));
@@ -163,7 +179,7 @@ static void initialize_native_control(WebView::Action& action, QAction& qaction,
     }
     case WebView::ActionID::ZoomOut:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/zoom-out.png"sv));
-        qaction.setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::ZoomOut));
+        qaction.setShortcut(QKeySequence::StandardKey::ZoomOut);
         break;
     case WebView::ActionID::ResetZoom:
         qaction.setIcon(load_icon_from_uri("resource://icons/16x16/zoom-reset.png"sv));

@@ -13,6 +13,7 @@
 #import <Application/ApplicationDelegate.h>
 #import <Interface/LadybirdWebView.h>
 #import <Interface/Tab.h>
+#import <Interface/TabController.h>
 
 #if !__has_feature(objc_arc)
 #    error "This project requires ARC"
@@ -39,6 +40,16 @@ Optional<WebView::ViewImplementation&> Application::active_web_view() const
     if (auto* tab = [delegate activeTab])
         return [[tab web_view] view];
     return {};
+}
+
+Optional<WebView::ViewImplementation&> Application::open_blank_new_tab(Web::HTML::ActivateTab activate_tab) const
+{
+    ApplicationDelegate* delegate = [NSApp delegate];
+
+    auto* controller = [delegate createNewTab:activate_tab fromTab:[delegate activeTab]];
+    auto* tab = (Tab*)[controller window];
+
+    return [[tab web_view] view];
 }
 
 Optional<ByteString> Application::ask_user_for_download_folder() const
@@ -85,6 +96,22 @@ void Application::display_error_dialog(StringView error_message) const
 
     [dialog beginSheetModalForWindow:[delegate activeTab]
                    completionHandler:nil];
+}
+
+void Application::on_devtools_enabled() const
+{
+    WebView::Application::on_devtools_enabled();
+
+    ApplicationDelegate* delegate = [NSApp delegate];
+    [delegate onDevtoolsEnabled];
+}
+
+void Application::on_devtools_disabled() const
+{
+    WebView::Application::on_devtools_disabled();
+
+    ApplicationDelegate* delegate = [NSApp delegate];
+    [delegate onDevtoolsDisabled];
 }
 
 }

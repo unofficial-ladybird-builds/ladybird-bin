@@ -25,8 +25,6 @@
 
 @property (nonatomic, strong) InfoBar* info_bar;
 
-@property (nonatomic, strong) NSMenuItem* toggle_devtools_menu_item;
-
 - (NSMenuItem*)createApplicationMenu;
 - (NSMenuItem*)createFileMenu;
 - (NSMenuItem*)createEditMenu;
@@ -67,6 +65,17 @@
 
 #pragma mark - Public methods
 
+- (nonnull TabController*)createNewTab:(Web::HTML::ActivateTab)activate_tab
+                               fromTab:(nullable Tab*)tab
+{
+    auto* controller = [[TabController alloc] init];
+    [self initializeTabController:controller
+                      activateTab:activate_tab
+                          fromTab:tab];
+
+    return controller;
+}
+
 - (TabController*)createNewTab:(Optional<URL::URL> const&)url
                        fromTab:(Tab*)tab
                    activateTab:(Web::HTML::ActivateTab)activate_tab
@@ -76,17 +85,6 @@
     if (url.has_value()) {
         [controller loadURL:*url];
     }
-
-    return controller;
-}
-
-- (nonnull TabController*)createNewTab:(StringView)html
-                                   url:(URL::URL const&)url
-                               fromTab:(nullable Tab*)tab
-                           activateTab:(Web::HTML::ActivateTab)activate_tab
-{
-    auto* controller = [self createNewTab:activate_tab fromTab:tab];
-    [controller loadHTML:html url:url];
 
     return controller;
 }
@@ -124,33 +122,31 @@
     [self.managed_tabs removeObject:controller];
 }
 
-#pragma mark - Private methods
-
-- (void)openAboutVersionPage:(id)sender
+- (void)onDevtoolsEnabled
 {
-    auto* current_tab = [NSApp keyWindow];
-    if (![current_tab isKindOfClass:[Tab class]]) {
-        return;
+    if (!self.info_bar) {
+        self.info_bar = [[InfoBar alloc] init];
     }
 
-    [self createNewTab:URL::URL(URL::about_version())
-               fromTab:(Tab*)current_tab
-           activateTab:Web::HTML::ActivateTab::Yes];
+    auto message = MUST(String::formatted("DevTools is enabled on port {}", WebView::Application::browser_options().devtools_port));
+
+    [self.info_bar showWithMessage:Ladybird::string_to_ns_string(message)
+                dismissButtonTitle:@"Disable"
+              dismissButtonClicked:^{
+                  MUST(WebView::Application::the().toggle_devtools_enabled());
+              }
+                         activeTab:self.active_tab];
 }
 
-- (void)openSettings:(id)sender
+- (void)onDevtoolsDisabled
 {
-    [self createNewTab:URL::URL::about("settings"_string)
-               fromTab:self.active_tab
-           activateTab:Web::HTML::ActivateTab::Yes];
+    if (self.info_bar) {
+        [self.info_bar hide];
+        self.info_bar = nil;
+    }
 }
 
-- (void)openTaskManager:(id)sender
-{
-    [self createNewTab:URL::URL::about("processes"_string)
-               fromTab:self.active_tab
-           activateTab:Web::HTML::ActivateTab::Yes];
-}
+#pragma mark - Private methods
 
 - (void)openLocation:(id)sender
 {
@@ -162,17 +158,6 @@
 
     auto* controller = (TabController*)[current_tab windowController];
     [controller focusLocationToolbarItem];
-}
-
-- (nonnull TabController*)createNewTab:(Web::HTML::ActivateTab)activate_tab
-                               fromTab:(nullable Tab*)tab
-{
-    auto* controller = [[TabController alloc] init];
-    [self initializeTabController:controller
-                      activateTab:activate_tab
-                          fromTab:tab];
-
-    return controller;
 }
 
 - (nonnull TabController*)createChildTab:(Web::HTML::ActivateTab)activate_tab
@@ -215,57 +200,6 @@
     [current_window close];
 }
 
-- (void)toggleDevToolsEnabled:(id)sender
-{
-    if (auto result = WebView::Application::the().toggle_devtools_enabled(); result.is_error()) {
-        auto error_message = MUST(String::formatted("Unable to start DevTools: {}", result.error()));
-
-        auto* dialog = [[NSAlert alloc] init];
-        [dialog setMessageText:Ladybird::string_to_ns_string(error_message)];
-
-        [dialog beginSheetModalForWindow:self.active_tab
-                       completionHandler:nil];
-    } else {
-        switch (result.value()) {
-        case WebView::Application::DevtoolsState::Disabled:
-            [self devtoolsDisabled];
-            break;
-        case WebView::Application::DevtoolsState::Enabled:
-            [self devtoolsEnabled];
-            break;
-        }
-    }
-}
-
-- (void)devtoolsDisabled
-{
-    [self.toggle_devtools_menu_item setTitle:@"Enable DevTools"];
-
-    if (self.info_bar) {
-        [self.info_bar hide];
-        self.info_bar = nil;
-    }
-}
-
-- (void)devtoolsEnabled
-{
-    [self.toggle_devtools_menu_item setTitle:@"Disable DevTools"];
-
-    if (!self.info_bar) {
-        self.info_bar = [[InfoBar alloc] init];
-    }
-
-    auto message = MUST(String::formatted("DevTools is enabled on port {}", WebView::Application::browser_options().devtools_port));
-
-    [self.info_bar showWithMessage:Ladybird::string_to_ns_string(message)
-                dismissButtonTitle:@"Disable"
-              dismissButtonClicked:^{
-                  MUST(WebView::Application::the().toggle_devtools_enabled());
-                  [self devtoolsDisabled];
-              }
-                         activeTab:self.active_tab];
-}
-
 - (void)clearHistory:(id)sender
 {
     for (TabController* controller in self.managed_tabs) {
@@ -280,14 +214,10 @@
     auto* process_name = [[NSProcessInfo processInfo] processName];
     auto* submenu = [[NSMenu alloc] initWithTitle:process_name];
 
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"About %@", process_name]
-                                                action:@selector(openAboutVersionPage:)
-                                         keyEquivalent:@""]];
+    [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().open_about_page_action())];
     [submenu addItem:[NSMenuItem separatorItem]];
 
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Settings"
-                                                action:@selector(openSettings:)
-                                         keyEquivalent:@","]];
+    [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().open_settings_page_action())];
     [submenu addItem:[NSMenuItem separatorItem]];
 
     [submenu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Hide %@", process_name]
@@ -426,20 +356,10 @@
 - (NSMenuItem*)createInspectMenu
 {
     auto* menu = [[NSMenuItem alloc] init];
-    auto* submenu = [[NSMenu alloc] initWithTitle:@"Inspect"];
 
-    [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().view_source_action())];
-
-    self.toggle_devtools_menu_item = [[NSMenuItem alloc] initWithTitle:@"Enable DevTools"
-                                                                action:@selector(toggleDevToolsEnabled:)
-                                                         keyEquivalent:@"I"];
-    [submenu addItem:self.toggle_devtools_menu_item];
-
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Open Task Manager"
-                                                action:@selector(openTaskManager:)
-                                         keyEquivalent:@"M"]];
-
+    auto* submenu = Ladybird::create_application_menu(WebView::Application::the().inspect_menu());
     [menu setSubmenu:submenu];
+
     return menu;
 }
 
@@ -482,7 +402,7 @@
     auto const& browser_options = WebView::Application::browser_options();
 
     if (browser_options.devtools_port.has_value())
-        [self devtoolsEnabled];
+        [self onDevtoolsEnabled];
 
     Tab* tab = nil;
 
