@@ -26,19 +26,17 @@ jobs:
       - name: Add upstream remote and fetch
         run: |
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
-          git fetch upstream
-
-      - name: Sync with upstream but skip .github and README.md
-        run: |
-          git checkout master
           git fetch upstream master
 
-          # Merge upstream changes without committing yet
-          git merge upstream/master --no-commit --no-ff || true
-
-          # Restore our files
+      - name: Sync with upstream (preserve .github and README.md)
+        run: |
+          # Check out upstream files into working directory
+          git checkout upstream/master -- .
+          
+          # Restore our files that we want to preserve
           git restore --source=HEAD --staged --worktree .github README.md
-
-          # Commit if there are changes
+          
+          # Commit and push
+          git add -A
           git commit -m "Sync with upstream (excluding .github and README.md)" || echo "No changes to commit"
           git push origin master
