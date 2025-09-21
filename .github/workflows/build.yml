@@ -87,14 +87,13 @@ jobs:
       #- name: Build Ladybird with portable flags
         #run: |
           chmod +x ./Meta/ladybird.py
+          export BUILD_PRESET=Release
+          export CMAKE_C_FLAGS="-O2 -march=x86-64 -mtune=generic"
+          export CMAKE_CXX_FLAGS="-O2 -march=x86-64 -mtune=generic"
+          ./Meta/ladybird.py build
           #export CMAKE_C_FLAGS="-march=x86-64 -mtune=generic"
           #export CMAKE_CXX_FLAGS="-march=x86-64 -mtune=generic"
           #./Meta/ladybird.py build
-
-          BUILD_PRESET=Release \
-          CMAKE_C_FLAGS="-O2 -march=x86-64 -mtune=generic" \
-          CMAKE_CXX_FLAGS="-O2 -march=x86-64 -mtune=generic" \
-          ./Meta/ladybird.py build
 
       - name: Ensure Resources exist or add dummy
         run: |
