@@ -16,6 +16,7 @@ Download artifact - https://github.com/unofficial-ladybird-test/ladybird-bin/act
 
 ``unzip ladybird-full-repo.zip``
 
+``unzip ladybird-full-repo.zip`` (Yes, two times)
 
 
 ``./Build/release/bin/Ladybird``
