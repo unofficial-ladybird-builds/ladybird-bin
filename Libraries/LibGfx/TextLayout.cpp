@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2018-2025, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021, sin-ack <sin-ack@protonmail.com>
  * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
@@ -7,16 +7,15 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
-#include <AK/Utf8View.h>
 #include <LibGfx/Point.h>
 #include <LibGfx/TextLayout.h>
 #include <harfbuzz/hb.h>
 
 namespace Gfx {
 
-template<typename UnicodeView>
-Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, UnicodeView const& string, FontCascadeList const& font_cascade_list)
+Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, Utf16View const& string, FontCascadeList const& font_cascade_list)
 {
     if (string.is_empty())
         return {};
@@ -28,7 +27,7 @@ Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, UnicodeVie
     Font const* last_font = &font_cascade_list.font_for_code_point(*it);
     FloatPoint last_position = baseline_start;
 
-    auto add_run = [&runs, &last_position](UnicodeView const& string, Font const& font) {
+    auto add_run = [&runs, &last_position](Utf16View const& string, Font const& font) {
         auto run = shape_text(last_position, 0, string, font, GlyphRun::TextType::Common, {});
         last_position.translate_by(run->width(), 0);
         runs.append(*run);
@@ -55,31 +54,20 @@ Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, UnicodeVie
     return runs;
 }
 
-template Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint, Utf8View const&, FontCascadeList const&);
-template Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint, Utf16View const&, FontCascadeList const&);
-
-template<typename UnicodeView>
-static hb_buffer_t* setup_text_shaping(UnicodeView const& string, Font const& font, ShapeFeatures const& features)
+static hb_buffer_t* setup_text_shaping(Utf16View const& string, Font const& font, ShapeFeatures const& features)
 {
-    static hb_buffer_t* buffer = hb_buffer_create();
-    hb_buffer_reset(buffer);
+    hb_buffer_t* buffer = hb_buffer_create();
 
-    if constexpr (IsSame<UnicodeView, Utf8View>) {
-        hb_buffer_add_utf8(buffer, reinterpret_cast<char const*>(string.bytes()), string.byte_length(), 0, -1);
-    } else if constexpr (IsSame<UnicodeView, Utf16View>) {
-        if (string.has_ascii_storage())
-            hb_buffer_add_utf8(buffer, string.ascii_span().data(), string.length_in_code_units(), 0, -1);
-        else
-            hb_buffer_add_utf16(buffer, reinterpret_cast<u16 const*>(string.utf16_span().data()), string.length_in_code_units(), 0, -1);
-    } else {
-        static_assert(DependentFalse<UnicodeView>);
-    }
+    if (string.has_ascii_storage())
+        hb_buffer_add_utf8(buffer, string.ascii_span().data(), string.length_in_code_units(), 0, -1);
+    else
+        hb_buffer_add_utf16(buffer, reinterpret_cast<u16 const*>(string.utf16_span().data()), string.length_in_code_units(), 0, -1);
 
     hb_buffer_guess_segment_properties(buffer);
 
     auto* hb_font = font.harfbuzz_font();
     hb_feature_t const* hb_features_data = nullptr;
-    Vector<hb_feature_t> hb_features;
+    Vector<hb_feature_t, 4> hb_features;
     if (!features.is_empty()) {
         hb_features.ensure_capacity(features.size());
         for (auto const& feature : features) {
@@ -98,11 +86,39 @@ static hb_buffer_t* setup_text_shaping(UnicodeView const& string, Font const& fo
     return buffer;
 }
 
-template<typename UnicodeView>
-NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, UnicodeView const& string, Font const& font, GlyphRun::TextType text_type, ShapeFeatures const& features)
+NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, Utf16View const& string, Font const& font, GlyphRun::TextType text_type, ShapeFeatures const& features)
 {
-    auto* buffer = setup_text_shaping(string, font, features);
+    auto& shaping_cache = font.shaping_cache();
 
+    // NOTE: We only cache shaping results for a specific set of features. If the features change, we clear the cache.
+    if (shaping_cache.features != features) {
+        shaping_cache.clear();
+        shaping_cache.features = features;
+    }
+
+    // FIXME: The cache currently grows unbounded. We should have some limit and LRU mechanism.
+    auto get_or_create_buffer = [&] -> hb_buffer_t* {
+        if (string.length_in_code_units() == 1) {
+            auto code_unit = string.code_unit_at(0);
+            if (code_unit < 128) {
+                auto*& cache_slot = shaping_cache.single_ascii_character_map[code_unit];
+                if (!cache_slot) {
+                    cache_slot = setup_text_shaping(string, font, features);
+                }
+                return cache_slot;
+            }
+        }
+        if (auto it = shaping_cache.map.find(
+                string.hash(), [&](auto& candidate) { return candidate.key == string; });
+            it != shaping_cache.map.end()) {
+            return it->value;
+        }
+        auto* buffer = setup_text_shaping(string, font, features);
+        shaping_cache.map.set(Utf16String::from_utf16(string), buffer);
+        return buffer;
+    };
+
+    hb_buffer_t* buffer = get_or_create_buffer();
     u32 glyph_count;
     auto const* glyph_info = hb_buffer_get_glyph_infos(buffer, &glyph_count);
     auto const* positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);
@@ -150,11 +166,7 @@ NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spaci
     return adopt_ref(*new GlyphRun(move(glyph_run), font, text_type, point.x() - baseline_start.x()));
 }
 
-template NonnullRefPtr<GlyphRun> shape_text(FloatPoint, float, Utf8View const&, Font const&, GlyphRun::TextType, ShapeFeatures const&);
-template NonnullRefPtr<GlyphRun> shape_text(FloatPoint, float, Utf16View const&, Font const&, GlyphRun::TextType, ShapeFeatures const&);
-
-template<typename UnicodeView>
-float measure_text_width(UnicodeView const& string, Font const& font, ShapeFeatures const& features)
+float measure_text_width(Utf16View const& string, Font const& font, ShapeFeatures const& features)
 {
     auto* buffer = setup_text_shaping(string, font, features);
 
@@ -167,8 +179,5 @@ float measure_text_width(UnicodeView const& string, Font const& font, ShapeFeatu
 
     return point_x / text_shaping_resolution;
 }
-
-template float measure_text_width(Utf8View const&, Font const&, ShapeFeatures const&);
-template float measure_text_width(Utf16View const&, Font const&, ShapeFeatures const&);
 
 }

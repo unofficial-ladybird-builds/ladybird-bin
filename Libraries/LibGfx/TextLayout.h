@@ -15,6 +15,7 @@
 #include <LibGfx/FontCascadeList.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Point.h>
+#include <LibGfx/ShapeFeature.h>
 
 namespace Gfx {
 
@@ -24,13 +25,6 @@ struct DrawGlyph {
     float glyph_width { 0.0 };
     u32 glyph_id { 0 };
 };
-
-typedef struct ShapeFeature {
-    char tag[4];
-    u32 value;
-} ShapeFeature;
-
-using ShapeFeatures = Vector<ShapeFeature, 4>;
 
 class GlyphRun : public AtomicRefCounted<GlyphRun> {
 public:
@@ -64,13 +58,8 @@ private:
     float m_width { 0 };
 };
 
-template<typename UnicodeView>
-NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, UnicodeView const& string, Gfx::Font const& font, GlyphRun::TextType, ShapeFeatures const& features);
-
-template<typename UnicodeView>
-Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, UnicodeView const& string, FontCascadeList const&);
-
-template<typename UnicodeView>
-float measure_text_width(UnicodeView const& string, Gfx::Font const& font, ShapeFeatures const& features);
+NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, Utf16View const&, Gfx::Font const& font, GlyphRun::TextType, ShapeFeatures const& features);
+Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, Utf16View const&, FontCascadeList const&);
+float measure_text_width(Utf16View const&, Gfx::Font const& font, ShapeFeatures const& features);
 
 }

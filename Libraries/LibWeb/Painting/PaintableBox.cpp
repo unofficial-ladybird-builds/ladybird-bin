@@ -532,13 +532,13 @@ void PaintableBox::paint_inspector_overlay_internal(DisplayListRecordingContext&
 
     auto font = Platform::FontPlugin::the().default_font(12);
 
-    StringBuilder builder;
+    StringBuilder builder(StringBuilder::Mode::UTF16);
     if (layout_node_with_style_and_box_metrics().dom_node())
         builder.append(layout_node_with_style_and_box_metrics().dom_node()->debug_description());
     else
         builder.append(layout_node_with_style_and_box_metrics().debug_description());
     builder.appendff(" {}x{} @ {},{}", border_rect.width(), border_rect.height(), border_rect.x(), border_rect.y());
-    auto size_text = MUST(builder.to_string());
+    auto size_text = builder.to_utf16_string();
     auto size_text_rect = border_rect;
     size_text_rect.set_y(border_rect.y() + border_rect.height());
     size_text_rect.set_top(size_text_rect.top());

@@ -1,12 +1,13 @@
 /*
  * Copyright (c) 2023, MacDue <macdue@dueutil.tech>
  * Copyright (c) 2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2025, Andreas Kling <andreas@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/TypeCasts.h>
-#include <AK/Utf8View.h>
+#include <AK/Utf16String.h>
 #include <LibGfx/Font/Font.h>
 #include <LibGfx/Font/FontDatabase.h>
 #include <LibGfx/Font/TypefaceSkia.h>
@@ -61,14 +62,12 @@ ScaledFontMetrics Font::metrics() const
     return metrics;
 }
 
-float Font::width(StringView view) const { return measure_text_width(Utf8View(view), *this, {}); }
-float Font::width(Utf8View const& view) const { return measure_text_width(view, *this, {}); }
 float Font::width(Utf16View const& view) const { return measure_text_width(view, *this, {}); }
 
 float Font::glyph_width(u32 code_point) const
 {
-    auto string = String::from_code_point(code_point);
-    return measure_text_width(Utf8View(string), *this, {});
+    auto string = Utf16String::from_code_point(code_point);
+    return measure_text_width(string.utf16_view(), *this, {});
 }
 
 NonnullRefPtr<Font> Font::scaled_with_size(float point_size) const
@@ -125,6 +124,25 @@ SkFont Font::skia_font(float scale) const
     auto sk_font = SkFont { sk_ref_sp(sk_typeface), pixel_size() * scale };
     sk_font.setSubpixel(true);
     return sk_font;
+}
+
+Font::ShapingCache::~ShapingCache()
+{
+    clear();
+}
+
+void Font::ShapingCache::clear()
+{
+    for (auto& it : map) {
+        hb_buffer_destroy(it.value);
+    }
+    map.clear();
+    for (auto& buffer : single_ascii_character_map) {
+        if (buffer) {
+            hb_buffer_destroy(buffer);
+            buffer = nullptr;
+        }
+    }
 }
 
 }
