@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "*" ]
   schedule:
-        - cron: '0 */48 * * *'  # Every 48 hours
+    - cron: '0 */48 * * *'  # Every 48 hours
   workflow_dispatch:
 
 permissions:
@@ -34,16 +34,15 @@ jobs:
           # Bring in everything from upstream
           git checkout upstream/master -- .
 
-          # Keep our .github folder (workflows, configs)
+          # Keep .github folder and README
           git restore --source=HEAD --staged --worktree .github
-          git restore --staged --worktree -- README.md  # Keeps README as-is
+          git restore --staged --worktree -- README.md
 
-          # Commit the sync (only if there are changes)
+          # Commit sync if needed
           git add -A
           git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
           git push origin master || echo "No changes pushed"
 
-      # --- Rest of your build process ---
       - name: Add Kitware APT repo for CMake >= 3.25
         run: |
           sudo apt update
@@ -83,17 +82,14 @@ jobs:
         run: |
           cmake --version
           clang-20 --version
-          
-      #- name: Build Ladybird with portable flags
-        #run: |
+
+      - name: Build Ladybird with portable flags
+        run: |
           chmod +x ./Meta/ladybird.py
           export BUILD_PRESET=Release
           export CMAKE_C_FLAGS="-O2 -march=x86-64 -mtune=generic"
           export CMAKE_CXX_FLAGS="-O2 -march=x86-64 -mtune=generic"
           ./Meta/ladybird.py build
-          #export CMAKE_C_FLAGS="-march=x86-64 -mtune=generic"
-          #export CMAKE_CXX_FLAGS="-march=x86-64 -mtune=generic"
-          #./Meta/ladybird.py build
 
       - name: Ensure Resources exist or add dummy
         run: |
