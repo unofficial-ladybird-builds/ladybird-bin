@@ -184,7 +184,7 @@ OwnFontFaceKey::operator FontFaceKey() const
 
 StyleComputer::StyleComputer(DOM::Document& document)
     : m_document(document)
-    , m_default_font_metrics(16, Platform::FontPlugin::the().default_font(16)->pixel_metrics())
+    , m_default_font_metrics(16, Platform::FontPlugin::the().default_font(16)->pixel_metrics(), InitialValues::line_height())
     , m_root_element_font_metrics(m_default_font_metrics)
 {
     m_ancestor_filter = make<CountingBloomFilter<u8, 14>>();
@@ -977,7 +977,8 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
         compute_property_values(computed_properties);
         Length::FontMetrics font_metrics {
             computed_properties.font_size(),
-            computed_properties.first_available_computed_font().pixel_metrics()
+            computed_properties.first_available_computed_font().pixel_metrics(),
+            computed_properties.line_height()
         };
 
         HashMap<PropertyID, RefPtr<StyleValue const>> specified_values;
@@ -1081,6 +1082,15 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
         if (auto const& font_style_specified_value = specified_values.get(PropertyID::FontStyle); font_style_specified_value.has_value())
             result.set(PropertyID::FontStyle, compute_font_style(*font_style_specified_value.value(), parent_length_resolution_context));
 
+        if (auto const& line_height_specified_value = specified_values.get(PropertyID::LineHeight); line_height_specified_value.has_value()) {
+            Length::FontMetrics line_height_font_metrics {
+                computed_properties.font_size(),
+                computed_properties.first_available_computed_font().pixel_metrics(),
+                inheritance_parent_has_computed_properties ? inheritance_parent->computed_properties()->line_height() : InitialValues::line_height()
+            };
+            result.set(PropertyID::LineHeight, compute_line_height(*line_height_specified_value.value(), { .viewport_rect = viewport_rect(), .font_metrics = line_height_font_metrics, .root_font_metrics = m_root_element_font_metrics }));
+        }
+
         PropertyValueComputationContext property_value_computation_context {
             .length_resolution_context = {
                 .viewport_rect = viewport_rect(),
@@ -1102,7 +1112,7 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
             if (!style_value)
                 continue;
 
-            if (first_is_one_of(property_id, PropertyID::FontSize, PropertyID::FontWeight, PropertyID::FontWidth))
+            if (first_is_one_of(property_id, PropertyID::FontSize, PropertyID::FontWeight, PropertyID::FontWidth, PropertyID::FontStyle, PropertyID::LineHeight))
                 continue;
 
             auto const& computed_value = compute_value_of_property(property_id, *style_value, get_property_specified_value, property_value_computation_context);
@@ -1707,9 +1717,9 @@ Length::FontMetrics StyleComputer::calculate_root_element_font_metrics(ComputedP
     auto const& root_value = style.property(CSS::PropertyID::FontSize);
 
     auto font_pixel_metrics = style.first_available_computed_font().pixel_metrics();
-    Length::FontMetrics font_metrics { m_default_font_metrics.font_size, font_pixel_metrics };
+    Length::FontMetrics font_metrics { m_default_font_metrics.font_size, font_pixel_metrics, InitialValues::line_height() };
     font_metrics.font_size = root_value.as_length().length().to_px(viewport_rect(), font_metrics, font_metrics);
-    font_metrics.line_height = style.compute_line_height(viewport_rect(), font_metrics, font_metrics);
+    font_metrics.line_height = style.line_height();
 
     return font_metrics;
 }
@@ -2035,6 +2045,25 @@ void StyleComputer::compute_font(ComputedProperties& style, Optional<DOM::Abstra
 
     style.set_computed_font_list(*font_list);
 
+    Length::FontMetrics line_height_font_metrics {
+        style.font_size(),
+        found_font->pixel_metrics(),
+        inheritance_parent_has_computed_properties ? inheritance_parent->computed_properties()->line_height() : InitialValues::line_height()
+    };
+
+    auto line_height_length_resolution_context = Length::ResolutionContext {
+        .viewport_rect = viewport_rect(),
+        .font_metrics = line_height_font_metrics,
+        .root_font_metrics = abstract_element.has_value() && is<HTML::HTMLHtmlElement>(abstract_element->element()) ? line_height_font_metrics : m_root_element_font_metrics,
+    };
+
+    auto const& line_height_specified_value = style.property(CSS::PropertyID::LineHeight, ComputedProperties::WithAnimationsApplied::No);
+
+    style.set_property(
+        PropertyID::LineHeight,
+        compute_line_height(line_height_specified_value, line_height_length_resolution_context),
+        style.is_property_inherited(PropertyID::LineHeight) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No);
+
     if (abstract_element.has_value() && is<HTML::HTMLHtmlElement>(abstract_element->element())) {
         const_cast<StyleComputer&>(*this).m_root_element_font_metrics = calculate_root_element_font_metrics(style);
     }
@@ -2090,21 +2119,9 @@ void StyleComputer::compute_property_values(ComputedProperties& style) const
 {
     Length::FontMetrics font_metrics {
         style.font_size(),
-        style.first_available_computed_font().pixel_metrics()
+        style.first_available_computed_font().pixel_metrics(),
+        style.line_height()
     };
-
-    auto const& line_height_specified_value = style.property(CSS::PropertyID::LineHeight, ComputedProperties::WithAnimationsApplied::No);
-
-    auto line_height = style.compute_line_height(viewport_rect(), font_metrics, m_root_element_font_metrics);
-    font_metrics.line_height = line_height;
-
-    // NOTE: line-height might be using lh which should be resolved against the parent line height (like we did here already)
-    if (line_height_specified_value.is_length() || line_height_specified_value.is_percentage()) {
-        auto const& computed_value = LengthStyleValue::create(Length::make_px(line_height));
-        auto is_inherited = style.is_property_inherited(PropertyID::LineHeight) ? ComputedProperties::Inherited::Yes : ComputedProperties::Inherited::No;
-
-        style.set_property(PropertyID::LineHeight, computed_value, is_inherited);
-    }
 
     PropertyValueComputationContext computation_context {
         .length_resolution_context = {
@@ -2130,8 +2147,6 @@ void StyleComputer::compute_property_values(ComputedProperties& style) const
 
         style.set_property(property_id, absolutized_value, is_inherited);
     });
-
-    style.set_line_height({}, line_height);
 }
 
 void StyleComputer::resolve_effective_overflow_values(ComputedProperties& style) const
@@ -2525,7 +2540,10 @@ RefPtr<StyleValue const> StyleComputer::recascade_font_size_if_needed(DOM::Abstr
         }
 
         VERIFY(font_size_value->is_length());
-        current_size_in_px = font_size_value->as_length().length().to_px(viewport_rect(), Length::FontMetrics { current_size_in_px, monospace_font->with_size(current_size_in_px * 0.75f)->pixel_metrics() }, m_root_element_font_metrics);
+
+        auto inherited_line_height = ancestor.element_to_inherit_style_from().map([](auto& parent_element) { return parent_element.computed_properties()->line_height(); }).value_or(InitialValues::line_height());
+
+        current_size_in_px = font_size_value->as_length().length().to_px(viewport_rect(), Length::FontMetrics { current_size_in_px, monospace_font->with_size(current_size_in_px * 0.75f)->pixel_metrics(), inherited_line_height }, m_root_element_font_metrics);
     };
 
     return CSS::LengthStyleValue::create(CSS::Length::make_px(current_size_in_px));
@@ -3413,6 +3431,36 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_font_width(NonnullRefPtr<
     default:
         VERIFY_NOT_REACHED();
     }
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_line_height(NonnullRefPtr<StyleValue const> const& specified_value, Length::ResolutionContext const& length_resolution_context)
+{
+    // https://drafts.csswg.org/css-inline-3/#line-height-property
+    // normal
+    if (specified_value->to_keyword() == Keyword::Normal)
+        return specified_value;
+
+    // <length [0,∞]>
+    if (specified_value->is_length())
+        return specified_value->as_length().absolutized(length_resolution_context.viewport_rect, length_resolution_context.font_metrics, length_resolution_context.root_font_metrics);
+
+    // NOTE: We also support calc()'d lengths (percentages resolve to lengths so we don't have to handle them separately)
+    if (specified_value->is_calculated() && specified_value->as_calculated().resolves_to_length())
+        return LengthStyleValue::create(specified_value->as_calculated().resolve_length({ .percentage_basis = Length(1, LengthUnit::Em), .length_resolution_context = length_resolution_context }).value());
+
+    // <number [0,∞]>
+    if (specified_value->is_number())
+        return specified_value;
+
+    // NOTE: We also support calc()'d numbers
+    if (specified_value->is_calculated() && specified_value->as_calculated().resolves_to_number())
+        return NumberStyleValue::create(specified_value->as_calculated().resolve_number({ .length_resolution_context = length_resolution_context }).value());
+
+    // <percentage [0,∞]>
+    if (specified_value->is_percentage())
+        return LengthStyleValue::create(Length::make_px(length_resolution_context.font_metrics.font_size * specified_value->as_percentage().percentage().as_fraction()));
+
+    VERIFY_NOT_REACHED();
 }
 
 NonnullRefPtr<StyleValue const> StyleComputer::compute_opacity(NonnullRefPtr<StyleValue const> const& specified_value, PropertyValueComputationContext const& computation_context)
