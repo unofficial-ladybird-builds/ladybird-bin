@@ -77,40 +77,31 @@ public:
 
     bool resolves_to_angle() const { return m_resolved_type.matches_angle(m_context.percentages_resolve_as); }
     bool resolves_to_angle_percentage() const { return m_resolved_type.matches_angle_percentage(m_context.percentages_resolve_as); }
-    Optional<Angle> resolve_angle_deprecated(CalculationResolutionContext const&) const;
     Optional<Angle> resolve_angle(CalculationResolutionContext const&) const;
 
     bool resolves_to_flex() const { return m_resolved_type.matches_flex(m_context.percentages_resolve_as); }
-    Optional<Flex> resolve_flex_deprecated(CalculationResolutionContext const&) const;
     Optional<Flex> resolve_flex(CalculationResolutionContext const&) const;
 
     bool resolves_to_frequency() const { return m_resolved_type.matches_frequency(m_context.percentages_resolve_as); }
     bool resolves_to_frequency_percentage() const { return m_resolved_type.matches_frequency_percentage(m_context.percentages_resolve_as); }
-    Optional<Frequency> resolve_frequency_deprecated(CalculationResolutionContext const&) const;
     Optional<Frequency> resolve_frequency(CalculationResolutionContext const&) const;
 
     bool resolves_to_length() const { return m_resolved_type.matches_length(m_context.percentages_resolve_as); }
     bool resolves_to_length_percentage() const { return m_resolved_type.matches_length_percentage(m_context.percentages_resolve_as); }
-    Optional<Length> resolve_length_deprecated(CalculationResolutionContext const&) const;
     Optional<Length> resolve_length(CalculationResolutionContext const&) const;
 
     bool resolves_to_percentage() const { return m_resolved_type.matches_percentage(); }
-    Optional<Percentage> resolve_percentage_deprecated(CalculationResolutionContext const&) const;
     Optional<Percentage> resolve_percentage(CalculationResolutionContext const&) const;
 
     bool resolves_to_resolution() const { return m_resolved_type.matches_resolution(m_context.percentages_resolve_as); }
-    Optional<Resolution> resolve_resolution_deprecated(CalculationResolutionContext const&) const;
     Optional<Resolution> resolve_resolution(CalculationResolutionContext const&) const;
 
     bool resolves_to_time() const { return m_resolved_type.matches_time(m_context.percentages_resolve_as); }
     bool resolves_to_time_percentage() const { return m_resolved_type.matches_time_percentage(m_context.percentages_resolve_as); }
-    Optional<Time> resolve_time_deprecated(CalculationResolutionContext const&) const;
     Optional<Time> resolve_time(CalculationResolutionContext const&) const;
 
     bool resolves_to_number() const { return m_resolved_type.matches_number(m_context.percentages_resolve_as); }
-    Optional<double> resolve_number_deprecated(CalculationResolutionContext const&) const;
     Optional<double> resolve_number(CalculationResolutionContext const&) const;
-    Optional<i64> resolve_integer_deprecated(CalculationResolutionContext const&) const;
     Optional<i64> resolve_integer(CalculationResolutionContext const&) const;
 
     bool resolves_to_dimension() const { return m_resolved_type.matches_dimension(); }
@@ -246,7 +237,6 @@ public:
 
     Optional<NumericType> const& numeric_type() const { return m_numeric_type; }
     virtual bool contains_percentage() const = 0;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const = 0;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const = 0;
     // Step 4 of simpliRfy_a_calculation_tree(). Only valid for math-function nodes.
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const { VERIFY_NOT_REACHED(); }
@@ -277,7 +267,6 @@ public:
 
     virtual bool contains_percentage() const override;
     bool is_in_canonical_unit() const;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override { return *this; }
 
     RefPtr<StyleValue const> to_style_value(CalculationContext const&) const;
@@ -305,7 +294,6 @@ public:
     ~SumCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
 
     virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return m_values; }
@@ -325,7 +313,6 @@ public:
     ~ProductCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
 
     virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return m_values; }
@@ -345,7 +332,6 @@ public:
     ~NegateCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
 
     virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return { { m_value } }; }
@@ -366,7 +352,6 @@ public:
     ~InvertCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
 
     virtual Vector<NonnullRefPtr<CalculationNode const>> children() const override { return { { m_value } }; }
@@ -387,7 +372,6 @@ public:
     ~MinCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -408,7 +392,6 @@ public:
     ~MaxCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -429,7 +412,6 @@ public:
     ~ClampCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -452,7 +434,6 @@ public:
     ~AbsCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -472,7 +453,6 @@ public:
     ~SignCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -492,7 +472,6 @@ public:
     ~SinCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -512,7 +491,6 @@ public:
     ~CosCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -532,7 +510,6 @@ public:
     ~TanCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -552,7 +529,6 @@ public:
     ~AsinCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -572,7 +548,6 @@ public:
     ~AcosCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -592,7 +567,6 @@ public:
     ~AtanCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -612,7 +586,6 @@ public:
     ~Atan2CalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -633,7 +606,6 @@ public:
     ~PowCalculationNode();
 
     virtual bool contains_percentage() const override { return false; }
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -654,7 +626,6 @@ public:
     ~SqrtCalculationNode();
 
     virtual bool contains_percentage() const override { return false; }
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -674,7 +645,6 @@ public:
     ~HypotCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -694,7 +664,6 @@ public:
     ~LogCalculationNode();
 
     virtual bool contains_percentage() const override { return false; }
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -715,7 +684,6 @@ public:
     ~ExpCalculationNode();
 
     virtual bool contains_percentage() const override { return false; }
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -735,7 +703,6 @@ public:
     ~RoundCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -759,7 +726,6 @@ public:
     ~ModCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 
@@ -780,7 +746,6 @@ public:
     ~RemCalculationNode();
 
     virtual bool contains_percentage() const override;
-    virtual CalculatedStyleValue::CalculationResult resolve(CalculationResolutionContext const&) const override;
     virtual NonnullRefPtr<CalculationNode const> with_simplified_children(CalculationContext const&, CalculationResolutionContext const&) const override;
     virtual Optional<CalculatedStyleValue::CalculationResult> run_operation_if_possible(CalculationContext const&, CalculationResolutionContext const&) const override;
 

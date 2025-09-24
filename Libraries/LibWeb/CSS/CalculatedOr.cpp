@@ -20,7 +20,7 @@ namespace Web::CSS {
 
 Optional<Angle> AngleOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_angle_deprecated(context);
+    return calculated->resolve_angle(context);
 }
 
 NonnullRefPtr<StyleValue const> AngleOrCalculated::create_style_value() const
@@ -30,7 +30,7 @@ NonnullRefPtr<StyleValue const> AngleOrCalculated::create_style_value() const
 
 Optional<Flex> FlexOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_flex_deprecated(context);
+    return calculated->resolve_flex(context);
 }
 
 NonnullRefPtr<StyleValue const> FlexOrCalculated::create_style_value() const
@@ -40,7 +40,7 @@ NonnullRefPtr<StyleValue const> FlexOrCalculated::create_style_value() const
 
 Optional<Frequency> FrequencyOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_frequency_deprecated(context);
+    return calculated->resolve_frequency(context);
 }
 
 NonnullRefPtr<StyleValue const> FrequencyOrCalculated::create_style_value() const
@@ -50,7 +50,7 @@ NonnullRefPtr<StyleValue const> FrequencyOrCalculated::create_style_value() cons
 
 Optional<i64> IntegerOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_integer_deprecated(context);
+    return calculated->resolve_integer(context);
 }
 
 NonnullRefPtr<StyleValue const> IntegerOrCalculated::create_style_value() const
@@ -60,7 +60,7 @@ NonnullRefPtr<StyleValue const> IntegerOrCalculated::create_style_value() const
 
 Optional<Length> LengthOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_length_deprecated(context);
+    return calculated->resolve_length(context);
 }
 
 NonnullRefPtr<StyleValue const> LengthOrCalculated::create_style_value() const
@@ -96,7 +96,7 @@ LengthOrCalculated LengthOrAutoOrCalculated::without_auto() const
 
 Optional<double> NumberOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_number_deprecated(context);
+    return calculated->resolve_number(context);
 }
 
 NonnullRefPtr<StyleValue const> NumberOrCalculated::create_style_value() const
@@ -106,7 +106,7 @@ NonnullRefPtr<StyleValue const> NumberOrCalculated::create_style_value() const
 
 Optional<Percentage> PercentageOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_percentage_deprecated(context);
+    return calculated->resolve_percentage(context);
 }
 
 NonnullRefPtr<StyleValue const> PercentageOrCalculated::create_style_value() const
@@ -116,7 +116,7 @@ NonnullRefPtr<StyleValue const> PercentageOrCalculated::create_style_value() con
 
 Optional<Resolution> ResolutionOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_resolution_deprecated(context);
+    return calculated->resolve_resolution(context);
 }
 
 NonnullRefPtr<StyleValue const> ResolutionOrCalculated::create_style_value() const
@@ -126,7 +126,7 @@ NonnullRefPtr<StyleValue const> ResolutionOrCalculated::create_style_value() con
 
 Optional<Time> TimeOrCalculated::resolve_calculated(NonnullRefPtr<CalculatedStyleValue const> const& calculated, CalculationResolutionContext const& context) const
 {
-    return calculated->resolve_time_deprecated(context);
+    return calculated->resolve_time(context);
 }
 
 NonnullRefPtr<StyleValue const> TimeOrCalculated::create_style_value() const
