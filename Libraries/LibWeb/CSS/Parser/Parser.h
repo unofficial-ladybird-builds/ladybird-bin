@@ -422,6 +422,7 @@ private:
     RefPtr<StyleValue const> parse_all_as_single_keyword_value(TokenStream<ComponentValue>&, Keyword);
 
     RefPtr<StyleValue const> parse_aspect_ratio_value(TokenStream<ComponentValue>&);
+    RefPtr<StyleValue const> parse_animation_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_background_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_single_background_position_x_or_y_value(TokenStream<ComponentValue>&, PropertyID);
     RefPtr<StyleValue const> parse_single_background_size_value(PropertyID, TokenStream<ComponentValue>&);
@@ -551,7 +552,6 @@ private:
         DescriptorID descriptor;
     };
     enum SpecialContext : u8 {
-        FontStyleObliqueAngle,
         ShadowBlurRadius,
         TranslateZArgument
     };

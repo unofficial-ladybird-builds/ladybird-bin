@@ -973,8 +973,6 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
             return camel_case_string_from_property_id(a) < camel_case_string_from_property_id(b);
         };
 
-        compute_font(computed_properties, abstract_element);
-        compute_property_values(computed_properties);
         Length::FontMetrics font_metrics {
             computed_properties.font_size(),
             computed_properties.first_available_computed_font().pixel_metrics(),
@@ -2603,6 +2601,19 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
         }
     }
 
+    // Compute the value of custom properties
+    compute_custom_properties(computed_style, abstract_element);
+
+    // 2. Compute the math-depth property, since that might affect the font-size
+    compute_math_depth(computed_style, abstract_element);
+
+    // 3. Compute the font, since that may be needed for font-relative CSS units
+    compute_font(computed_style, abstract_element);
+
+    // 4. Convert properties into their computed forms
+    compute_property_values(computed_style);
+
+    // FIXME: Support multiple entries for `animation` properties
     // Animation declarations [css-animations-2]
     auto animation_name = [&]() -> Optional<String> {
         auto const& animation_name = computed_style->property(PropertyID::AnimationName);
@@ -2671,18 +2682,6 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
             }
         }
     }
-
-    // Compute the value of custom properties
-    compute_custom_properties(computed_style, abstract_element);
-
-    // 2. Compute the math-depth property, since that might affect the font-size
-    compute_math_depth(computed_style, abstract_element);
-
-    // 3. Compute the font, since that may be needed for font-relative CSS units
-    compute_font(computed_style, abstract_element);
-
-    // 4. Convert properties into their computed forms
-    compute_property_values(computed_style);
 
     // 5. Run automatic box type transformations
     transform_box_type_if_needed(computed_style, abstract_element);
@@ -3175,9 +3174,25 @@ static CSSPixels snap_a_length_as_a_border_width(double device_pixels_per_css_pi
     return length;
 }
 
+static NonnullRefPtr<StyleValue const> compute_style_value_list(NonnullRefPtr<StyleValue const> const& style_value, Function<NonnullRefPtr<StyleValue const>(NonnullRefPtr<StyleValue const> const&)> const& compute_entry)
+{
+    if (style_value->is_value_list()) {
+        StyleValueVector computed_entries;
+
+        for (auto const& entry : style_value->as_value_list().values())
+            computed_entries.append(compute_entry(entry));
+
+        return StyleValueList::create(move(computed_entries), StyleValueList::Separator::Comma);
+    }
+
+    return compute_entry(style_value);
+}
+
 NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(PropertyID property_id, NonnullRefPtr<StyleValue const> const& specified_value, Function<NonnullRefPtr<StyleValue const>(PropertyID)> const& get_property_specified_value, PropertyValueComputationContext const& computation_context)
 {
     switch (property_id) {
+    case PropertyID::AnimationName:
+        return compute_animation_name(specified_value, computation_context);
     case PropertyID::BorderBottomWidth:
         return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderBottomStyle), computation_context);
     case PropertyID::BorderLeftWidth:
@@ -3207,6 +3222,31 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(Propert
     }
 
     VERIFY_NOT_REACHED();
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_animation_name(NonnullRefPtr<StyleValue const> const& specified_value, PropertyValueComputationContext const&)
+{
+    // https://drafts.csswg.org/css-animations-1/#animation-name
+    // list, each item either a case-sensitive css identifier or the keyword none
+
+    return compute_style_value_list(specified_value, [](NonnullRefPtr<StyleValue const> const& entry) -> NonnullRefPtr<StyleValue const> {
+        // none | <custom-ident>
+        if (entry->to_keyword() == Keyword::None || entry->is_custom_ident())
+            return entry;
+
+        // <string>
+        if (entry->is_string()) {
+            auto const& string_value = entry->as_string().string_value();
+
+            // AD-HOC: We shouldn't convert strings that aren't valid <custom-ident>s
+            if (is_css_wide_keyword(string_value) || string_value.is_one_of_ignoring_ascii_case("default"sv, "none"sv))
+                return entry;
+
+            return CustomIdentStyleValue::create(entry->as_string().string_value());
+        }
+
+        VERIFY_NOT_REACHED();
+    });
 }
 
 NonnullRefPtr<StyleValue const> StyleComputer::compute_border_or_outline_width(NonnullRefPtr<StyleValue const> const& specified_value, NonnullRefPtr<StyleValue const> const& style_specified_value, PropertyValueComputationContext const& computation_context)
@@ -3474,7 +3514,7 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_opacity(NonnullRefPtr<Sty
 
     // NOTE: We also support calc()'d numbers
     if (specified_value->is_calculated() && specified_value->as_calculated().resolves_to_number())
-        return NumberStyleValue::create(clamp(specified_value->as_calculated().resolve_number({ .length_resolution_context = computation_context.length_resolution_context }).value(), 0, 1));
+        return NumberStyleValue::create(specified_value->as_calculated().resolve_number({ .length_resolution_context = computation_context.length_resolution_context }).value());
 
     // <percentage>
     if (specified_value->is_percentage())
@@ -3482,7 +3522,7 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_opacity(NonnullRefPtr<Sty
 
     // NOTE: We also support calc()'d percentages
     if (specified_value->is_calculated() && specified_value->as_calculated().resolves_to_percentage())
-        return NumberStyleValue::create(clamp(specified_value->as_calculated().resolve_percentage({ .length_resolution_context = computation_context.length_resolution_context })->as_fraction(), 0, 1));
+        return NumberStyleValue::create(specified_value->as_calculated().resolve_percentage({ .length_resolution_context = computation_context.length_resolution_context })->as_fraction());
 
     VERIFY_NOT_REACHED();
 }

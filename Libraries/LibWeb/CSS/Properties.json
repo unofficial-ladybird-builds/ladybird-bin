@@ -199,14 +199,14 @@
     "inherited": false,
     "initial": "none 0s ease 1 normal running 0s none",
     "longhands": [
-      "animation-name",
       "animation-duration",
       "animation-timing-function",
+      "animation-delay",
       "animation-iteration-count",
       "animation-direction",
+      "animation-fill-mode",
       "animation-play-state",
-      "animation-delay",
-      "animation-fill-mode"
+      "animation-name"
     ]
   },
   "animation-composition": {
@@ -1694,7 +1694,8 @@
     "inherited": true,
     "initial": "normal",
     "valid-types": [
-      "font-style"
+      "font-style",
+      "angle [-90,90]"
     ]
   },
   "font-variant": {
