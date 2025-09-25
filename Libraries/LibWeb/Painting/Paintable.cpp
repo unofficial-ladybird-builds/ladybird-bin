@@ -47,6 +47,11 @@ void Paintable::visit_edges(Cell::Visitor& visitor)
         visitor.visit(m_containing_block.value());
 }
 
+String Paintable::debug_description() const
+{
+    return MUST(String::formatted("{}({})", class_name(), layout_node().debug_description()));
+}
+
 bool Paintable::is_visible() const
 {
     auto const& computed_values = this->computed_values();
@@ -296,6 +301,18 @@ Painting::BorderRadiiData normalize_border_radii_data(Layout::Node const& node, 
     }
 
     return radii_px;
+}
+
+void Paintable::set_needs_paint_only_properties_update(bool needs_update)
+{
+    if (needs_update == m_needs_paint_only_properties_update)
+        return;
+
+    m_needs_paint_only_properties_update = needs_update;
+
+    if (needs_update) {
+        document().set_needs_to_resolve_paint_only_properties();
+    }
 }
 
 }
