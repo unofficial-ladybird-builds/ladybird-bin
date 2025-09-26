@@ -206,6 +206,7 @@ public:
     void define_native_accessor(Realm&, PropertyKey const&, ESCAPING Function<ThrowCompletionOr<Value>(VM&)> getter, ESCAPING Function<ThrowCompletionOr<Value>(VM&)> setter, PropertyAttributes attributes);
 
     virtual bool is_dom_node() const { return false; }
+    virtual bool is_dom_element() const { return false; }
     virtual bool is_dom_event() const { return false; }
     virtual bool is_html_window() const { return false; }
     virtual bool is_html_window_proxy() const { return false; }
@@ -227,6 +228,8 @@ public:
     virtual bool is_ecmascript_function_object() const { return false; }
     virtual bool is_array_iterator() const { return false; }
     virtual bool is_raw_json_object() const { return false; }
+    virtual bool is_set_object() const { return false; }
+    virtual bool is_map_object() const { return false; }
 
     virtual bool eligible_for_own_property_enumeration_fast_path() const { return true; }
 
