@@ -1,5 +1,5 @@
 {
-  "builtin-baseline": "120deac3062162151622ca4860575a33844ba10b",
+  "builtin-baseline": "b0b3de1b1a0aa4b8f2822460aa7f42f991629b3f",
   "dependencies": [
     {
       "name": "angle",
@@ -208,23 +208,23 @@
     },
     {
       "name": "curl",
-      "version": "8.15.0#1"
+      "version": "8.16.0#0"
     },
     {
       "name": "dbus",
-      "version": "1.16.2#1"
+      "version": "1.16.2#2"
     },
     {
       "name": "dirent",
-      "version": "1.25#0"
+      "version": "1.26#0"
     },
     {
       "name": "fast-float",
-      "version": "8.0.2#0"
+      "version": "8.1.0#0"
     },
     {
       "name": "ffmpeg",
-      "version": "7.1.1#4"
+      "version": "7.1.1#5"
     },
     {
       "name": "fontconfig",
@@ -264,7 +264,7 @@
     },
     {
       "name": "libwebp",
-      "version": "1.6.0#0"
+      "version": "1.6.0#1"
     },
     {
       "name": "mman",
@@ -272,7 +272,7 @@
     },
     {
       "name": "openssl",
-      "version": "3.5.2#0"
+      "version": "3.5.3#0"
     },
     {
       "name": "qtbase",
@@ -284,7 +284,7 @@
     },
     {
       "name": "sdl3",
-      "version": "3.2.20#0"
+      "version": "3.2.22#0"
     },
     {
       "name": "simdutf",
