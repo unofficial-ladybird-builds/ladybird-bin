@@ -62,6 +62,7 @@
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/MathDepthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
+#include <LibWeb/CSS/StyleValues/OpenTypeTaggedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PendingSubstitutionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PositionStyleValue.h>
@@ -901,7 +902,16 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
         return;
     }
 
-    auto key = static_cast<i64>(round(output_progress.value() * 100.0 * Animations::KeyframeEffect::AnimationKeyFrameKeyScaleFactor));
+    double progress = round(output_progress.value() * 100.0 * Animations::KeyframeEffect::AnimationKeyFrameKeyScaleFactor);
+    // FIXME: Support progress values outside the range of i64.
+    i64 key = 0;
+    if (progress > NumericLimits<i64>::max()) {
+        key = NumericLimits<i64>::max();
+    } else if (progress < NumericLimits<i64>::min()) {
+        key = NumericLimits<i64>::min();
+    } else {
+        key = static_cast<i64>(progress);
+    }
     auto keyframe_start_it = [&] {
         if (output_progress.value() <= 0) {
             return keyframes.begin();
@@ -922,8 +932,7 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
     auto keyframe_end = static_cast<i64>(keyframe_end_it.key());
     auto keyframe_end_values = *keyframe_end_it;
 
-    auto progress_in_keyframe
-        = static_cast<float>(key - keyframe_start) / static_cast<float>(keyframe_end - keyframe_start);
+    auto progress_in_keyframe = (progress - keyframe_start) / static_cast<double>(keyframe_end - keyframe_start);
 
     if constexpr (LIBWEB_CSS_ANIMATION_DEBUG) {
         auto valid_properties = keyframe_values.properties.size();
@@ -3203,6 +3212,8 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(Propert
         return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::BorderTopStyle), computation_context);
     case PropertyID::OutlineWidth:
         return compute_border_or_outline_width(specified_value, get_property_specified_value(PropertyID::OutlineStyle), computation_context);
+    case PropertyID::FontVariationSettings:
+        return compute_font_variation_settings(specified_value);
     case PropertyID::LetterSpacing:
     case PropertyID::WordSpacing:
         if (specified_value->to_keyword() == Keyword::Normal)
@@ -3247,6 +3258,35 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_animation_name(NonnullRef
 
         VERIFY_NOT_REACHED();
     });
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_font_variation_settings(NonnullRefPtr<StyleValue const> const& specified_value)
+{
+    if (specified_value->is_keyword())
+        return specified_value;
+
+    // https://drafts.csswg.org/css-fonts-4/#font-variation-settings-def
+    // If the same axis name appears more than once, the value associated with the last appearance supersedes any
+    // previous value for that axis. This deduplication is observable by accessing the computed value of this property."
+    // So, we deduplicate them here using a HashSet.
+    auto const& value_list = specified_value->as_value_list();
+    OrderedHashMap<FlyString, NonnullRefPtr<OpenTypeTaggedStyleValue const>> axis_tags_map;
+    for (size_t i = 0; i < value_list.values().size(); i++) {
+        auto const& axis_tag = value_list.values().at(i)->as_open_type_tagged();
+        axis_tags_map.set(axis_tag.tag(), axis_tag);
+    }
+
+    StyleValueVector axis_tags;
+
+    // The computed value contains the de-duplicated axis names, sorted in ascending order by code unit.
+    for (auto const& [key, axis_tag] : axis_tags_map)
+        axis_tags.append(axis_tag);
+
+    quick_sort(axis_tags, [](auto& a, auto& b) {
+        return a->as_open_type_tagged().tag() < b->as_open_type_tagged().tag();
+    });
+
+    return StyleValueList::create(move(axis_tags), StyleValueList::Separator::Comma);
 }
 
 NonnullRefPtr<StyleValue const> StyleComputer::compute_border_or_outline_width(NonnullRefPtr<StyleValue const> const& specified_value, NonnullRefPtr<StyleValue const> const& style_specified_value, PropertyValueComputationContext const& computation_context)

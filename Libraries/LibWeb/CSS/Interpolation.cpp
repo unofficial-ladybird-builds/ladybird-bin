@@ -24,6 +24,7 @@
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
+#include <LibWeb/CSS/StyleValues/OpenTypeTaggedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RatioStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
@@ -461,6 +462,138 @@ static RefPtr<StyleValue const> interpolate_rotate(DOM::Element& element, Calcul
         { interpolated_x_axis, interpolated_y_axis, interpolated_z_axis, interpolated_angle });
 }
 
+static Optional<GridTrackSizeList> interpolate_grid_track_size_list(CalculationContext const& calculation_context, GridTrackSizeList const& from, GridTrackSizeList const& to, float delta)
+{
+    auto interpolate_css_size = [&](Size const& from_size, Size const& to_size) -> Size {
+        if (from_size.is_length_percentage() && to_size.is_length_percentage()) {
+            auto interpolated_length = interpolate_length_percentage(calculation_context, from_size.length_percentage(), to_size.length_percentage(), delta);
+            return Size::make_length_percentage(*interpolated_length);
+        }
+
+        if (from_size.type() != to_size.type())
+            return delta < 0.5f ? from_size : to_size;
+
+        switch (from_size.type()) {
+        case Size::Type::FitContent: {
+            if (!from_size.fit_content_available_space().has_value() || !to_size.fit_content_available_space().has_value())
+                break;
+            auto interpolated_available_space = interpolate_length_percentage(calculation_context, *from_size.fit_content_available_space(), *to_size.fit_content_available_space(), delta);
+            if (!interpolated_available_space.has_value())
+                break;
+            return Size::make_fit_content(interpolated_available_space.release_value());
+        }
+        default:
+            break;
+        }
+
+        return delta < 0.5f ? from_size : to_size;
+    };
+
+    auto interpolate_grid_size = [&](GridSize const& from_grid_size, GridSize const& to_grid_size) -> GridSize {
+        if (from_grid_size.is_flexible_length() || to_grid_size.is_flexible_length()) {
+            if (from_grid_size.is_flexible_length() && to_grid_size.is_flexible_length()) {
+                auto interpolated_flex = interpolate_raw(from_grid_size.flex_factor(), to_grid_size.flex_factor(), delta);
+                return GridSize { Flex::make_fr(interpolated_flex) };
+            }
+        } else {
+            auto interpolated_size = interpolate_css_size(from_grid_size.css_size(), to_grid_size.css_size());
+            return GridSize { move(interpolated_size) };
+        }
+        return delta < 0.5f ? from_grid_size : to_grid_size;
+    };
+
+    struct ExpandedTracksAndLines {
+        Vector<ExplicitGridTrack> tracks;
+        Vector<Optional<GridLineNames>> line_names;
+    };
+
+    auto expand_tracks_and_lines = [](GridTrackSizeList const& list) -> ExpandedTracksAndLines {
+        ExpandedTracksAndLines result;
+        Optional<ExplicitGridTrack> current_track;
+        Optional<GridLineNames> current_line_names;
+        auto append_result = [&] {
+            result.tracks.append(*current_track);
+            result.line_names.append(move(current_line_names));
+            current_track.clear();
+            current_line_names.clear();
+        };
+
+        for (auto const& component : list.list()) {
+            if (auto const* grid_line_names = component.get_pointer<GridLineNames>()) {
+                VERIFY(!current_line_names.has_value());
+                current_line_names = *grid_line_names;
+            } else if (auto const* grid_track = component.get_pointer<ExplicitGridTrack>()) {
+                if (current_track.has_value())
+                    append_result();
+
+                current_track = *grid_track;
+            }
+            if (current_track.has_value() && current_line_names.has_value())
+                append_result();
+        }
+        if (current_track.has_value())
+            append_result();
+
+        return result;
+    };
+
+    auto expanded_from = expand_tracks_and_lines(from);
+    auto expanded_to = expand_tracks_and_lines(to);
+
+    if (expanded_from.tracks.size() != expanded_to.tracks.size())
+        return {};
+
+    GridTrackSizeList interpolated_grid_track_size_list;
+    auto add_interpolated_grid_track = [&](ExplicitGridTrack track, Optional<GridLineNames> line_names) {
+        interpolated_grid_track_size_list.append(move(track));
+        if (line_names.has_value())
+            interpolated_grid_track_size_list.append(line_names.release_value());
+    };
+
+    for (size_t i = 0; i < expanded_from.tracks.size(); ++i) {
+        auto& from_track = expanded_from.tracks[i];
+        auto& to_track = expanded_to.tracks[i];
+        auto interpolated_line_names = delta < 0.5f ? move(expanded_from.line_names[i]) : move(expanded_to.line_names[i]);
+
+        if (from_track.is_repeat() || to_track.is_repeat()) {
+            // https://drafts.csswg.org/css-grid/#repeat-interpolation
+            if (!from_track.is_repeat() || !to_track.is_repeat())
+                return {};
+
+            auto from_repeat = from_track.repeat();
+            auto to_repeat = to_track.repeat();
+            if (!from_repeat.is_fixed() || !to_repeat.is_fixed())
+                return {};
+            if (from_repeat.repeat_count() != to_repeat.repeat_count() || from_repeat.grid_track_size_list().track_list().size() != to_repeat.grid_track_size_list().track_list().size())
+                return {};
+
+            auto interpolated_repeat_grid_tracks = interpolate_grid_track_size_list(calculation_context, from_repeat.grid_track_size_list(), to_repeat.grid_track_size_list(), delta);
+            if (!interpolated_repeat_grid_tracks.has_value())
+                return {};
+
+            ExplicitGridTrack interpolated_grid_track { GridRepeat { from_repeat.type(), move(*interpolated_repeat_grid_tracks), from_repeat.repeat_count() } };
+            add_interpolated_grid_track(move(interpolated_grid_track), move(interpolated_line_names));
+        } else if (from_track.is_minmax() && to_track.is_minmax()) {
+            auto from_minmax = from_track.minmax();
+            auto to_minmax = to_track.minmax();
+            auto interpolated_min = interpolate_grid_size(from_minmax.min_grid_size(), to_minmax.min_grid_size());
+            auto interpolated_max = interpolate_grid_size(from_minmax.max_grid_size(), to_minmax.max_grid_size());
+            ExplicitGridTrack interpolated_grid_track { GridMinMax { interpolated_min, interpolated_max } };
+            add_interpolated_grid_track(move(interpolated_grid_track), move(interpolated_line_names));
+        } else if (from_track.is_default() && to_track.is_default()) {
+            auto const& from_grid_size = from_track.grid_size();
+            auto const& to_grid_size = to_track.grid_size();
+            auto interpolated_grid_size = interpolate_grid_size(from_grid_size, to_grid_size);
+            ExplicitGridTrack interpolated_grid_track { move(interpolated_grid_size) };
+            add_interpolated_grid_track(move(interpolated_grid_track), move(interpolated_line_names));
+        } else {
+            auto interpolated_grid_track = delta < 0.5f ? move(from_track) : move(to_track);
+            add_interpolated_grid_track(move(interpolated_grid_track), move(interpolated_line_names));
+        }
+    }
+    return interpolated_grid_track_size_list;
+}
+
 ValueComparingRefPtr<StyleValue const> interpolate_property(DOM::Element& element, PropertyID property_id, StyleValue const& a_from, StyleValue const& a_to, float delta, AllowDiscrete allow_discrete)
 {
     auto from = with_keyword_values_resolved(element, property_id, a_from);
@@ -501,6 +634,21 @@ ValueComparingRefPtr<StyleValue const> interpolate_property(DOM::Element& elemen
             auto from_value = from->as_font_style().font_style() == FontStyle::Normal ? oblique_0deg_value : from;
             auto to_value = to->as_font_style().font_style() == FontStyle::Normal ? oblique_0deg_value : to;
             return interpolate_value(element, calculation_context, from_value, to_value, delta, allow_discrete);
+        }
+
+        if (property_id == PropertyID::FontVariationSettings) {
+            // https://drafts.csswg.org/css-fonts/#font-variation-settings-def
+            // Two declarations of font-feature-settings can be animated between if they are "like". "Like" declarations
+            // are ones where the same set of properties appear (in any order). Because successive duplicate properties
+            // are applied instead of prior duplicate properties, two declarations can be "like" even if they have
+            // differing number of properties. If two declarations are "like" then animation occurs pairwise between
+            // corresponding values in the declarations. Otherwise, animation is not possible.
+            if (!from->is_value_list() || !to->is_value_list())
+                return interpolate_discrete(from, to, delta, allow_discrete);
+
+            // The values in these lists have already been deduplicated and sorted at this point, so we can use
+            // interpolate_value() to interpolate them pairwise.
+            return interpolate_value(element, calculation_context, from, to, delta, allow_discrete);
         }
 
         // https://drafts.csswg.org/web-animations-1/#animating-visibility
@@ -568,6 +716,19 @@ ValueComparingRefPtr<StyleValue const> interpolate_property(DOM::Element& elemen
             if (auto result = interpolate_filter_value_list(element, calculation_context, from, to, delta, allow_discrete))
                 return result;
             return interpolate_discrete(from, to, delta, allow_discrete);
+        }
+
+        if (property_id == PropertyID::GridTemplateRows || property_id == PropertyID::GridTemplateColumns) {
+            // https://drafts.csswg.org/css-grid/#track-sizing
+            // If the list lengths match, by computed value type per item in the computed track list.
+            auto from_list = from->as_grid_track_size_list().grid_track_size_list();
+            auto to_list = to->as_grid_track_size_list().grid_track_size_list();
+
+            auto interpolated_grid_tack_size_list = interpolate_grid_track_size_list(calculation_context, from_list, to_list, delta);
+            if (!interpolated_grid_tack_size_list.has_value())
+                return interpolate_discrete(from, to, delta, allow_discrete);
+
+            return GridTrackSizeListStyleValue::create(interpolated_grid_tack_size_list.release_value());
         }
 
         // FIXME: Handle all custom animatable properties
@@ -1142,6 +1303,67 @@ static RefPtr<StyleValue const> interpolate_mixed_value(CalculationContext const
     return {};
 }
 
+template<typename T>
+static NonnullRefPtr<StyleValue const> length_percentage_or_auto_to_style_value(T const& value)
+{
+    if constexpr (requires { value.is_auto(); }) {
+        if (value.is_auto())
+            return KeywordStyleValue::create(Keyword::Auto);
+    }
+    if (value.is_length())
+        return LengthStyleValue::create(value.length());
+    if (value.is_percentage())
+        return PercentageStyleValue::create(value.percentage());
+    if (value.is_calculated())
+        return value.calculated();
+    VERIFY_NOT_REACHED();
+}
+
+Optional<LengthPercentage> interpolate_length_percentage(CalculationContext const& calculation_context, LengthPercentage const& from, LengthPercentage const& to, float delta)
+{
+    if (from.is_length() && to.is_length())
+        return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
+    if (from.is_percentage() && to.is_percentage())
+        return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
+    auto from_style_value = length_percentage_or_auto_to_style_value(from);
+    auto to_style_value = length_percentage_or_auto_to_style_value(to);
+    auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
+    if (!interpolated_style_value)
+        return {};
+    if (interpolated_style_value->is_length())
+        return interpolated_style_value->as_length().length();
+    if (interpolated_style_value->is_percentage())
+        return interpolated_style_value->as_percentage().percentage();
+    if (interpolated_style_value->is_calculated())
+        return LengthPercentage { interpolated_style_value->as_calculated() };
+    VERIFY_NOT_REACHED();
+}
+
+Optional<LengthPercentageOrAuto> interpolate_length_percentage_or_auto(CalculationContext const& calculation_context, LengthPercentageOrAuto const& from, LengthPercentageOrAuto const& to, float delta)
+{
+    if (from.is_auto() && to.is_auto())
+        return LengthPercentageOrAuto::make_auto();
+    if (from.is_length() && to.is_length())
+        return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
+    if (from.is_percentage() && to.is_percentage())
+        return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
+
+    auto from_style_value = length_percentage_or_auto_to_style_value(from);
+    auto to_style_value = length_percentage_or_auto_to_style_value(to);
+    auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
+    if (!interpolated_style_value)
+        return {};
+    if (interpolated_style_value->to_keyword() == Keyword::Auto)
+        return LengthPercentageOrAuto::make_auto();
+    if (interpolated_style_value->is_length())
+        return interpolated_style_value->as_length().length();
+    if (interpolated_style_value->is_percentage())
+        return interpolated_style_value->as_percentage().percentage();
+    if (interpolated_style_value->is_calculated())
+        return LengthPercentage { interpolated_style_value->as_calculated() };
+    VERIFY_NOT_REACHED();
+}
+
 static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, CalculationContext const& calculation_context, StyleValue const& from, StyleValue const& to, float delta, AllowDiscrete allow_discrete)
 {
     if (from.type() != to.type() || from.is_calculated() || to.is_calculated()) {
@@ -1149,63 +1371,6 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
         // https://www.w3.org/TR/css-values-4/#mixed-percentages
         return interpolate_mixed_value(calculation_context, from, to, delta);
     }
-
-    static auto length_percentage_or_auto_to_style_value = [](auto const& value) -> NonnullRefPtr<StyleValue const> {
-        if constexpr (requires { value.is_auto(); }) {
-            if (value.is_auto())
-                return KeywordStyleValue::create(Keyword::Auto);
-        }
-        if (value.is_length())
-            return LengthStyleValue::create(value.length());
-        if (value.is_percentage())
-            return PercentageStyleValue::create(value.percentage());
-        if (value.is_calculated())
-            return value.calculated();
-        VERIFY_NOT_REACHED();
-    };
-
-    static auto interpolate_length_percentage = [](CalculationContext const& calculation_context, LengthPercentage const& from, LengthPercentage const& to, float delta) -> Optional<LengthPercentage> {
-        if (from.is_length() && to.is_length())
-            return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
-        if (from.is_percentage() && to.is_percentage())
-            return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
-        auto from_style_value = length_percentage_or_auto_to_style_value(from);
-        auto to_style_value = length_percentage_or_auto_to_style_value(to);
-        auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
-        if (!interpolated_style_value)
-            return {};
-        if (interpolated_style_value->is_length())
-            return interpolated_style_value->as_length().length();
-        if (interpolated_style_value->is_percentage())
-            return interpolated_style_value->as_percentage().percentage();
-        if (interpolated_style_value->is_calculated())
-            return LengthPercentage { interpolated_style_value->as_calculated() };
-        VERIFY_NOT_REACHED();
-    };
-
-    static auto interpolate_length_percentage_or_auto = [](CalculationContext const& calculation_context, LengthPercentageOrAuto const& from, LengthPercentageOrAuto const& to, float delta) -> Optional<LengthPercentageOrAuto> {
-        if (from.is_auto() && to.is_auto())
-            return LengthPercentageOrAuto::make_auto();
-        if (from.is_length() && to.is_length())
-            return Length::make_px(interpolate_raw(from.length().raw_value(), to.length().raw_value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Length)));
-        if (from.is_percentage() && to.is_percentage())
-            return Percentage(interpolate_raw(from.percentage().value(), to.percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage)));
-
-        auto from_style_value = length_percentage_or_auto_to_style_value(from);
-        auto to_style_value = length_percentage_or_auto_to_style_value(to);
-        auto interpolated_style_value = interpolate_mixed_value(calculation_context, from_style_value, to_style_value, delta);
-        if (!interpolated_style_value)
-            return {};
-        if (interpolated_style_value->to_keyword() == Keyword::Auto)
-            return LengthPercentageOrAuto::make_auto();
-        if (interpolated_style_value->is_length())
-            return interpolated_style_value->as_length().length();
-        if (interpolated_style_value->is_percentage())
-            return interpolated_style_value->as_percentage().percentage();
-        if (interpolated_style_value->is_calculated())
-            return LengthPercentage { interpolated_style_value->as_calculated() };
-        VERIFY_NOT_REACHED();
-    };
 
     switch (from.type()) {
     case StyleValue::Type::Angle: {
@@ -1425,6 +1590,16 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
         auto interpolated_value = interpolate_raw(from.as_number().number(), to.as_number().number(), delta, calculation_context.accepted_type_ranges.get(ValueType::Number));
         return NumberStyleValue::create(interpolated_value);
     }
+    case StyleValue::Type::OpenTypeTagged: {
+        auto& from_open_type_tagged = from.as_open_type_tagged();
+        auto& to_open_type_tagged = to.as_open_type_tagged();
+        if (from_open_type_tagged.tag() != to_open_type_tagged.tag())
+            return {};
+        auto interpolated_value = interpolate_value(element, calculation_context, from_open_type_tagged.value(), to_open_type_tagged.value(), delta, allow_discrete);
+        if (!interpolated_value)
+            return {};
+        return OpenTypeTaggedStyleValue::create(OpenTypeTaggedStyleValue::Mode::FontVariationSettings, from_open_type_tagged.tag(), interpolated_value.release_nonnull());
+    }
     case StyleValue::Type::Percentage: {
         auto interpolated_value = interpolate_raw(from.as_percentage().percentage().value(), to.as_percentage().percentage().value(), delta, calculation_context.accepted_type_ranges.get(ValueType::Percentage));
         return PercentageStyleValue::create(Percentage(interpolated_value));
@@ -1636,6 +1811,16 @@ RefPtr<StyleValue const> composite_value(StyleValue const& underlying_value, Sty
     case StyleValue::Type::Number: {
         auto result = composite_raw_values(underlying_value.as_number().number(), animated_value.as_number().number());
         return NumberStyleValue::create(result);
+    }
+    case StyleValue::Type::OpenTypeTagged: {
+        auto& underlying_open_type_tagged = underlying_value.as_open_type_tagged();
+        auto& animated_open_type_tagged = animated_value.as_open_type_tagged();
+        if (underlying_open_type_tagged.tag() != animated_open_type_tagged.tag())
+            return {};
+        auto composited_value = composite_value(underlying_open_type_tagged.value(), animated_open_type_tagged.value(), composite_operation);
+        if (!composited_value)
+            return {};
+        return OpenTypeTaggedStyleValue::create(OpenTypeTaggedStyleValue::Mode::FontVariationSettings, underlying_open_type_tagged.tag(), composited_value.release_nonnull());
     }
     case StyleValue::Type::Percentage: {
         auto result = composite_raw_values(underlying_value.as_percentage().percentage().value(), animated_value.as_percentage().percentage().value());
