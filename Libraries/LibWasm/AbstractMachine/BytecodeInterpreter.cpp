@@ -1298,8 +1298,7 @@ HANDLE_INSTRUCTION(br_if)
     // bounds checked by verifier.
     auto cond = configuration.take_source(0, addresses.sources).to<i32>();
     if (cond == 0)
-        TAILCALL
-    return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
     current_ip_value = interpreter.branch_to_label(configuration, instruction->arguments().get<LabelIndex>()).value();
     TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 }
@@ -1582,6 +1581,7 @@ HANDLE_INSTRUCTION(memory_fill)
         auto instance = configuration.store().get(address);
         // bounds checked by verifier.
         auto count = configuration.take_source(0, addresses.sources).to<u32>();
+        u8 value = static_cast<u8>(configuration.take_source(1, addresses.sources).to<u32>());
         auto destination_offset = configuration.take_source(2, addresses.sources).to<u32>();
 
         Checked<u32> checked_end = destination_offset;
@@ -1592,7 +1592,6 @@ HANDLE_INSTRUCTION(memory_fill)
             TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 
         Instruction::MemoryArgument memarg { 0, 0, args.memory_index };
-        u8 value = static_cast<u8>(configuration.take_source(1, addresses.sources).to<u32>());
         for (u32 i = 0; i < count; ++i) {
             if (interpreter.store_to_memory(configuration, memarg, { &value, sizeof(value) }, destination_offset + i))
                 return Outcome::Return;
@@ -1623,8 +1622,7 @@ HANDLE_INSTRUCTION(memory_copy)
     TRAP_IN_LOOP_IF_NOT(destination_position <= destination_instance->data().size());
 
     if (count == 0)
-        TAILCALL
-    return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 
     Instruction::MemoryArgument memarg { 0, 0, args.dst_index };
     if (destination_offset <= source_offset) {
@@ -1664,8 +1662,7 @@ HANDLE_INSTRUCTION(memory_init)
     TRAP_IN_LOOP_IF_NOT(destination_position <= memory->data().size());
 
     if (count == 0)
-        TAILCALL
-    return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 
     Instruction::MemoryArgument memarg { 0, 0, args.memory_index };
     for (size_t i = 0; i < (size_t)count; ++i) {
@@ -1738,8 +1735,7 @@ HANDLE_INSTRUCTION(table_copy)
     TRAP_IN_LOOP_IF_NOT(destination_position <= destination_instance->elements().size());
 
     if (count == 0)
-        TAILCALL
-    return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 
     if (destination_offset <= source_offset) {
         for (u32 i = 0; i < count; ++i) {
