@@ -24,7 +24,7 @@ namespace JS {
 GC_DEFINE_ALLOCATOR(PrimitiveString);
 GC_DEFINE_ALLOCATOR(RopeString);
 
-GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Utf16String string)
+GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Utf16String const& string)
 {
     if (string.is_empty())
         return vm.empty_string();
@@ -53,7 +53,7 @@ GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Utf16FlyString const& s
     return create(vm, string.to_utf16_string());
 }
 
-GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, String string)
+GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, String const& string)
 {
     if (string.is_empty())
         return vm.empty_string();
@@ -146,7 +146,8 @@ String PrimitiveString::utf8_string() const
 
 StringView PrimitiveString::utf8_string_view() const
 {
-    (void)utf8_string();
+    if (!has_utf8_string())
+        (void)utf8_string();
     return m_utf8_string->bytes_as_string_view();
 }
 
@@ -164,7 +165,8 @@ Utf16String PrimitiveString::utf16_string() const
 
 Utf16View PrimitiveString::utf16_string_view() const
 {
-    (void)utf16_string();
+    if (!has_utf16_string())
+        (void)utf16_string();
     return *m_utf16_string;
 }
 
@@ -248,10 +250,10 @@ void RopeString::resolve(EncodingPreference preference) const
         StringBuilder builder(StringBuilder::Mode::UTF16);
 
         for (auto const* current : pieces) {
-            if (current->has_utf8_string())
-                builder.append(current->utf8_string_view());
-            else
+            if (current->has_utf16_string())
                 builder.append(current->utf16_string_view());
+            else
+                builder.append(current->utf8_string_view());
         }
 
         m_utf16_string = builder.to_utf16_string();
