@@ -26,8 +26,6 @@ public:
 
     using Buffer = Detail::ByteBuffer<inline_capacity>;
 
-    static ErrorOr<StringBuilder> create(size_t initial_capacity = inline_capacity);
-
     StringBuilder();
     explicit StringBuilder(size_t initial_capacity);
 
@@ -47,6 +45,7 @@ public:
     ErrorOr<void> try_append_repeated(StringView, size_t);
     ErrorOr<void> try_append_repeated(Utf16View const&, size_t);
     ErrorOr<void> try_append_escaped_for_json(StringView);
+    ErrorOr<void> try_append_ascii_without_validation(ReadonlyBytes);
 
     template<typename... Parameters>
     ErrorOr<void> try_appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
@@ -68,6 +67,7 @@ public:
     void append_repeated(Utf16View const&, size_t);
     void append_escaped_for_json(StringView);
     void append_as_lowercase(char);
+    void append_ascii_without_validation(ReadonlyBytes);
 
     template<typename... Parameters>
     void appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
@@ -119,7 +119,7 @@ public:
     Optional<Buffer::OutlineBuffer> leak_buffer_for_string_construction(Badge<Detail::Utf16StringData>) { return leak_buffer_for_string_construction(); }
 
 private:
-    StringBuilder(Buffer, Mode);
+    void initialize_buffer(Mode, size_t capacity);
 
     Optional<Buffer::OutlineBuffer> leak_buffer_for_string_construction();
 

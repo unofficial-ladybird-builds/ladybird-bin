@@ -34,22 +34,12 @@ static constexpr size_t string_builder_prefix_size(StringBuilder::Mode mode)
     VERIFY_NOT_REACHED();
 }
 
-static ErrorOr<StringBuilder::Buffer> create_buffer(StringBuilder::Mode mode, size_t capacity)
+void StringBuilder::initialize_buffer(Mode mode, size_t capacity)
 {
-    StringBuilder::Buffer buffer;
     auto prefix_size = string_builder_prefix_size(mode);
-
     if (capacity > StringBuilder::inline_capacity)
-        TRY(buffer.try_ensure_capacity(prefix_size + capacity));
-
-    TRY(buffer.try_resize(prefix_size));
-    return buffer;
-}
-
-ErrorOr<StringBuilder> StringBuilder::create(size_t initial_capacity)
-{
-    auto buffer = TRY(create_buffer(DEFAULT_MODE, initial_capacity));
-    return StringBuilder { move(buffer), DEFAULT_MODE };
+        m_buffer.ensure_capacity(prefix_size + capacity);
+    m_buffer.resize(prefix_size);
 }
 
 StringBuilder::StringBuilder()
@@ -57,30 +47,24 @@ StringBuilder::StringBuilder()
     static constexpr auto prefix_size = string_builder_prefix_size(DEFAULT_MODE);
     static_assert(inline_capacity > prefix_size);
 
-    m_buffer.resize(prefix_size);
+    initialize_buffer(m_mode, inline_capacity);
 }
 
 StringBuilder::StringBuilder(size_t initial_capacity)
-    : m_buffer(MUST(create_buffer(DEFAULT_MODE, initial_capacity)))
 {
+    initialize_buffer(m_mode, initial_capacity);
 }
 
 StringBuilder::StringBuilder(Mode mode)
-    : m_buffer(MUST(create_buffer(mode, inline_capacity)))
-    , m_mode(mode)
+    : m_mode(mode)
 {
+    initialize_buffer(m_mode, inline_capacity);
 }
 
 StringBuilder::StringBuilder(Mode mode, size_t initial_capacity_in_code_units)
-    : m_buffer(MUST(create_buffer(mode, initial_capacity_in_code_units * (mode == Mode::UTF8 ? 1 : 2))))
-    , m_mode(mode)
+    : m_mode(mode)
 {
-}
-
-StringBuilder::StringBuilder(Buffer buffer, Mode mode)
-    : m_buffer(move(buffer))
-    , m_mode(mode)
-{
+    initialize_buffer(mode, initial_capacity_in_code_units * (mode == Mode::UTF8 ? 1 : 2));
 }
 
 inline ErrorOr<void> StringBuilder::will_append(size_t size_in_bytes)
@@ -152,6 +136,32 @@ ErrorOr<void> StringBuilder::try_append(StringView string)
         TRY(ensure_storage_is_utf16());
 
         TRY(will_append(string.length() * 2));
+        for (auto code_point : Utf8View { string })
+            TRY(try_append_code_point(code_point));
+    }
+
+    return {};
+}
+
+void StringBuilder::append_ascii_without_validation(ReadonlyBytes string)
+{
+    MUST(try_append_ascii_without_validation(string));
+}
+
+ErrorOr<void> StringBuilder::try_append_ascii_without_validation(ReadonlyBytes string)
+{
+    if (string.is_empty())
+        return {};
+
+    if (m_mode == Mode::UTF8 || m_utf16_builder_is_ascii) {
+        TRY(m_buffer.try_append(string));
+    } else {
+        if (m_mode == Mode::UTF16) {
+            TRY(ensure_storage_is_utf16());
+            TRY(will_append(string.size() * 2));
+        } else {
+            TRY(will_append(string.size()));
+        }
         for (auto code_point : Utf8View { string })
             TRY(try_append_code_point(code_point));
     }
@@ -428,7 +438,7 @@ ErrorOr<void> StringBuilder::try_append(Utf16View const& utf16_view)
     if (utf16_view.is_empty())
         return {};
     if (utf16_view.has_ascii_storage())
-        return try_append(utf16_view.bytes());
+        return try_append_ascii_without_validation(utf16_view.bytes());
 
     auto append_as_utf8 = m_mode == Mode::UTF8 || (m_utf16_builder_is_ascii && utf16_view.is_ascii());
 

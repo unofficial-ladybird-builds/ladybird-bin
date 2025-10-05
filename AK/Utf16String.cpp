@@ -5,6 +5,7 @@
  */
 
 #include <AK/Stream.h>
+#include <AK/StringNumber.h>
 #include <AK/Utf16String.h>
 #include <AK/Utf32View.h>
 
@@ -34,6 +35,21 @@ Utf16String Utf16String::from_utf8_with_replacement_character(StringView utf8_st
     }
 
     return builder.to_utf16_string();
+}
+
+Utf16String Utf16String::from_ascii_without_validation(ReadonlyBytes ascii_string)
+{
+    if (ascii_string.size() <= Detail::MAX_SHORT_STRING_BYTE_COUNT) {
+        Utf16String string;
+        string.m_value.short_ascii_string = Detail::ShortString::create_with_byte_count(ascii_string.size());
+
+        auto result = ascii_string.copy_to(string.m_value.short_ascii_string.storage);
+        VERIFY(result == ascii_string.size());
+
+        return string;
+    }
+
+    return Utf16String { Detail::Utf16StringData::from_ascii(ascii_string) };
 }
 
 Utf16String Utf16String::from_utf8_without_validation(StringView utf8_string)
@@ -165,5 +181,23 @@ ErrorOr<void> Formatter<Utf16String>::format(FormatBuilder& builder, Utf16String
         return builder.builder().try_append(utf16_string.utf16_view());
     return builder.put_string(utf16_string.ascii_view());
 }
+
+template<Integral T>
+Utf16String Utf16String::number(T value)
+{
+    return create_string_from_number<Utf16String, T>(value);
+}
+
+template Utf16String Utf16String::number(char);
+template Utf16String Utf16String::number(signed char);
+template Utf16String Utf16String::number(unsigned char);
+template Utf16String Utf16String::number(signed short);
+template Utf16String Utf16String::number(unsigned short);
+template Utf16String Utf16String::number(int);
+template Utf16String Utf16String::number(unsigned int);
+template Utf16String Utf16String::number(long);
+template Utf16String Utf16String::number(unsigned long);
+template Utf16String Utf16String::number(long long);
+template Utf16String Utf16String::number(unsigned long long);
 
 }
