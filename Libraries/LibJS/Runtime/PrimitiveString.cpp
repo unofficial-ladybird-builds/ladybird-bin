@@ -35,12 +35,9 @@ GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Utf16String const& stri
     }
 
     auto& string_cache = vm.utf16_string_cache();
-    if (auto it = string_cache.find(string); it != string_cache.end())
-        return *it->value;
-
-    auto new_string = vm.heap().allocate<PrimitiveString>(string);
-    string_cache.set(move(string), new_string);
-    return *new_string;
+    return *string_cache.ensure(string, [&] {
+        return vm.heap().allocate<PrimitiveString>(string);
+    });
 }
 
 GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, Utf16View const& string)
@@ -67,9 +64,9 @@ GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, String const& string)
     if (auto it = string_cache.find(string); it != string_cache.end())
         return *it->value;
 
-    auto new_string = vm.heap().allocate<PrimitiveString>(string);
-    string_cache.set(move(string), new_string);
-    return *new_string;
+    return string_cache.ensure(string, [&] {
+        return vm.heap().allocate<PrimitiveString>(string);
+    });
 }
 
 GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, StringView string)
@@ -80,6 +77,19 @@ GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, StringView string)
 GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, FlyString const& string)
 {
     return create(vm, string.to_string());
+}
+
+GC::Ref<PrimitiveString> PrimitiveString::create_from_unsigned_integer(VM& vm, u64 number)
+{
+    if (number < vm.numeric_string_cache().size()) {
+        auto& cache_slot = vm.numeric_string_cache()[number];
+        if (!cache_slot) {
+            auto string = Utf16String::number(number);
+            cache_slot = create(vm, string);
+        }
+        return *cache_slot;
+    }
+    return create(vm, Utf16String::number(number));
 }
 
 GC::Ref<PrimitiveString> PrimitiveString::create(VM& vm, PrimitiveString& lhs, PrimitiveString& rhs)
@@ -222,12 +232,13 @@ void RopeString::resolve(EncodingPreference preference) const
 
     // This vector will hold all the pieces of the rope that need to be assembled
     // into the resolved string.
-    Vector<PrimitiveString const*> pieces;
+    Vector<PrimitiveString const*, 2> pieces;
     size_t approximate_length = 0;
+    size_t length_in_utf16_code_units = 0;
 
     // NOTE: We traverse the rope tree without using recursion, since we'd run out of
     //       stack space quickly when handling a long sequence of unresolved concatenations.
-    Vector<PrimitiveString const*> stack;
+    Vector<PrimitiveString const*, 2> stack;
     stack.append(m_rhs);
     stack.append(m_lhs);
     while (!stack.is_empty()) {
@@ -241,13 +252,15 @@ void RopeString::resolve(EncodingPreference preference) const
 
         if (current->has_utf8_string())
             approximate_length += current->utf8_string_view().length();
+        if (preference == EncodingPreference::UTF16)
+            length_in_utf16_code_units += current->length_in_utf16_code_units();
         pieces.append(current);
     }
 
     if (preference == EncodingPreference::UTF16) {
         // The caller wants a UTF-16 string, so we can simply concatenate all the pieces
         // into a UTF-16 code unit buffer and create a Utf16String from it.
-        StringBuilder builder(StringBuilder::Mode::UTF16);
+        StringBuilder builder(StringBuilder::Mode::UTF16, length_in_utf16_code_units);
 
         for (auto const* current : pieces) {
             if (current->has_utf16_string())
