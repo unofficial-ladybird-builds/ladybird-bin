@@ -440,6 +440,14 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         //       values, only the CSS-wide keywords - this is handled above, and thus, if we have gotten to here, there
         //       is an invalid value which is a syntax error.
         return ParseError::SyntaxError;
+    case PropertyID::AnchorName:
+        if (auto parsed_value = parse_anchor_name_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
+    case PropertyID::AnchorScope:
+        if (auto parsed_value = parse_anchor_scope_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
     case PropertyID::AspectRatio:
         if (auto parsed_value = parse_aspect_ratio_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
@@ -736,11 +744,22 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         if (auto parsed_value = parse_place_self_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
+    case PropertyID::PositionAnchor:
+        if (auto parsed_value = parse_position_anchor_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
     case PropertyID::PositionArea:
         if (auto parsed_value = parse_position_area_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
-
+    case PropertyID::PositionTryFallbacks:
+        if (auto parsed_value = parse_position_try_fallbacks_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
+    case PropertyID::PositionVisibility:
+        if (auto parsed_value = parse_position_visibility_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
     case PropertyID::Quotes:
         if (auto parsed_value = parse_quotes_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
@@ -1161,14 +1180,14 @@ RefPtr<StyleValue const> Parser::parse_cursor_value(TokenStream<ComponentValue>&
 
             if (part_tokens.has_next_token()) {
                 // <number>{2}, which are the x and y coordinates of the hotspot
-                auto x = parse_number(part_tokens);
+                auto x = parse_number_value(part_tokens);
                 part_tokens.discard_whitespace();
-                auto y = parse_number(part_tokens);
+                auto y = parse_number_value(part_tokens);
                 part_tokens.discard_whitespace();
-                if (!x.has_value() || !y.has_value() || part_tokens.has_next_token())
+                if (!x || !y || part_tokens.has_next_token())
                     return nullptr;
 
-                cursors.append(CursorStyleValue::create(image_value.release_nonnull(), x.release_value(), y.release_value()));
+                cursors.append(CursorStyleValue::create(image_value.release_nonnull(), x, y));
                 continue;
             }
 
@@ -1184,6 +1203,39 @@ RefPtr<StyleValue const> Parser::parse_cursor_value(TokenStream<ComponentValue>&
         return *cursors.first();
 
     return StyleValueList::create(move(cursors), StyleValueList::Separator::Comma);
+}
+
+// https://drafts.csswg.org/css-anchor-position/#name
+RefPtr<StyleValue const> Parser::parse_anchor_name_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | <dashed-ident>#
+    if (auto none = parse_all_as_single_keyword_value(tokens, Keyword::None))
+        return none;
+
+    return parse_comma_separated_value_list(tokens, [this](TokenStream<ComponentValue>& inner_tokens) -> RefPtr<StyleValue const> {
+        auto dashed_ident = parse_dashed_ident(inner_tokens);
+        if (!dashed_ident.has_value())
+            return nullptr;
+        return CustomIdentStyleValue::create(*dashed_ident);
+    });
+}
+
+// https://drafts.csswg.org/css-anchor-position/#anchor-scope
+RefPtr<StyleValue const> Parser::parse_anchor_scope_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | all | <dashed-ident>#
+    if (auto none = parse_all_as_single_keyword_value(tokens, Keyword::None))
+        return none;
+
+    if (auto all = parse_all_as_single_keyword_value(tokens, Keyword::All))
+        return all;
+
+    return parse_comma_separated_value_list(tokens, [this](TokenStream<ComponentValue>& inner_tokens) -> RefPtr<StyleValue const> {
+        auto dashed_ident = parse_dashed_ident(inner_tokens);
+        if (!dashed_ident.has_value())
+            return {};
+        return CustomIdentStyleValue::create(*dashed_ident);
+    });
 }
 
 // https://www.w3.org/TR/css-sizing-4/#aspect-ratio
@@ -1623,48 +1675,23 @@ RefPtr<StyleValue const> Parser::parse_single_background_size_value(PropertyID p
 {
     auto transaction = tokens.begin_transaction();
 
-    auto get_length_percentage_or_auto = [](StyleValue const& style_value) -> Optional<LengthPercentageOrAuto> {
-        if (style_value.has_auto())
-            return LengthPercentageOrAuto::make_auto();
-        if (style_value.is_percentage())
-            return LengthPercentage { style_value.as_percentage().percentage() };
-        if (style_value.is_length())
-            return LengthPercentage { style_value.as_length().length() };
-        if (style_value.is_calculated())
-            return LengthPercentage { style_value.as_calculated() };
-        return {};
-    };
-
     auto maybe_x_value = parse_css_value_for_property(property, tokens);
     if (!maybe_x_value)
         return nullptr;
-    auto x_value = maybe_x_value.release_nonnull();
 
-    if (x_value->to_keyword() == Keyword::Cover || x_value->to_keyword() == Keyword::Contain) {
+    if (maybe_x_value->to_keyword() == Keyword::Cover || maybe_x_value->to_keyword() == Keyword::Contain) {
         transaction.commit();
-        return x_value;
+        return maybe_x_value;
     }
 
     auto maybe_y_value = parse_css_value_for_property(property, tokens);
     if (!maybe_y_value) {
-        auto y_value = LengthPercentageOrAuto::make_auto();
-        auto x_size = get_length_percentage_or_auto(*x_value);
-        if (!x_size.has_value())
-            return nullptr;
-
         transaction.commit();
-        return BackgroundSizeStyleValue::create(x_size.value(), y_value);
+        return BackgroundSizeStyleValue::create(maybe_x_value.release_nonnull(), KeywordStyleValue::create(Keyword::Auto));
     }
 
-    auto y_value = maybe_y_value.release_nonnull();
-    auto x_size = get_length_percentage_or_auto(*x_value);
-    auto y_size = get_length_percentage_or_auto(*y_value);
-
-    if (!x_size.has_value() || !y_size.has_value())
-        return nullptr;
-
     transaction.commit();
-    return BackgroundSizeStyleValue::create(x_size.release_value(), y_size.release_value());
+    return BackgroundSizeStyleValue::create(maybe_x_value.release_nonnull(), maybe_y_value.release_nonnull());
 }
 
 // https://drafts.csswg.org/css-backgrounds-3/#propdef-border
@@ -1959,20 +1986,20 @@ RefPtr<StyleValue const> Parser::parse_border_radius_value(TokenStream<Component
 {
     if (tokens.remaining_token_count() == 2) {
         auto transaction = tokens.begin_transaction();
-        auto horizontal = parse_length_percentage(tokens);
-        auto vertical = parse_length_percentage(tokens);
-        if (horizontal.has_value() && vertical.has_value()) {
+        auto horizontal = parse_length_percentage_value(tokens);
+        auto vertical = parse_length_percentage_value(tokens);
+        if (horizontal && vertical) {
             transaction.commit();
-            return BorderRadiusStyleValue::create(horizontal.release_value(), vertical.release_value());
+            return BorderRadiusStyleValue::create(horizontal.release_nonnull(), vertical.release_nonnull());
         }
     }
 
     if (tokens.remaining_token_count() == 1) {
         auto transaction = tokens.begin_transaction();
-        auto radius = parse_length_percentage(tokens);
-        if (radius.has_value()) {
+        auto radius = parse_length_percentage_value(tokens);
+        if (radius) {
             transaction.commit();
-            return BorderRadiusStyleValue::create(radius.value(), radius.value());
+            return BorderRadiusStyleValue::create(*radius, *radius);
         }
     }
 
@@ -1981,8 +2008,8 @@ RefPtr<StyleValue const> Parser::parse_border_radius_value(TokenStream<Component
 
 RefPtr<StyleValue const> Parser::parse_border_radius_shorthand_value(TokenStream<ComponentValue>& tokens)
 {
-    auto top_left = [&](Vector<LengthPercentage>& radii) { return radii[0]; };
-    auto top_right = [&](Vector<LengthPercentage>& radii) {
+    auto top_left = [&](StyleValueVector& radii) { return radii[0]; };
+    auto top_right = [&](StyleValueVector& radii) {
         switch (radii.size()) {
         case 4:
         case 3:
@@ -1994,7 +2021,7 @@ RefPtr<StyleValue const> Parser::parse_border_radius_shorthand_value(TokenStream
             VERIFY_NOT_REACHED();
         }
     };
-    auto bottom_right = [&](Vector<LengthPercentage>& radii) {
+    auto bottom_right = [&](StyleValueVector& radii) {
         switch (radii.size()) {
         case 4:
         case 3:
@@ -2006,7 +2033,7 @@ RefPtr<StyleValue const> Parser::parse_border_radius_shorthand_value(TokenStream
             VERIFY_NOT_REACHED();
         }
     };
-    auto bottom_left = [&](Vector<LengthPercentage>& radii) {
+    auto bottom_left = [&](StyleValueVector& radii) {
         switch (radii.size()) {
         case 4:
             return radii[3];
@@ -2020,8 +2047,8 @@ RefPtr<StyleValue const> Parser::parse_border_radius_shorthand_value(TokenStream
         }
     };
 
-    Vector<LengthPercentage> horizontal_radii;
-    Vector<LengthPercentage> vertical_radii;
+    StyleValueVector horizontal_radii;
+    StyleValueVector vertical_radii;
     bool reading_vertical = false;
     auto transaction = tokens.begin_transaction();
 
@@ -2035,17 +2062,17 @@ RefPtr<StyleValue const> Parser::parse_border_radius_shorthand_value(TokenStream
             continue;
         }
 
-        auto maybe_dimension = parse_length_percentage(tokens);
-        if (!maybe_dimension.has_value())
+        auto maybe_dimension = parse_length_percentage_value(tokens);
+        if (!maybe_dimension)
             return nullptr;
-        if (maybe_dimension->is_length() && !property_accepts_length(PropertyID::BorderRadius, maybe_dimension->length()))
+        if (maybe_dimension->is_length() && !property_accepts_length(PropertyID::BorderRadius, maybe_dimension->as_length().length()))
             return nullptr;
-        if (maybe_dimension->is_percentage() && !property_accepts_percentage(PropertyID::BorderRadius, maybe_dimension->percentage()))
+        if (maybe_dimension->is_percentage() && !property_accepts_percentage(PropertyID::BorderRadius, maybe_dimension->as_percentage().percentage()))
             return nullptr;
         if (reading_vertical) {
-            vertical_radii.append(maybe_dimension.release_value());
+            vertical_radii.append(maybe_dimension.release_nonnull());
         } else {
-            horizontal_radii.append(maybe_dimension.release_value());
+            horizontal_radii.append(maybe_dimension.release_nonnull());
         }
     }
 
@@ -4158,17 +4185,122 @@ RefPtr<StyleValue const> Parser::parse_place_self_value(TokenStream<ComponentVal
         { *maybe_align_self_value, *maybe_justify_self_value });
 }
 
-// https://drafts.csswg.org/css-anchor-position/#position-area
-RefPtr<StyleValue const> Parser::parse_position_area_value(TokenStream<ComponentValue>& tokens)
+// https://drafts.csswg.org/css-anchor-position/#position-anchor
+RefPtr<StyleValue const> Parser::parse_position_anchor_value(TokenStream<ComponentValue>& tokens)
 {
-    // none | <position-area>
+    // auto | <anchor-name>
+    if (auto auto_keyword = parse_all_as_single_keyword_value(tokens, Keyword::Auto))
+        return auto_keyword;
 
-    // none
-    if (auto none_keyword_value = parse_all_as_single_keyword_value(tokens, Keyword::None))
-        return none_keyword_value;
+    // <anchor-name> = <dashed-ident>
+    auto dashed_ident = parse_dashed_ident(tokens);
+    if (!dashed_ident.has_value())
+        return nullptr;
+    return CustomIdentStyleValue::create(*dashed_ident);
+}
 
-    // <position-area>
-    // https://drafts.csswg.org/css-anchor-position/#position-area-syntax
+// https://drafts.csswg.org/css-anchor-position/#position-try-fallbacks
+RefPtr<StyleValue const> Parser::parse_position_try_fallbacks_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | [ [<dashed-ident> || <try-tactic>] | <position-area> ]#
+
+    if (auto none = parse_all_as_single_keyword_value(tokens, Keyword::None))
+        return none;
+
+    return parse_comma_separated_value_list(tokens, [&](auto& inner_tokens) {
+        return parse_single_position_try_fallbacks_value(inner_tokens);
+    });
+}
+
+RefPtr<StyleValue const> Parser::parse_single_position_try_fallbacks_value(TokenStream<ComponentValue>& tokens)
+{
+    // [<dashed-ident> || <try-tactic>] | <position-area>
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    if (auto position_area = parse_position_area(tokens)) {
+        transaction.commit();
+        return position_area;
+    }
+
+    Optional<FlyString> dashed_ident;
+    RefPtr<StyleValue const> try_tactic;
+    while (tokens.has_next_token()) {
+        if (auto try_tactic_value = parse_try_tactic_value(tokens)) {
+            if (try_tactic)
+                return {};
+            try_tactic = try_tactic_value.release_nonnull();
+        } else if (auto maybe_dashed_ident = parse_dashed_ident(tokens); maybe_dashed_ident.has_value()) {
+            if (dashed_ident.has_value())
+                return {};
+            dashed_ident = maybe_dashed_ident.release_value();
+        } else {
+            break;
+        }
+        tokens.discard_whitespace();
+    }
+
+    StyleValueVector values;
+    if (dashed_ident.has_value())
+        values.append(CustomIdentStyleValue::create(dashed_ident.release_value()));
+    if (try_tactic)
+        values.append(try_tactic.release_nonnull());
+
+    if (values.is_empty())
+        return {};
+
+    transaction.commit();
+    return StyleValueList::create(move(values), StyleValueList::Separator::Space);
+}
+
+// https://drafts.csswg.org/css-anchor-position-1/#typedef-position-try-fallbacks-try-tactic
+RefPtr<StyleValue const> Parser::parse_try_tactic_value(TokenStream<ComponentValue>& tokens)
+{
+    // <try-tactic> = flip-block || flip-inline || flip-start
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+    StyleValueVector values;
+    bool has_flip_block = false;
+    bool has_flip_inline = false;
+    bool has_flip_start = false;
+    while (tokens.has_next_token()) {
+        auto keyword_value = parse_keyword_value(tokens);
+        if (!keyword_value)
+            break;
+        switch (keyword_value->to_keyword()) {
+        case Keyword::FlipBlock:
+            if (has_flip_block)
+                return {};
+            has_flip_block = true;
+            values.append(keyword_value.release_nonnull());
+            break;
+        case Keyword::FlipInline:
+            if (has_flip_inline)
+                return {};
+            has_flip_inline = true;
+            values.append(keyword_value.release_nonnull());
+            break;
+        case Keyword::FlipStart:
+            if (has_flip_start)
+                return {};
+            has_flip_start = true;
+            values.append(keyword_value.release_nonnull());
+            break;
+        default:
+            return {};
+        }
+        tokens.discard_whitespace();
+    }
+
+    transaction.commit();
+    if (values.is_empty())
+        return {};
+    return StyleValueList::create(move(values), StyleValueList::Separator::Space);
+}
+
+// https://drafts.csswg.org/css-anchor-position/#position-area-syntax
+RefPtr<StyleValue const> Parser::parse_position_area(TokenStream<ComponentValue>& tokens)
+{
     // <position-area> = [
     //    [ left | center | right | span-left | span-right
     //    | x-start | x-end | span-x-start | span-x-end
@@ -4355,7 +4487,7 @@ RefPtr<StyleValue const> Parser::parse_position_area_value(TokenStream<Component
         transaction.commit();
 
         // If only a single keyword is given, it behaves as if the second keyword is span-all if the given keyword is
-        // unambigous about its axis.
+        // unambiguous about its axis.
         // These conditions ensure the span-all keyword is omitted when it would be implied.
         if (!is_axis_ambiguous(first.as_keyword().keyword()) && second.as_keyword().keyword() == Keyword::SpanAll)
             return first;
@@ -4370,16 +4502,14 @@ RefPtr<StyleValue const> Parser::parse_position_area_value(TokenStream<Component
         return nullptr;
 
     tokens.discard_whitespace();
-    if (!tokens.has_next_token()) {
+    auto second_keyword_value = parse_keyword_value(tokens);
+    if (!second_keyword_value) {
         auto first_position_area_keyword = keyword_to_position_area(first_keyword_value->as_keyword().keyword());
         if (!first_position_area_keyword.has_value())
             return nullptr;
         transaction.commit();
         return first_keyword_value;
     }
-    auto second_keyword_value = parse_keyword_value(tokens);
-    if (!second_keyword_value)
-        return nullptr;
 
     auto first_keyword = first_keyword_value->as_keyword().keyword();
     auto second_keyword = second_keyword_value->as_keyword().keyword();
@@ -4405,6 +4535,73 @@ RefPtr<StyleValue const> Parser::parse_position_area_value(TokenStream<Component
         return create_keyword_list(*first_keyword_value, *second_keyword_value);
 
     return nullptr;
+}
+
+// https://drafts.csswg.org/css-anchor-position/#position-area
+RefPtr<StyleValue const> Parser::parse_position_area_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | <position-area>
+
+    // none
+    if (auto none_keyword_value = parse_all_as_single_keyword_value(tokens, Keyword::None))
+        return none_keyword_value;
+
+    // <position-area>
+    return parse_position_area(tokens);
+}
+
+// https://drafts.csswg.org/css-anchor-position/#position-visibility
+RefPtr<StyleValue const> Parser::parse_position_visibility_value(TokenStream<ComponentValue>& tokens)
+{
+    // always | [ anchors-valid || anchors-visible || no-overflow ]
+    if (auto always = parse_all_as_single_keyword_value(tokens, Keyword::Always))
+        return always;
+
+    RefPtr<StyleValue const> anchors_valid_value;
+    RefPtr<StyleValue const> anchors_visible_value;
+    RefPtr<StyleValue const> no_overflow_value;
+    StyleValueVector values;
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+    while (tokens.has_next_token()) {
+        auto keyword_value = parse_keyword_value(tokens);
+        if (!keyword_value)
+            return nullptr;
+
+        switch (keyword_value->to_keyword()) {
+        case Keyword::AnchorsValid:
+            if (anchors_valid_value)
+                return nullptr;
+            anchors_valid_value = keyword_value.release_nonnull();
+            break;
+        case Keyword::AnchorsVisible:
+            if (anchors_visible_value)
+                return nullptr;
+            anchors_visible_value = keyword_value.release_nonnull();
+            break;
+        case Keyword::NoOverflow:
+            if (no_overflow_value)
+                return nullptr;
+            no_overflow_value = keyword_value.release_nonnull();
+            break;
+        default:
+            return nullptr;
+        }
+        tokens.discard_whitespace();
+    }
+
+    if (anchors_valid_value)
+        values.append(anchors_valid_value.release_nonnull());
+    if (anchors_visible_value)
+        values.append(anchors_visible_value.release_nonnull());
+    if (no_overflow_value)
+        values.append(no_overflow_value.release_nonnull());
+
+    if (values.is_empty())
+        return nullptr;
+
+    transaction.commit();
+    return StyleValueList::create(move(values), StyleValueList::Separator::Space);
 }
 
 RefPtr<StyleValue const> Parser::parse_quotes_value(TokenStream<ComponentValue>& tokens)
