@@ -2,12 +2,12 @@ Harness status: OK
 
 Found 69 tests
 
-64 Pass
-5 Fail
-Fail	Can set 'cursor' to CSS-wide keywords: initial
-Fail	Can set 'cursor' to CSS-wide keywords: inherit
-Fail	Can set 'cursor' to CSS-wide keywords: unset
-Fail	Can set 'cursor' to CSS-wide keywords: revert
+65 Pass
+4 Fail
+Pass	Can set 'cursor' to CSS-wide keywords: initial
+Pass	Can set 'cursor' to CSS-wide keywords: inherit
+Pass	Can set 'cursor' to CSS-wide keywords: unset
+Pass	Can set 'cursor' to CSS-wide keywords: revert
 Fail	Can set 'cursor' to var() references:  var(--A)
 Pass	Can set 'cursor' to the 'auto' keyword: auto
 Pass	Can set 'cursor' to the 'default' keyword: default
@@ -64,9 +64,9 @@ Pass	Setting 'cursor' to an angle: calc(0rad + 0deg) throws TypeError
 Pass	Setting 'cursor' to a flexible length: 0fr throws TypeError
 Pass	Setting 'cursor' to a flexible length: 1fr throws TypeError
 Pass	Setting 'cursor' to a flexible length: -3.14fr throws TypeError
-Pass	Setting 'cursor' to a number: 0 throws TypeError
-Pass	Setting 'cursor' to a number: -3.14 throws TypeError
-Pass	Setting 'cursor' to a number: 3.14 throws TypeError
+Fail	Setting 'cursor' to a number: 0 throws TypeError
+Fail	Setting 'cursor' to a number: -3.14 throws TypeError
+Fail	Setting 'cursor' to a number: 3.14 throws TypeError
 Pass	Setting 'cursor' to a number: calc(2 + 3) throws TypeError
 Pass	Setting 'cursor' to a transform: translate(50%, 50%) throws TypeError
 Pass	Setting 'cursor' to a transform: perspective(10em) throws TypeError
