@@ -193,6 +193,7 @@ void ViewImplementation::reset_zoom()
 {
     m_zoom_level = 1.0f;
     update_zoom();
+    client().async_reset_zoom(m_client_state.page_index);
 }
 
 void ViewImplementation::enqueue_input_event(Web::InputEvent event)
@@ -214,6 +215,9 @@ void ViewImplementation::enqueue_input_event(Web::InputEvent event)
             cloned_event.files = move(event.files);
 
             client().async_drag_event(m_client_state.page_index, cloned_event);
+        },
+        [this](Web::PinchEvent const& event) {
+            client().async_pinch_event(m_client_state.page_index, event);
         });
 }
 

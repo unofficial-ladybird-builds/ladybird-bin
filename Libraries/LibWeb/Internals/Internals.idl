@@ -33,6 +33,7 @@ interface Internals {
     undefined mouseDown(double x, double y);
     undefined movePointerTo(double x, double y);
     undefined wheel(double x, double y, double deltaX, double deltaY);
+    undefined pinch(double x, double y, double scaleDelta);
 
     boolean dispatchUserActivatedEvent(EventTarget target, Event event);
     undefined spoofCurrentURL(USVString url);
@@ -48,6 +49,7 @@ interface Internals {
 
     DOMString getComputedRole(Element element);
     DOMString getComputedLabel(Element element);
+    DOMString getComputedAriaLevel(Element element);
     unsigned short getEchoServerPort();
 
     undefined setBrowserZoom(double factor);

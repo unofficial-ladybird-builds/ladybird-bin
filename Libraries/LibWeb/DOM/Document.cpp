@@ -3376,11 +3376,14 @@ void Document::run_the_resize_steps()
     //    since the last time these steps were run, fire an event named resize at the VisualViewport.
 
     auto viewport_size = viewport_rect().size().to_type<int>();
+    auto& visual_viewport = *this->visual_viewport();
+    VisualViewportState visual_viewport_state = { visual_viewport.scale(), { visual_viewport.width(), visual_viewport.height() } };
     bool is_initial_size = !m_last_viewport_size.has_value();
 
-    if (m_last_viewport_size == viewport_size)
+    if (m_last_viewport_size == viewport_size && m_last_visual_viewport_state == visual_viewport_state)
         return;
     m_last_viewport_size = viewport_size;
+    m_last_visual_viewport_state = visual_viewport_state;
 
     if (!is_initial_size) {
         auto window_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
@@ -3389,7 +3392,7 @@ void Document::run_the_resize_steps()
 
         auto visual_viewport_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
         visual_viewport_resize_event->set_is_trusted(true);
-        visual_viewport()->dispatch_event(visual_viewport_resize_event);
+        visual_viewport.dispatch_event(visual_viewport_resize_event);
     }
 }
 
@@ -6478,7 +6481,17 @@ RefPtr<Painting::DisplayList> Document::cached_display_list() const
 
 RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig config)
 {
+    auto update_visual_viewport_transform = [&](Painting::DisplayList& display_list) {
+        auto transform = visual_viewport()->transform();
+        auto matrix = transform.to_matrix();
+        matrix[0, 3] *= display_list.device_pixels_per_css_pixel();
+        matrix[1, 3] *= display_list.device_pixels_per_css_pixel();
+        matrix[2, 3] *= display_list.device_pixels_per_css_pixel();
+        display_list.set_visual_viewport_transform(matrix);
+    };
+
     if (m_cached_display_list && m_cached_display_list_paint_config == config) {
+        update_visual_viewport_transform(*m_cached_display_list);
         return m_cached_display_list;
     }
 
@@ -6542,6 +6555,7 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
     m_cached_display_list = display_list;
     m_cached_display_list_paint_config = config;
 
+    update_visual_viewport_transform(*m_cached_display_list);
     return display_list;
 }
 

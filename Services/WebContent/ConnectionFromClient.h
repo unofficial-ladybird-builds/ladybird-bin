@@ -75,6 +75,7 @@ private:
     virtual void key_event(u64 page_id, Web::KeyEvent) override;
     virtual void mouse_event(u64 page_id, Web::MouseEvent) override;
     virtual void drag_event(u64 page_id, Web::DragEvent) override;
+    virtual void pinch_event(u64 page_id, Web::PinchEvent) override;
     virtual void ready_to_paint(u64 page_id) override;
     virtual void debug_request(u64 page_id, ByteString, ByteString) override;
     virtual void get_source(u64 page_id) override;
@@ -120,6 +121,7 @@ private:
     virtual void did_update_window_rect(u64 page_id) override;
     virtual void handle_file_return(u64 page_id, i32 error, Optional<IPC::File> file, i32 request_id) override;
     virtual void set_system_visibility_state(u64 page_id, Web::HTML::VisibilityState) override;
+    virtual void reset_zoom(u64 page_id) override;
 
     virtual void js_console_input(u64 page_id, String) override;
     virtual void run_javascript(u64 page_id, String) override;

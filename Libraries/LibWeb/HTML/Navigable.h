@@ -233,6 +233,9 @@ public:
     template<typename T>
     bool fast_is() const = delete;
 
+    void scroll_viewport_by_delta(CSSPixelPoint delta);
+    void reset_zoom();
+
 protected:
     explicit Navigable(GC::Ref<Page>, bool is_svg_page);
 

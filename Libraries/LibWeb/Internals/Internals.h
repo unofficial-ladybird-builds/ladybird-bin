@@ -41,6 +41,7 @@ public:
     void mouse_down(double x, double y);
     void move_pointer_to(double x, double y);
     void wheel(double x, double y, double delta_x, double delta_y);
+    void pinch(double x, double y, double scale_delta);
 
     WebIDL::ExceptionOr<bool> dispatch_user_activated_event(DOM::EventTarget&, DOM::Event& event);
 
@@ -57,6 +58,7 @@ public:
 
     String get_computed_role(DOM::Element& element);
     String get_computed_label(DOM::Element& element);
+    String get_computed_aria_level(DOM::Element& element);
 
     static u16 get_echo_server_port();
     static void set_echo_server_port(u16 port);
