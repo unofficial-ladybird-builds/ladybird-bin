@@ -34,10 +34,14 @@ void SVGElement::initialize(JS::Realm& realm)
 }
 
 struct NamedPropertyID {
-    NamedPropertyID(CSS::PropertyID property_id, Vector<FlyString> supported_elements = {})
+    NamedPropertyID(CSS::PropertyID property_id, FlyString name, Vector<FlyString> supported_elements = {})
         : id(property_id)
-        , name(CSS::string_from_property_id(property_id))
+        , name(move(name))
         , supported_elements(move(supported_elements))
+    {
+    }
+    NamedPropertyID(CSS::PropertyID property_id, Vector<FlyString> supported_elements = {})
+        : NamedPropertyID(property_id, CSS::string_from_property_id(property_id), move(supported_elements))
     {
     }
 
@@ -48,6 +52,7 @@ struct NamedPropertyID {
 
 static ReadonlySpan<NamedPropertyID> attribute_style_properties()
 {
+    // https://svgwg.org/svg2-draft/styling.html#PresentationAttributes
     static Array const properties = {
         // FIXME: The `fill` attribute and CSS `fill` property are not the same! But our support is limited enough that they are equivalent for now.
         NamedPropertyID(CSS::PropertyID::Fill),
@@ -69,7 +74,9 @@ static ReadonlySpan<NamedPropertyID> attribute_style_properties()
         NamedPropertyID(CSS::PropertyID::FontFamily),
         NamedPropertyID(CSS::PropertyID::FontSize),
         NamedPropertyID(CSS::PropertyID::FontStyle),
+        NamedPropertyID(CSS::PropertyID::FontVariant),
         NamedPropertyID(CSS::PropertyID::FontWeight),
+        NamedPropertyID(CSS::PropertyID::FontWidth, "font-stretch"_fly_string),
         NamedPropertyID(CSS::PropertyID::Height, { SVG::TagNames::foreignObject, SVG::TagNames::image, SVG::TagNames::rect, SVG::TagNames::svg, SVG::TagNames::symbol, SVG::TagNames::use }),
         NamedPropertyID(CSS::PropertyID::ImageRendering),
         NamedPropertyID(CSS::PropertyID::LetterSpacing),
@@ -94,6 +101,7 @@ static ReadonlySpan<NamedPropertyID> attribute_style_properties()
         NamedPropertyID(CSS::PropertyID::StrokeOpacity),
         NamedPropertyID(CSS::PropertyID::StrokeWidth),
         NamedPropertyID(CSS::PropertyID::TextAnchor),
+        NamedPropertyID(CSS::PropertyID::TextDecoration),
         NamedPropertyID(CSS::PropertyID::TextRendering),
         NamedPropertyID(CSS::PropertyID::TextOverflow),
         NamedPropertyID(CSS::PropertyID::TransformOrigin),
