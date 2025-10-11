@@ -113,6 +113,7 @@ private:
     O(BitwiseAnd, bitwise_and)                           \
     O(BitwiseOr, bitwise_or)                             \
     O(BitwiseXor, bitwise_xor)                           \
+    O(Div, div)                                          \
     O(GreaterThan, greater_than)                         \
     O(GreaterThanEquals, greater_than_equals)            \
     O(LeftShift, left_shift)                             \
@@ -124,7 +125,6 @@ private:
     O(UnsignedRightShift, unsigned_right_shift)
 
 #define JS_ENUMERATE_COMMON_BINARY_OPS_WITHOUT_FAST_PATH(O) \
-    O(Div, div)                                             \
     O(Exp, exp)                                             \
     O(Mod, mod)                                             \
     O(In, in)                                               \
@@ -1180,14 +1180,6 @@ private:
     IdentifierTableIndex m_property;
 };
 
-enum class PropertyKind {
-    Getter,
-    Setter,
-    KeyValue,
-    DirectKeyValue, // Used for Object expressions. Always sets an own property, never calls a setter.
-    ProtoSetter,
-};
-
 class PutBySpread final : public Instruction {
 public:
     PutBySpread(Operand base, Operand src)
@@ -1213,118 +1205,161 @@ private:
     Operand m_src;
 };
 
-class PutById final : public Instruction {
-public:
-    explicit PutById(Operand base, IdentifierTableIndex property, Operand src, PropertyKind kind, u32 cache_index, Optional<IdentifierTableIndex> base_identifier = {})
-        : Instruction(Type::PutById)
-        , m_base(base)
-        , m_property(property)
-        , m_src(src)
-        , m_kind(kind)
-        , m_cache_index(cache_index)
-        , m_base_identifier(move(base_identifier))
-    {
-    }
+#define DECLARE_PUT_KIND_BY_ID(kind)                                                                                                                             \
+    class Put##kind##ById final : public Instruction {                                                                                                           \
+    public:                                                                                                                                                      \
+        explicit Put##kind##ById(Operand base, IdentifierTableIndex property, Operand src, u32 cache_index, Optional<IdentifierTableIndex> base_identifier = {}) \
+            : Instruction(Type::Put##kind##ById)                                                                                                                 \
+            , m_base(base)                                                                                                                                       \
+            , m_property(property)                                                                                                                               \
+            , m_src(src)                                                                                                                                         \
+            , m_cache_index(cache_index)                                                                                                                         \
+            , m_base_identifier(move(base_identifier))                                                                                                           \
+        {                                                                                                                                                        \
+        }                                                                                                                                                        \
+                                                                                                                                                                 \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                                                                                      \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                                                                                       \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                                                                               \
+        {                                                                                                                                                        \
+            visitor(m_base);                                                                                                                                     \
+            visitor(m_src);                                                                                                                                      \
+        }                                                                                                                                                        \
+                                                                                                                                                                 \
+        Operand base() const { return m_base; }                                                                                                                  \
+        IdentifierTableIndex property() const { return m_property; }                                                                                             \
+        Operand src() const { return m_src; }                                                                                                                    \
+        u32 cache_index() const { return m_cache_index; }                                                                                                        \
+                                                                                                                                                                 \
+    private:                                                                                                                                                     \
+        Operand m_base;                                                                                                                                          \
+        IdentifierTableIndex m_property;                                                                                                                         \
+        Operand m_src;                                                                                                                                           \
+        u32 m_cache_index { 0 };                                                                                                                                 \
+        Optional<IdentifierTableIndex> m_base_identifier {};                                                                                                     \
+    };
 
-    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
-    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
-    void visit_operands_impl(Function<void(Operand&)> visitor)
-    {
-        visitor(m_base);
-        visitor(m_src);
-    }
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_ID)
 
-    Operand base() const { return m_base; }
-    IdentifierTableIndex property() const { return m_property; }
-    Operand src() const { return m_src; }
-    PropertyKind kind() const { return m_kind; }
-    u32 cache_index() const { return m_cache_index; }
+#define DECLARE_PUT_KIND_BY_NUMERIC_ID(kind)                                                                                                           \
+    class Put##kind##ByNumericId final : public Instruction {                                                                                          \
+    public:                                                                                                                                            \
+        explicit Put##kind##ByNumericId(Operand base, u32 property, Operand src, u32 cache_index, Optional<IdentifierTableIndex> base_identifier = {}) \
+            : Instruction(Type::Put##kind##ByNumericId)                                                                                                \
+            , m_base(base)                                                                                                                             \
+            , m_property(property)                                                                                                                     \
+            , m_src(src)                                                                                                                               \
+            , m_cache_index(cache_index)                                                                                                               \
+            , m_base_identifier(move(base_identifier))                                                                                                 \
+        {                                                                                                                                              \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                                                                            \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                                                                             \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                                                                     \
+        {                                                                                                                                              \
+            visitor(m_base);                                                                                                                           \
+            visitor(m_src);                                                                                                                            \
+        }                                                                                                                                              \
+                                                                                                                                                       \
+        Operand base() const { return m_base; }                                                                                                        \
+        u32 property() const { return m_property; }                                                                                                    \
+        Operand src() const { return m_src; }                                                                                                          \
+        u32 cache_index() const { return m_cache_index; }                                                                                              \
+                                                                                                                                                       \
+    private:                                                                                                                                           \
+        Operand m_base;                                                                                                                                \
+        u32 m_property;                                                                                                                                \
+        Operand m_src;                                                                                                                                 \
+        u32 m_cache_index { 0 };                                                                                                                       \
+        Optional<IdentifierTableIndex> m_base_identifier {};                                                                                           \
+    };
 
-private:
-    Operand m_base;
-    IdentifierTableIndex m_property;
-    Operand m_src;
-    PropertyKind m_kind;
-    u32 m_cache_index { 0 };
-    Optional<IdentifierTableIndex> m_base_identifier {};
-};
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_NUMERIC_ID)
 
-class PutByNumericId final : public Instruction {
-public:
-    explicit PutByNumericId(Operand base, u64 property_index, Operand src, PropertyKind kind, u32 cache_index, Optional<IdentifierTableIndex> base_identifier = {})
-        : Instruction(Type::PutByNumericId)
-        , m_base(base)
-        , m_property_index(property_index)
-        , m_src(src)
-        , m_kind(kind)
-        , m_cache_index(cache_index)
-        , m_base_identifier(move(base_identifier))
-    {
-    }
+#define DECLARE_PUT_KIND_BY_ID_WITH_THIS(kind)                                                                                 \
+    class Put##kind##ByIdWithThis final : public Instruction {                                                                 \
+    public:                                                                                                                    \
+        Put##kind##ByIdWithThis(Operand base, Operand this_value, IdentifierTableIndex property, Operand src, u32 cache_index) \
+            : Instruction(Type::Put##kind##ByIdWithThis)                                                                       \
+            , m_base(base)                                                                                                     \
+            , m_this_value(this_value)                                                                                         \
+            , m_property(property)                                                                                             \
+            , m_src(src)                                                                                                       \
+            , m_cache_index(cache_index)                                                                                       \
+        {                                                                                                                      \
+        }                                                                                                                      \
+                                                                                                                               \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                                                    \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                                                     \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                                             \
+        {                                                                                                                      \
+            visitor(m_base);                                                                                                   \
+            visitor(m_this_value);                                                                                             \
+            visitor(m_src);                                                                                                    \
+        }                                                                                                                      \
+                                                                                                                               \
+        Operand base() const { return m_base; }                                                                                \
+        Operand this_value() const { return m_this_value; }                                                                    \
+        IdentifierTableIndex property() const { return m_property; }                                                           \
+        Operand src() const { return m_src; }                                                                                  \
+        u32 cache_index() const { return m_cache_index; }                                                                      \
+                                                                                                                               \
+    private:                                                                                                                   \
+        Operand m_base;                                                                                                        \
+        Operand m_this_value;                                                                                                  \
+        IdentifierTableIndex m_property;                                                                                       \
+        Operand m_src;                                                                                                         \
+        u32 m_cache_index { 0 };                                                                                               \
+    };
 
-    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
-    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
-    void visit_operands_impl(Function<void(Operand&)> visitor)
-    {
-        visitor(m_base);
-        visitor(m_src);
-    }
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_ID_WITH_THIS)
 
-private:
-    Operand m_base;
-    u64 m_property_index;
-    Operand m_src;
-    PropertyKind m_kind;
-    u32 m_cache_index { 0 };
-    Optional<IdentifierTableIndex> m_base_identifier {};
-};
+#define DECLARE_PUT_KIND_BY_NUMERIC_ID_WITH_THIS(kind)                                                               \
+    class Put##kind##ByNumericIdWithThis final : public Instruction {                                                \
+    public:                                                                                                          \
+        Put##kind##ByNumericIdWithThis(Operand base, Operand this_value, u32 property, Operand src, u32 cache_index) \
+            : Instruction(Type::Put##kind##ByNumericIdWithThis)                                                      \
+            , m_base(base)                                                                                           \
+            , m_this_value(this_value)                                                                               \
+            , m_property(property)                                                                                   \
+            , m_src(src)                                                                                             \
+            , m_cache_index(cache_index)                                                                             \
+        {                                                                                                            \
+        }                                                                                                            \
+                                                                                                                     \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                                          \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                                           \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                                   \
+        {                                                                                                            \
+            visitor(m_base);                                                                                         \
+            visitor(m_this_value);                                                                                   \
+            visitor(m_src);                                                                                          \
+        }                                                                                                            \
+                                                                                                                     \
+        Operand base() const { return m_base; }                                                                      \
+        Operand this_value() const { return m_this_value; }                                                          \
+        u32 property() const { return m_property; }                                                                  \
+        Operand src() const { return m_src; }                                                                        \
+        u32 cache_index() const { return m_cache_index; }                                                            \
+                                                                                                                     \
+    private:                                                                                                         \
+        Operand m_base;                                                                                              \
+        Operand m_this_value;                                                                                        \
+        u32 m_property;                                                                                              \
+        Operand m_src;                                                                                               \
+        u32 m_cache_index { 0 };                                                                                     \
+    };
 
-class PutByIdWithThis final : public Instruction {
-public:
-    PutByIdWithThis(Operand base, Operand this_value, IdentifierTableIndex property, Operand src, PropertyKind kind, u32 cache_index)
-        : Instruction(Type::PutByIdWithThis)
-        , m_base(base)
-        , m_this_value(this_value)
-        , m_property(property)
-        , m_src(src)
-        , m_kind(kind)
-        , m_cache_index(cache_index)
-    {
-    }
-
-    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
-    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
-    void visit_operands_impl(Function<void(Operand&)> visitor)
-    {
-        visitor(m_base);
-        visitor(m_this_value);
-        visitor(m_src);
-    }
-
-    Operand base() const { return m_base; }
-    Operand this_value() const { return m_this_value; }
-    IdentifierTableIndex property() const { return m_property; }
-    Operand src() const { return m_src; }
-    PropertyKind kind() const { return m_kind; }
-    u32 cache_index() const { return m_cache_index; }
-
-private:
-    Operand m_base;
-    Operand m_this_value;
-    IdentifierTableIndex m_property;
-    Operand m_src;
-    PropertyKind m_kind;
-    u32 m_cache_index { 0 };
-};
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_NUMERIC_ID_WITH_THIS)
 
 class PutPrivateById final : public Instruction {
 public:
-    explicit PutPrivateById(Operand base, IdentifierTableIndex property, Operand src, PropertyKind kind = PropertyKind::KeyValue)
+    explicit PutPrivateById(Operand base, IdentifierTableIndex property, Operand src)
         : Instruction(Type::PutPrivateById)
         , m_base(base)
         , m_property(property)
         , m_src(src)
-        , m_kind(kind)
     {
     }
 
@@ -1344,7 +1379,6 @@ private:
     Operand m_base;
     IdentifierTableIndex m_property;
     Operand m_src;
-    PropertyKind m_kind;
 };
 
 class DeleteById final : public Instruction {
@@ -1471,75 +1505,75 @@ private:
     Operand m_this_value;
 };
 
-class PutByValue final : public Instruction {
-public:
-    PutByValue(Operand base, Operand property, Operand src, PropertyKind kind = PropertyKind::KeyValue, Optional<IdentifierTableIndex> base_identifier = {})
-        : Instruction(Type::PutByValue)
-        , m_base(base)
-        , m_property(property)
-        , m_src(src)
-        , m_kind(kind)
-        , m_base_identifier(move(base_identifier))
-    {
-    }
+#define DECLARE_PUT_KIND_BY_VALUE(kind)                                                                                      \
+    class Put##kind##ByValue final : public Instruction {                                                                    \
+    public:                                                                                                                  \
+        Put##kind##ByValue(Operand base, Operand property, Operand src, Optional<IdentifierTableIndex> base_identifier = {}) \
+            : Instruction(Type::Put##kind##ByValue)                                                                          \
+            , m_base(base)                                                                                                   \
+            , m_property(property)                                                                                           \
+            , m_src(src)                                                                                                     \
+            , m_base_identifier(move(base_identifier))                                                                       \
+        {                                                                                                                    \
+        }                                                                                                                    \
+                                                                                                                             \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                                                  \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                                                   \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                                           \
+        {                                                                                                                    \
+            visitor(m_base);                                                                                                 \
+            visitor(m_property);                                                                                             \
+            visitor(m_src);                                                                                                  \
+        }                                                                                                                    \
+                                                                                                                             \
+        Operand base() const { return m_base; }                                                                              \
+        Operand property() const { return m_property; }                                                                      \
+        Operand src() const { return m_src; }                                                                                \
+                                                                                                                             \
+    private:                                                                                                                 \
+        Operand m_base;                                                                                                      \
+        Operand m_property;                                                                                                  \
+        Operand m_src;                                                                                                       \
+        Optional<IdentifierTableIndex> m_base_identifier;                                                                    \
+    };
 
-    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
-    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
-    void visit_operands_impl(Function<void(Operand&)> visitor)
-    {
-        visitor(m_base);
-        visitor(m_property);
-        visitor(m_src);
-    }
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_VALUE)
 
-    Operand base() const { return m_base; }
-    Operand property() const { return m_property; }
-    Operand src() const { return m_src; }
-    PropertyKind kind() const { return m_kind; }
+#define DECLARE_PUT_KIND_BY_VALUE_WITH_THIS(kind)                                                   \
+    class Put##kind##ByValueWithThis final : public Instruction {                                   \
+    public:                                                                                         \
+        Put##kind##ByValueWithThis(Operand base, Operand property, Operand this_value, Operand src) \
+            : Instruction(Type::Put##kind##ByValueWithThis)                                         \
+            , m_base(base)                                                                          \
+            , m_property(property)                                                                  \
+            , m_this_value(this_value)                                                              \
+            , m_src(src)                                                                            \
+        {                                                                                           \
+        }                                                                                           \
+                                                                                                    \
+        ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;                         \
+        ByteString to_byte_string_impl(Bytecode::Executable const&) const;                          \
+        void visit_operands_impl(Function<void(Operand&)> visitor)                                  \
+        {                                                                                           \
+            visitor(m_base);                                                                        \
+            visitor(m_property);                                                                    \
+            visitor(m_this_value);                                                                  \
+            visitor(m_src);                                                                         \
+        }                                                                                           \
+                                                                                                    \
+        Operand base() const { return m_base; }                                                     \
+        Operand property() const { return m_property; }                                             \
+        Operand this_value() const { return m_this_value; }                                         \
+        Operand src() const { return m_src; }                                                       \
+                                                                                                    \
+    private:                                                                                        \
+        Operand m_base;                                                                             \
+        Operand m_property;                                                                         \
+        Operand m_this_value;                                                                       \
+        Operand m_src;                                                                              \
+    };
 
-private:
-    Operand m_base;
-    Operand m_property;
-    Operand m_src;
-    PropertyKind m_kind;
-    Optional<IdentifierTableIndex> m_base_identifier;
-};
-
-class PutByValueWithThis final : public Instruction {
-public:
-    PutByValueWithThis(Operand base, Operand property, Operand this_value, Operand src, PropertyKind kind = PropertyKind::KeyValue)
-        : Instruction(Type::PutByValueWithThis)
-        , m_base(base)
-        , m_property(property)
-        , m_this_value(this_value)
-        , m_src(src)
-        , m_kind(kind)
-    {
-    }
-
-    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
-    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
-    void visit_operands_impl(Function<void(Operand&)> visitor)
-    {
-        visitor(m_base);
-        visitor(m_property);
-        visitor(m_this_value);
-        visitor(m_src);
-    }
-
-    Operand base() const { return m_base; }
-    Operand property() const { return m_property; }
-    Operand this_value() const { return m_this_value; }
-    Operand src() const { return m_src; }
-    PropertyKind kind() const { return m_kind; }
-
-private:
-    Operand m_base;
-    Operand m_property;
-    Operand m_this_value;
-    Operand m_src;
-    PropertyKind m_kind;
-};
+JS_ENUMERATE_PUT_KINDS(DECLARE_PUT_KIND_BY_VALUE_WITH_THIS)
 
 class DeleteByValue final : public Instruction {
 public:
