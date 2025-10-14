@@ -125,6 +125,13 @@ ThrowCompletionOr<Value> Object::get(PropertyKey const& property_key) const
     return TRY(internal_get(property_key, this));
 }
 
+// 7.3.2 Get ( O, P ), https://tc39.es/ecma262/#sec-get-o-p
+ThrowCompletionOr<Value> Object::get(PropertyKey const& property_key, Bytecode::PropertyLookupCache& cache) const
+{
+    // 1. Return ? O.[[Get]](P, O).
+    return TRY(Value(this).get(vm(), property_key, cache));
+}
+
 // NOTE: 7.3.3 GetV ( V, P ) is implemented as Value::get().
 
 // 7.3.4 Set ( O, P, V, Throw ), https://tc39.es/ecma262/#sec-set-o-p-v-throw
@@ -1540,7 +1547,15 @@ ThrowCompletionOr<Value> Object::ordinary_to_primitive(Value::PreferredType pref
     // 3. For each element name of methodNames, do
     for (auto& method_name : method_names) {
         // a. Let method be ? Get(O, name).
-        auto method = TRY(get(method_name));
+        Value method;
+        if (method_name == vm.names.toString) {
+            static Bytecode::PropertyLookupCache cache;
+            method = TRY(get(method_name, cache));
+        } else {
+            ASSERT(method_name == vm.names.valueOf);
+            static Bytecode::PropertyLookupCache cache;
+            method = TRY(get(method_name, cache));
+        }
 
         // b. If IsCallable(method) is true, then
         if (method.is_function()) {

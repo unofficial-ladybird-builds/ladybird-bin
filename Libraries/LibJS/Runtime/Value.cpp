@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2020-2025, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2020-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2022, David Tuin <davidot@serenityos.org>
  *
@@ -15,6 +15,7 @@
 #include <AK/Utf16String.h>
 #include <AK/Utf8View.h>
 #include <LibCrypto/BigInt/SignedBigInteger.h>
+#include <LibJS/Bytecode/PropertyAccess.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Accessor.h>
 #include <LibJS/Runtime/Array.h>
@@ -304,7 +305,8 @@ ThrowCompletionOr<bool> Value::is_regexp(VM& vm) const
         return false;
 
     // 2. Let matcher be ? Get(argument, @@match).
-    auto matcher = TRY(as_object().get(vm.well_known_symbol_match()));
+    static Bytecode::PropertyLookupCache cache;
+    auto matcher = TRY(as_object().get(vm.well_known_symbol_match(), cache));
 
     // 3. If matcher is not undefined, return ToBoolean(matcher).
     if (!matcher.is_undefined())
@@ -568,7 +570,8 @@ ThrowCompletionOr<Value> Value::to_primitive_slow_case(VM& vm, PreferredType pre
     // 1. If input is an Object, then
     if (is_object()) {
         // a. Let exoticToPrim be ? GetMethod(input, @@toPrimitive).
-        auto exotic_to_primitive = TRY(get_method(vm, vm.well_known_symbol_to_primitive()));
+        static Bytecode::PropertyLookupCache cache;
+        auto exotic_to_primitive = TRY(get_method(vm, vm.well_known_symbol_to_primitive(), cache));
 
         // b. If exoticToPrim is not undefined, then
         if (exotic_to_primitive) {
@@ -1306,11 +1309,36 @@ ThrowCompletionOr<Value> Value::get(VM& vm, PropertyKey const& property_key) con
     return TRY(object->internal_get(property_key, *this));
 }
 
+ThrowCompletionOr<Value> Value::get(VM& vm, PropertyKey const& property, Bytecode::PropertyLookupCache& cache) const
+{
+    if (is_nullish())
+        return vm.throw_completion<TypeError>(ErrorType::ToObjectNullOrUndefined);
+    return Bytecode::get_by_id<Bytecode::GetByIdMode::Normal>(vm, [&]() { return Optional<Utf16FlyString const&> {}; }, [&]() { return property; }, *this, *this, cache);
+}
+
 // 7.3.11 GetMethod ( V, P ), https://tc39.es/ecma262/#sec-getmethod
 ThrowCompletionOr<GC::Ptr<FunctionObject>> Value::get_method(VM& vm, PropertyKey const& property_key) const
 {
     // 1. Let func be ? GetV(V, P).
     auto function = TRY(get(vm, property_key));
+
+    // 2. If func is either undefined or null, return undefined.
+    if (function.is_nullish())
+        return nullptr;
+
+    // 3. If IsCallable(func) is false, throw a TypeError exception.
+    if (!function.is_function())
+        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function.to_string_without_side_effects());
+
+    // 4. Return func.
+    return function.as_function();
+}
+
+// 7.3.11 GetMethod ( V, P ), https://tc39.es/ecma262/#sec-getmethod
+ThrowCompletionOr<GC::Ptr<FunctionObject>> Value::get_method(VM& vm, PropertyKey const& property_key, Bytecode::PropertyLookupCache& cache) const
+{
+    // 1. Let func be ? GetV(V, P).
+    auto function = TRY(get(vm, property_key, cache));
 
     // 2. If func is either undefined or null, return undefined.
     if (function.is_nullish())
@@ -2168,7 +2196,8 @@ ThrowCompletionOr<Value> instance_of(VM& vm, Value value, Value target)
         return vm.throw_completion<TypeError>(ErrorType::NotAnObject, target.to_string_without_side_effects());
 
     // 2. Let instOfHandler be ? GetMethod(target, @@hasInstance).
-    auto instance_of_handler = TRY(target.get_method(vm, vm.well_known_symbol_has_instance()));
+    static Bytecode::PropertyLookupCache cache;
+    auto instance_of_handler = TRY(target.get_method(vm, vm.well_known_symbol_has_instance(), cache));
 
     // 3. If instOfHandler is not undefined, then
     if (instance_of_handler) {
@@ -2215,7 +2244,8 @@ ThrowCompletionOr<Value> ordinary_has_instance(VM& vm, Value lhs, Value rhs)
     auto* lhs_object = &lhs.as_object();
 
     // 4. Let P be ? Get(C, "prototype").
-    auto rhs_prototype = TRY(rhs_function.get(vm.names.prototype));
+    static Bytecode::PropertyLookupCache cache;
+    auto rhs_prototype = TRY(rhs.get(vm, vm.names.prototype, cache));
 
     // 5. If P is not an Object, throw a TypeError exception.
     if (!rhs_prototype.is_object())
