@@ -4110,7 +4110,8 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                 return CalculationContext::for_property(PropertyNameAndID::from_id(property_id));
             },
             [](FunctionContext const& function) -> Optional<CalculationContext> {
-                // Gradients resolve percentages as lengths relative to the gradient-box.
+                // Gradients resolve percentages as lengths relative to the gradient-box (except within
+                // <angular-color-stop-list>s which are handled by a special context)
                 if (function.name.is_one_of_ignoring_ascii_case(
                         "linear-gradient"sv, "repeating-linear-gradient"sv,
                         "radial-gradient"sv, "repeating-radial-gradient"sv,
@@ -4140,6 +4141,8 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
             },
             [](SpecialContext special_context) -> Optional<CalculationContext> {
                 switch (special_context) {
+                case SpecialContext::AngularColorStopList:
+                    return CalculationContext { .percentages_resolve_as = ValueType::Angle };
                 case SpecialContext::ShadowBlurRadius:
                     return CalculationContext { .accepted_type_ranges = { { ValueType::Length, { 0, NumericLimits<float>::max() } } } };
                 case SpecialContext::TranslateZArgument:
@@ -4453,6 +4456,21 @@ RefPtr<CalculationNode const> Parser::parse_a_calculation(Vector<ComponentValue>
 
     // 6. Return the result of simplifying a calculation tree from values.
     return simplify_a_calculation_tree(*calculation_tree, context, CalculationResolutionContext {});
+}
+
+// https://drafts.csswg.org/css-color-4/#typedef-opacity-opacity-value
+RefPtr<StyleValue const> Parser::parse_opacity_value(TokenStream<ComponentValue>& tokens)
+{
+    auto value = parse_number_percentage_value(tokens);
+
+    if (!value)
+        return nullptr;
+
+    // Percentages map to the range [0,1] for opacity values
+    if (value->is_percentage())
+        return NumberStyleValue::create(value->as_percentage().percentage().as_fraction());
+
+    return value;
 }
 
 // https://drafts.csswg.org/css-fonts/#typedef-opentype-tag
@@ -4866,6 +4884,8 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_length_value(tokens);
     case ValueType::Number:
         return parse_number_value(tokens);
+    case ValueType::Opacity:
+        return parse_opacity_value(tokens);
     case ValueType::OpentypeTag:
         return parse_opentype_tag_value(tokens);
     case ValueType::Paint:

@@ -120,11 +120,24 @@ Optional<Vector<LinearColorStopListElement>> Parser::parse_linear_color_stop_lis
 
 Optional<Vector<AngularColorStopListElement>> Parser::parse_angular_color_stop_list(TokenStream<ComponentValue>& tokens)
 {
+    auto context_guard = push_temporary_value_parsing_context(SpecialContext::AngularColorStopList);
+
     // <angular-color-stop-list> =
     //   <angular-color-stop> , [ <angular-color-hint>? , <angular-color-stop> ]#
     return parse_color_stop_list<AngularColorStopListElement>(
         tokens,
-        [&](auto& it) { return parse_angle_percentage(it); });
+        [&](TokenStream<ComponentValue>& it) -> Optional<AnglePercentage> {
+            if (tokens.next_token().is(Token::Type::Number)) {
+                auto transaction = tokens.begin_transaction();
+                auto numeric_value = tokens.consume_a_token().token().number_value();
+                if (numeric_value == 0) {
+                    transaction.commit();
+                    return Angle::make_degrees(0);
+                }
+            }
+
+            return parse_angle_percentage(it);
+        });
 }
 
 Optional<InterpolationMethod> Parser::parse_interpolation_method(TokenStream<ComponentValue>& tokens)

@@ -172,6 +172,8 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::Ratio); parsed.has_value())
         return parsed.release_value();
+    if (auto parsed = parse_for_type(ValueType::Opacity); parsed.has_value())
+        return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::OpentypeTag); parsed.has_value())
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::Rect); parsed.has_value())
@@ -721,14 +723,6 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         if (auto parsed_value = parse_comma_separated_value_list(tokens, [this, property_id](auto& tokens) { return parse_single_background_size_value(property_id, tokens); }))
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
-    case PropertyID::Opacity:
-    case PropertyID::FillOpacity:
-    case PropertyID::FloodOpacity:
-    case PropertyID::StopOpacity:
-    case PropertyID::StrokeOpacity:
-        if (auto parsed_value = parse_opacity_value(property_id, tokens); parsed_value && !tokens.has_next_token())
-            return parsed_value.release_nonnull();
-        return ParseError::SyntaxError;
     // FIXME: This can be removed once we have generic logic for parsing "positional-value-list-shorthand"s
     case PropertyID::Overflow:
         if (auto parsed_value = parse_overflow_value(tokens); parsed_value && !tokens.has_next_token())
@@ -780,6 +774,10 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         return ParseError::SyntaxError;
     case PropertyID::ScrollbarGutter:
         if (auto parsed_value = parse_scrollbar_gutter_value(tokens); parsed_value && !tokens.has_next_token())
+            return parsed_value.release_nonnull();
+        return ParseError::SyntaxError;
+    case PropertyID::ShapeOutside:
+        if (auto parsed_value = parse_shape_outside_value(tokens); parsed_value && !tokens.has_next_token())
             return parsed_value.release_nonnull();
         return ParseError::SyntaxError;
     case PropertyID::StrokeDasharray:
@@ -2280,6 +2278,60 @@ RefPtr<StyleValue const> Parser::parse_single_shadow_value(TokenStream<Component
 
     transaction.commit();
     return ShadowStyleValue::create(shadow_type, color, offset_x.release_nonnull(), offset_y.release_nonnull(), blur_radius, spread_distance, placement.release_value());
+}
+
+RefPtr<StyleValue const> Parser::parse_shape_outside_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | [ <basic-shape> || <shape-box> ] | <image>
+    auto transaction = tokens.begin_transaction();
+
+    // none
+    if (auto maybe_none = parse_all_as_single_keyword_value(tokens, Keyword::None)) {
+        transaction.commit();
+        return maybe_none;
+    }
+
+    // <image>
+    if (auto maybe_image = parse_image_value(tokens)) {
+        transaction.commit();
+        return maybe_image;
+    }
+
+    // [ <basic-shape> || <shape-box> ]
+    RefPtr<StyleValue const> basic_shape_value;
+    RefPtr<StyleValue const> shape_box_value;
+    while (tokens.has_next_token()) {
+        if (auto maybe_basic_shape_value = parse_basic_shape_value(tokens)) {
+            if (basic_shape_value)
+                return nullptr;
+            basic_shape_value = maybe_basic_shape_value;
+            continue;
+        }
+
+        if (auto maybe_keyword_value = parse_keyword_value(tokens)) {
+            if (shape_box_value)
+                return nullptr;
+            if (!keyword_to_shape_box(maybe_keyword_value->to_keyword()).has_value())
+                return nullptr;
+            shape_box_value = maybe_keyword_value;
+            continue;
+        }
+
+        return nullptr;
+    }
+
+    if (!basic_shape_value && !shape_box_value)
+        return nullptr;
+
+    transaction.commit();
+
+    if (basic_shape_value && !shape_box_value)
+        return basic_shape_value;
+
+    if (!basic_shape_value && shape_box_value)
+        return shape_box_value;
+
+    return StyleValueList::create({ basic_shape_value.release_nonnull(), shape_box_value.release_nonnull() }, StyleValueList::Separator::Space);
 }
 
 RefPtr<StyleValue const> Parser::parse_rotate_value(TokenStream<ComponentValue>& tokens)
@@ -4001,19 +4053,6 @@ RefPtr<StyleValue const> Parser::parse_math_depth_value(TokenStream<ComponentVal
     }
 
     return nullptr;
-}
-
-RefPtr<StyleValue const> Parser::parse_opacity_value(PropertyID property_id, TokenStream<ComponentValue>& tokens)
-{
-    auto value = parse_css_value_for_property(property_id, tokens);
-    if (!value)
-        return nullptr;
-
-    // Percentages map to the range [0,1] for opacity values
-    if (value->is_percentage())
-        value = NumberStyleValue::create(value->as_percentage().percentage().as_fraction());
-
-    return value;
 }
 
 RefPtr<StyleValue const> Parser::parse_overflow_value(TokenStream<ComponentValue>& tokens)
