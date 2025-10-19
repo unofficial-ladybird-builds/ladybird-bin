@@ -277,12 +277,14 @@ ErrorOr<void, ValidationError> Validator::validate(CodeSection const& section)
 
 ErrorOr<void, ValidationError> Validator::validate(TableType const& type)
 {
-    return validate(type.limits(), (1ull << 32) - 1);
+    Optional<u64> bound = type.limits().address_type() == AddressType::I64 ? Optional<u64> {} : (1ull << 32) - 1;
+    return validate(type.limits(), bound);
 }
 
 ErrorOr<void, ValidationError> Validator::validate(MemoryType const& type)
 {
-    return validate(type.limits(), 1 << 16);
+    u64 bound = type.limits().address_type() == AddressType::I64 ? 1ull << 48 : 1ull << 16;
+    return validate(type.limits(), bound);
 }
 
 ErrorOr<void, ValidationError> Validator::validate(Wasm::TagType const& tag_type)
@@ -315,10 +317,12 @@ ErrorOr<FunctionType, ValidationError> Validator::validate(BlockType const& type
     return Errors::invalid("BlockType"sv);
 }
 
-ErrorOr<void, ValidationError> Validator::validate(Limits const& limits, u64 bound)
+ErrorOr<void, ValidationError> Validator::validate(Limits const& limits, Optional<u64> bound)
 {
     auto check_bound = [bound](auto value) {
-        return static_cast<u64>(value) <= bound;
+        if (!bound.has_value())
+            return true;
+        return static_cast<u64>(value) <= bound.value();
     };
 
     if (!check_bound(limits.min()))
@@ -2087,6 +2091,16 @@ VALIDATE_INSTRUCTION(try_table)
 {
     auto& args = instruction.arguments().get<Instruction::TryTableArgs>();
     auto block_type = TRY(validate(args.try_.block_type));
+
+    auto& parameters = block_type.parameters();
+    for (size_t i = 1; i <= parameters.size(); ++i)
+        TRY(stack.take(parameters[parameters.size() - i]));
+
+    m_frames.empend(block_type, FrameKind::TryTable, stack.size());
+    m_max_frame_size = max(m_max_frame_size, m_frames.size());
+    for (auto& parameter : parameters)
+        stack.append(parameter);
+
     for (auto& catch_ : args.catches) {
         auto label = catch_.target_label();
         TRY(validate(label));
