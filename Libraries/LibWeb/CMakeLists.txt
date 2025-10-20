@@ -158,6 +158,7 @@ set(SOURCES
     CSS/CSSVariableReferenceValue.cpp
     CSS/Descriptor.cpp
     CSS/Display.cpp
+    CSS/EasingFunction.cpp
     CSS/EdgeRect.cpp
     CSS/Fetch.cpp
     CSS/Flex.cpp
@@ -654,6 +655,7 @@ set(SOURCES
     HTML/TraversableNavigable.cpp
     HTML/UniversalGlobalScope.cpp
     HTML/UserActivation.cpp
+    HTML/UserNavigationInvolvement.cpp
     HTML/ValidityState.cpp
     HTML/VideoTrack.cpp
     HTML/VideoTrackList.cpp
