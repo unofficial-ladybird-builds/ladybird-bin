@@ -275,6 +275,7 @@ set(SOURCES
     CSS/StyleValues/TextUnderlinePositionStyleValue.cpp
     CSS/StyleValues/TransformationStyleValue.cpp
     CSS/StyleValues/TransitionStyleValue.cpp
+    CSS/StyleValues/TreeCountingFunctionStyleValue.cpp
     CSS/StyleValues/UnicodeRangeStyleValue.cpp
     CSS/StyleValues/UnresolvedStyleValue.cpp
     CSS/Supports.cpp
@@ -1023,8 +1024,12 @@ set(SOURCES
     WebGL/Extensions/ANGLEInstancedArrays.cpp
     WebGL/Extensions/EXTBlendMinMax.cpp
     WebGL/Extensions/EXTColorBufferFloat.cpp
+    WebGL/Extensions/EXTRenderSnorm.cpp
+    WebGL/Extensions/EXTTextureFilterAnisotropic.cpp
+    WebGL/Extensions/EXTTextureNorm16.cpp
     WebGL/Extensions/OESVertexArrayObject.cpp
     WebGL/Extensions/WebGLCompressedTextureS3tc.cpp
+    WebGL/Extensions/WebGLCompressedTextureS3tcSrgb.cpp
     WebGL/Extensions/WebGLDrawBuffers.cpp
     WebGL/Extensions/WebGLVertexArrayObjectOES.cpp
     WebGL/OpenGLContext.cpp

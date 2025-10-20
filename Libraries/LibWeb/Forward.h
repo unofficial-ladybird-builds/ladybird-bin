@@ -385,6 +385,7 @@ class TimeStyleValue;
 class Transformation;
 class TransformationStyleValue;
 class TransitionStyleValue;
+class TreeCountingFunctionStyleValue;
 class UnicodeRangeStyleValue;
 class UnresolvedStyleValue;
 class URL;
@@ -401,6 +402,7 @@ struct CalculationResolutionContext;
 struct CSSStyleSheetInit;
 struct GridRepeatParams;
 struct StyleSheetIdentifier;
+struct TreeCountingFunctionResolutionContext;
 
 }
 
@@ -1224,8 +1226,12 @@ namespace Web::WebGL::Extensions {
 class ANGLEInstancedArrays;
 class EXTBlendMinMax;
 class EXTColorBufferFloat;
+class EXTRenderSnorm;
+class EXTTextureFilterAnisotropic;
+class EXTTextureNorm16;
 class OESVertexArrayObject;
 class WebGLCompressedTextureS3tc;
+class WebGLCompressedTextureS3tcSrgb;
 class WebGLDrawBuffers;
 class WebGLVertexArrayObjectOES;
 

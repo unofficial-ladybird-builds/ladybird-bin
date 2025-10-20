@@ -19,6 +19,7 @@
 #include <AK/StringConversions.h>
 #include <AK/TemporaryChange.h>
 #include <LibWeb/CSS/FontFace.h>
+#include <LibWeb/CSS/MathFunctions.h>
 #include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
 #include <LibWeb/CSS/Parser/Parser.h>
@@ -256,6 +257,9 @@ Optional<FrequencyPercentage> Parser::parse_frequency_percentage(TokenStream<Com
 
 Optional<IntegerOrCalculated> Parser::parse_integer(TokenStream<ComponentValue>& tokens)
 {
+    // FIXME: We don't have a way to represent tree counting functions within IntegerOrCalculated, we should avoid
+    //        parsing directly to IntegerOrCalculated unless tree counting functions are disallowed in the relevant
+    //        context
     if (auto value = parse_integer_value(tokens)) {
         if (value->is_integer())
             return value->as_integer().integer();
@@ -293,6 +297,9 @@ Optional<LengthPercentage> Parser::parse_length_percentage(TokenStream<Component
 
 Optional<NumberOrCalculated> Parser::parse_number(TokenStream<ComponentValue>& tokens)
 {
+    // FIXME: We don't have a way to represent tree counting functions within NumberOrCalculated, we should avoid
+    //        parsing directly to NumberOrCalculated unless tree counting functions are disallowed in the relevant
+    //        context
     if (auto value = parse_number_value(tokens)) {
         if (value->is_number())
             return value->as_number().number();
@@ -786,6 +793,9 @@ RefPtr<StyleValue const> Parser::parse_integer_value(TokenStream<ComponentValue>
         return calc;
     }
 
+    if (auto tree_counting_function = parse_tree_counting_function(tokens, TreeCountingFunctionStyleValue::ComputedType::Integer); tree_counting_function)
+        return tree_counting_function;
+
     return nullptr;
 }
 
@@ -801,6 +811,9 @@ RefPtr<StyleValue const> Parser::parse_number_value(TokenStream<ComponentValue>&
         tokens.discard_a_token(); // calc
         return calc;
     }
+
+    if (auto tree_counting_function = parse_tree_counting_function(tokens, TreeCountingFunctionStyleValue::ComputedType::Number); tree_counting_function)
+        return tree_counting_function;
 
     return nullptr;
 }
@@ -4142,6 +4155,9 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                 case SpecialContext::TranslateZArgument:
                     // Percentages are disallowed for the Z axis
                     return CalculationContext {};
+                case SpecialContext::DOMMatrixInitString:
+                case SpecialContext::MediaCondition:
+                    return {};
                 }
                 VERIFY_NOT_REACHED();
             });
@@ -4172,7 +4188,7 @@ RefPtr<CalculationNode const> Parser::parse_a_calc_function_node(Function const&
     if (auto maybe_function = parse_math_function(function, context)) {
         // NOTE: We have to simplify manually here, since parse_math_function() is a helper for calc() parsing
         //       that doesn't do it directly by itself.
-        return simplify_a_calculation_tree(*maybe_function, context, CalculationResolutionContext {});
+        return simplify_a_calculation_tree(*maybe_function, context, CalculationResolutionContext {}, nullptr);
     }
 
     return nullptr;
@@ -4234,8 +4250,7 @@ RefPtr<CalculationNode const> Parser::convert_to_calculation_node(CalcParsing::N
             }
 
             // 2. If leaf is a math function, replace leaf with the internal representation of that math function.
-            // NOTE: All function tokens at this point should be math functions.
-            if (component_value->is_function()) {
+            if (component_value->is_function() && math_function_from_string(component_value->function().name).has_value()) {
                 auto const& function = component_value->function();
                 auto leaf_calculation = parse_a_calc_function_node(function, context);
                 if (!leaf_calculation)
@@ -4298,6 +4313,10 @@ RefPtr<CalculationNode const> Parser::convert_to_calculation_node(CalcParsing::N
 
             if (component_value->is(Token::Type::Percentage))
                 return NumericCalculationNode::create(Percentage { component_value->token().percentage() }, context);
+
+            auto tree_counting_function_tokens = TokenStream<ComponentValue>::of_single_token(component_value);
+            if (auto tree_counting_function = parse_tree_counting_function(tree_counting_function_tokens, TreeCountingFunctionStyleValue::ComputedType::Number))
+                return NonMathFunctionCalculationNode::create(tree_counting_function.release_nonnull(), NumericType {});
 
             // NOTE: If we get here, then we have a ComponentValue that didn't get replaced with something else,
             //       so the calc() is invalid.
@@ -4449,7 +4468,34 @@ RefPtr<CalculationNode const> Parser::parse_a_calculation(Vector<ComponentValue>
         return nullptr;
 
     // 6. Return the result of simplifying a calculation tree from values.
-    return simplify_a_calculation_tree(*calculation_tree, context, CalculationResolutionContext {});
+    return simplify_a_calculation_tree(*calculation_tree, context, CalculationResolutionContext {}, nullptr);
+}
+
+// https://drafts.csswg.org/css-values-5/#tree-counting
+RefPtr<TreeCountingFunctionStyleValue const> Parser::parse_tree_counting_function(TokenStream<ComponentValue>& tokens, TreeCountingFunctionStyleValue::ComputedType computed_type)
+{
+    if (!context_allows_tree_counting_functions())
+        return nullptr;
+
+    auto has_no_arguments = [](Vector<ComponentValue> const& component_values) {
+        return !any_of(component_values, [](ComponentValue const& value) { return !value.is(Token::Type::Whitespace); });
+    };
+
+    auto transaction = tokens.begin_transaction();
+
+    auto token = tokens.consume_a_token();
+
+    if (token.is_function("sibling-count"sv) && has_no_arguments(token.function().value)) {
+        transaction.commit();
+        return TreeCountingFunctionStyleValue::create(TreeCountingFunctionStyleValue::TreeCountingFunction::SiblingCount, computed_type);
+    }
+
+    if (token.is_function("sibling-index"sv) && has_no_arguments(token.function().value)) {
+        transaction.commit();
+        return TreeCountingFunctionStyleValue::create(TreeCountingFunctionStyleValue::TreeCountingFunction::SiblingIndex, computed_type);
+    }
+
+    return nullptr;
 }
 
 // https://drafts.csswg.org/css-color-4/#typedef-opacity-opacity-value
@@ -4847,6 +4893,8 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_anchor_size(tokens);
     case ValueType::Angle:
         return parse_angle_value(tokens);
+    case ValueType::AnglePercentage:
+        return parse_angle_percentage_value(tokens);
     case ValueType::BackgroundPosition:
         return parse_position_value(tokens, PositionParsingMode::BackgroundPosition);
     case ValueType::BasicShape:
@@ -4870,12 +4918,16 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_flex_value(tokens);
     case ValueType::Frequency:
         return parse_frequency_value(tokens);
+    case ValueType::FrequencyPercentage:
+        return parse_frequency_percentage_value(tokens);
     case ValueType::Image:
         return parse_image_value(tokens);
     case ValueType::Integer:
         return parse_integer_value(tokens);
     case ValueType::Length:
         return parse_length_value(tokens);
+    case ValueType::LengthPercentage:
+        return parse_length_percentage_value(tokens);
     case ValueType::Number:
         return parse_number_value(tokens);
     case ValueType::Opacity:
@@ -4898,6 +4950,8 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_string_value(tokens);
     case ValueType::Time:
         return parse_time_value(tokens);
+    case ValueType::TimePercentage:
+        return parse_time_percentage_value(tokens);
     case ValueType::TransformFunction:
         return parse_transform_function_value(tokens);
     case ValueType::TransformList:
