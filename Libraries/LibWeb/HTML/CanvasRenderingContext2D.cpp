@@ -373,8 +373,6 @@ void CanvasRenderingContext2D::stroke_internal(Gfx::Path const& path)
     if (!painter)
         return;
 
-    paint_shadow_for_stroke_internal(path);
-
     auto& state = drawing_state();
 
     auto line_cap = to_gfx_cap(state.line_cap);
@@ -386,6 +384,7 @@ void CanvasRenderingContext2D::stroke_internal(Gfx::Path const& path)
     for (auto const& dash : state.dash_list) {
         dash_array.append(static_cast<float>(dash));
     }
+    paint_shadow_for_stroke_internal(path, line_cap, line_join, dash_array);
     painter->stroke_path(path, state.stroke_style.to_gfx_paint_style(), state.filter, state.line_width, state.global_alpha, state.current_compositing_and_blending_operator, line_cap, line_join, state.miter_limit, dash_array, state.line_dash_offset);
 
     did_draw(path.bounding_box());
@@ -774,19 +773,22 @@ void CanvasRenderingContext2D::clip(Path2D& path, StringView fill_rule)
     clip_internal(path.path(), parse_fill_rule(fill_rule));
 }
 
-static bool is_point_in_path_internal(Gfx::Path path, double x, double y, StringView fill_rule)
+static bool is_point_in_path_internal(Gfx::Path path, Gfx::AffineTransform const& transform, double x, double y, StringView fill_rule)
 {
-    return path.contains(Gfx::FloatPoint(x, y), parse_fill_rule(fill_rule));
+    auto point = Gfx::FloatPoint(x, y);
+    if (auto inverse_transform = transform.inverse(); inverse_transform.has_value())
+        point = inverse_transform->map(point);
+    return path.contains(point, parse_fill_rule(fill_rule));
 }
 
 bool CanvasRenderingContext2D::is_point_in_path(double x, double y, StringView fill_rule)
 {
-    return is_point_in_path_internal(path(), x, y, fill_rule);
+    return is_point_in_path_internal(path(), drawing_state().transform, x, y, fill_rule);
 }
 
 bool CanvasRenderingContext2D::is_point_in_path(Path2D const& path, double x, double y, StringView fill_rule)
 {
-    return is_point_in_path_internal(path.path(), x, y, fill_rule);
+    return is_point_in_path_internal(path.path(), drawing_state().transform, x, y, fill_rule);
 }
 
 // https://html.spec.whatwg.org/multipage/canvas.html#check-the-usability-of-the-image-argument
@@ -986,10 +988,13 @@ float CanvasRenderingContext2D::shadow_offset_x() const
     return drawing_state().shadow_offset_x;
 }
 
-void CanvasRenderingContext2D::set_shadow_offset_x(float offsetX)
+void CanvasRenderingContext2D::set_shadow_offset_x(float offset_x)
 {
     // https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-shadowoffsetx
-    drawing_state().shadow_offset_x = offsetX;
+    if (!isfinite(offset_x))
+        return;
+
+    drawing_state().shadow_offset_x = offset_x;
 }
 
 float CanvasRenderingContext2D::shadow_offset_y() const
@@ -997,10 +1002,13 @@ float CanvasRenderingContext2D::shadow_offset_y() const
     return drawing_state().shadow_offset_y;
 }
 
-void CanvasRenderingContext2D::set_shadow_offset_y(float offsetY)
+void CanvasRenderingContext2D::set_shadow_offset_y(float offset_y)
 {
     // https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-shadowoffsety
-    drawing_state().shadow_offset_y = offsetY;
+    if (!isfinite(offset_y))
+        return;
+
+    drawing_state().shadow_offset_y = offset_y;
 }
 
 float CanvasRenderingContext2D::shadow_blur() const
@@ -1055,23 +1063,36 @@ void CanvasRenderingContext2D::paint_shadow_for_fill_internal(Gfx::Path const& p
         return;
 
     auto& state = this->drawing_state();
+    if (state.shadow_blur == 0.0f && state.shadow_offset_x == 0.0f && state.shadow_offset_y == 0.0f)
+        return;
 
     if (state.current_compositing_and_blending_operator == Gfx::CompositingAndBlendingOperator::Copy)
+        return;
+
+    if (!state.fill_style.to_gfx_paint_style()->is_visible())
+        return;
+
+    auto alpha = state.global_alpha * (state.shadow_color.alpha() / 255.0f);
+    auto fill_style_color = state.fill_style.as_color();
+    if (fill_style_color.has_value() && fill_style_color->alpha() > 0)
+        alpha = (fill_style_color->alpha() / 255.0f) * state.global_alpha;
+    if (alpha == 0.0f)
         return;
 
     painter->save();
 
     Gfx::AffineTransform transform;
     transform.translate(state.shadow_offset_x, state.shadow_offset_y);
+    transform.multiply(state.transform);
     painter->set_transform(transform);
-    painter->fill_path(path, state.shadow_color.with_opacity(state.global_alpha), winding_rule, state.shadow_blur, state.current_compositing_and_blending_operator);
+    painter->fill_path(path, state.shadow_color.with_opacity(alpha), winding_rule, state.shadow_blur, state.current_compositing_and_blending_operator);
 
     painter->restore();
 
     did_draw(path.bounding_box());
 }
 
-void CanvasRenderingContext2D::paint_shadow_for_stroke_internal(Gfx::Path const& path)
+void CanvasRenderingContext2D::paint_shadow_for_stroke_internal(Gfx::Path const& path, Gfx::Path::CapStyle line_cap, Gfx::Path::JoinStyle line_join, Vector<float> const& dash_array)
 {
     auto* painter = this->painter();
     if (!painter)
@@ -1082,12 +1103,26 @@ void CanvasRenderingContext2D::paint_shadow_for_stroke_internal(Gfx::Path const&
     if (state.current_compositing_and_blending_operator == Gfx::CompositingAndBlendingOperator::Copy)
         return;
 
+    if (state.shadow_blur == 0.0f && state.shadow_offset_x == 0.0f && state.shadow_offset_y == 0.0f)
+        return;
+
+    if (!state.stroke_style.to_gfx_paint_style()->is_visible())
+        return;
+
+    auto alpha = state.global_alpha * (state.shadow_color.alpha() / 255.0f);
+    auto fill_style_color = state.fill_style.as_color();
+    if (fill_style_color.has_value() && fill_style_color->alpha() > 0)
+        alpha = (fill_style_color->alpha() / 255.0f) * state.global_alpha;
+    if (alpha == 0.0f)
+        return;
+
     painter->save();
 
     Gfx::AffineTransform transform;
     transform.translate(state.shadow_offset_x, state.shadow_offset_y);
+    transform.multiply(state.transform);
     painter->set_transform(transform);
-    painter->stroke_path(path, state.shadow_color.with_opacity(state.global_alpha), state.line_width, state.shadow_blur, state.current_compositing_and_blending_operator);
+    painter->stroke_path(path, state.shadow_color.with_opacity(alpha), state.line_width, state.shadow_blur, state.current_compositing_and_blending_operator, line_cap, line_join, state.miter_limit, dash_array, state.line_dash_offset);
 
     painter->restore();
 
