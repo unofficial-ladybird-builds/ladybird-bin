@@ -296,9 +296,9 @@ interface mixin WebGL2RenderingContextBase {
 
     // Framebuffer objects
     undefined blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
-    [FIXME] undefined framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture? texture, GLint level, GLint layer);
+    undefined framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture? texture, GLint level, GLint layer);
     undefined invalidateFramebuffer(GLenum target, sequence<GLenum> attachments);
-    [FIXME] undefined invalidateSubFramebuffer(GLenum target, sequence<GLenum> attachments, GLint x, GLint y, GLsizei width, GLsizei height);
+    undefined invalidateSubFramebuffer(GLenum target, sequence<GLenum> attachments, GLint x, GLint y, GLsizei width, GLsizei height);
     undefined readBuffer(GLenum src);
 
     // Renderbuffer objects
@@ -327,10 +327,10 @@ interface mixin WebGL2RenderingContextBase {
     [FIXME] undefined copyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height);
 
     [FIXME] undefined compressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, GLintptr offset);
-    [FIXME] undefined compressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, [AllowShared] ArrayBufferView srcData, optional unsigned long long srcOffset = 0, optional GLuint srcLengthOverride = 0);
+    undefined compressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, [AllowShared] ArrayBufferView srcData, optional unsigned long long srcOffset = 0, optional GLuint srcLengthOverride = 0);
 
     [FIXME] undefined compressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, GLintptr offset);
-    [FIXME] undefined compressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, [AllowShared] ArrayBufferView srcData, optional unsigned long long srcOffset = 0, optional GLuint srcLengthOverride = 0);
+    undefined compressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, [AllowShared] ArrayBufferView srcData, optional unsigned long long srcOffset = 0, optional GLuint srcLengthOverride = 0);
 
     // Programs and shaders
     [FIXME] GLint getFragDataLocation(WebGLProgram program, DOMString name); // [WebGLHandlesContextLoss]
@@ -341,31 +341,31 @@ interface mixin WebGL2RenderingContextBase {
     undefined uniform3ui(WebGLUniformLocation? location, GLuint v0, GLuint v1, GLuint v2);
     undefined uniform4ui(WebGLUniformLocation? location, GLuint v0, GLuint v1, GLuint v2, GLuint v3);
 
-    [FIXME] undefined uniform1uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniform2uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniform3uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniform4uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniformMatrix3x2fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniformMatrix4x2fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniform1uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniform2uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniform3uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniform4uiv(WebGLUniformLocation? location, Uint32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix3x2fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix4x2fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
 
-    [FIXME] undefined uniformMatrix2x3fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniformMatrix4x3fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix2x3fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix4x3fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
 
-    [FIXME] undefined uniformMatrix2x4fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
-    [FIXME] undefined uniformMatrix3x4fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix2x4fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
+    undefined uniformMatrix3x4fv(WebGLUniformLocation? location, GLboolean transpose, Float32List data, optional unsigned long long srcOffset = 0, optional GLuint srcLength = 0);
 
     // Vertex attributes
-    [FIXME] undefined vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
-    [FIXME] undefined vertexAttribI4iv(GLuint index, Int32List values);
-    [FIXME] undefined vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
-    [FIXME] undefined vertexAttribI4uiv(GLuint index, Uint32List values);
+    undefined vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
+    undefined vertexAttribI4iv(GLuint index, Int32List values);
+    undefined vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
+    undefined vertexAttribI4uiv(GLuint index, Uint32List values);
     undefined vertexAttribIPointer(GLuint index, GLint size, GLenum type, GLsizei stride, GLintptr offset);
 
     // Writing to the drawing buffer
     undefined vertexAttribDivisor(GLuint index, GLuint divisor);
     undefined drawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instanceCount);
     undefined drawElementsInstanced(GLenum mode, GLsizei count, GLenum type, GLintptr offset, GLsizei instanceCount);
-    [FIXME] undefined drawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, GLintptr offset);
+    undefined drawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, GLintptr offset);
 
     // Multiple Render Targets
     undefined drawBuffers(sequence<GLenum> buffers);
@@ -377,13 +377,13 @@ interface mixin WebGL2RenderingContextBase {
     undefined clearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
 
     // Query Objects
-    [FIXME] WebGLQuery createQuery();
-    [FIXME] undefined deleteQuery(WebGLQuery? query);
+    WebGLQuery createQuery();
+    undefined deleteQuery(WebGLQuery? query);
     [FIXME] GLboolean isQuery(WebGLQuery? query); // [WebGLHandlesContextLoss]
-    [FIXME] undefined beginQuery(GLenum target, WebGLQuery query);
-    [FIXME] undefined endQuery(GLenum target);
+    undefined beginQuery(GLenum target, WebGLQuery query);
+    undefined endQuery(GLenum target);
     [FIXME] WebGLQuery? getQuery(GLenum target, GLenum pname);
-    [FIXME] any getQueryParameter(WebGLQuery query, GLenum pname);
+    any getQueryParameter(WebGLQuery query, GLenum pname);
 
     // Sampler Objects
     WebGLSampler createSampler();
@@ -399,20 +399,20 @@ interface mixin WebGL2RenderingContextBase {
     [FIXME] GLboolean isSync(WebGLSync? sync); // [WebGLHandlesContextLoss]
     undefined deleteSync(WebGLSync? sync);
     GLenum clientWaitSync(WebGLSync sync, GLbitfield flags, GLuint64 timeout);
-    [FIXME] undefined waitSync(WebGLSync sync, GLbitfield flags, GLint64 timeout);
+    undefined waitSync(WebGLSync sync, GLbitfield flags, GLint64 timeout);
     any getSyncParameter(WebGLSync sync, GLenum pname);
 
     // Transform Feedback
-    [FIXME] WebGLTransformFeedback createTransformFeedback();
-    [FIXME] undefined deleteTransformFeedback(WebGLTransformFeedback? tf);
+    WebGLTransformFeedback createTransformFeedback();
+    undefined deleteTransformFeedback(WebGLTransformFeedback? tf);
     [FIXME] GLboolean isTransformFeedback(WebGLTransformFeedback? tf); // [WebGLHandlesContextLoss]
-    [FIXME] undefined bindTransformFeedback (GLenum target, WebGLTransformFeedback? tf);
-    [FIXME] undefined beginTransformFeedback(GLenum primitiveMode);
-    [FIXME] undefined endTransformFeedback();
-    [FIXME] undefined transformFeedbackVaryings(WebGLProgram program, sequence<DOMString> varyings, GLenum bufferMode);
+    undefined bindTransformFeedback(GLenum target, WebGLTransformFeedback? tf);
+    undefined beginTransformFeedback(GLenum primitiveMode);
+    undefined endTransformFeedback();
+    undefined transformFeedbackVaryings(WebGLProgram program, sequence<DOMString> varyings, GLenum bufferMode);
     [FIXME] WebGLActiveInfo? getTransformFeedbackVarying(WebGLProgram program, GLuint index);
-    [FIXME] undefined pauseTransformFeedback();
-    [FIXME] undefined resumeTransformFeedback();
+    undefined pauseTransformFeedback();
+    undefined resumeTransformFeedback();
 
     // Uniform Buffer Objects and Transform Feedback Buffers
     undefined bindBufferBase(GLenum target, GLuint index, WebGLBuffer? buffer);

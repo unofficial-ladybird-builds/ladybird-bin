@@ -402,7 +402,6 @@ struct CalculationResolutionContext;
 struct CSSStyleSheetInit;
 struct GridRepeatParams;
 struct StyleSheetIdentifier;
-struct TreeCountingFunctionResolutionContext;
 
 }
 
@@ -886,6 +885,8 @@ struct LayoutState;
 namespace Web::MathML {
 
 class MathMLElement;
+class MathMLMiElement;
+class MathMLMspaceElement;
 
 }
 
@@ -1209,6 +1210,7 @@ class WebGLContextEvent;
 class WebGLFramebuffer;
 class WebGLObject;
 class WebGLProgram;
+class WebGLQuery;
 class WebGLRenderbuffer;
 class WebGLRenderingContext;
 class WebGLSampler;
@@ -1216,6 +1218,7 @@ class WebGLShader;
 class WebGLShaderPrecisionFormat;
 class WebGLSync;
 class WebGLTexture;
+class WebGLTransformFeedback;
 class WebGLUniformLocation;
 class WebGLVertexArrayObject;
 
