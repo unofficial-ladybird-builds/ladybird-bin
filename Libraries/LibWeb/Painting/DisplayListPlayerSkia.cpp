@@ -311,7 +311,7 @@ static ColorStopList expand_repeat_length(ColorStopList const& color_stop_list, 
 
     for (auto repeat_count = 1; repeat_count <= negative_repeat_count; repeat_count++) {
         for (auto stop : color_stop_list.in_reverse()) {
-            stop.position += repeat_length * static_cast<float>(-repeat_count);
+            stop.position -= repeat_length * static_cast<float>(repeat_count);
             if (stop.position < 0) {
                 stop.color = get_color_between_stops(0.0f, stop, color_stop_list_with_expanded_repeat.first());
                 color_stop_list_with_expanded_repeat.prepend(stop);
@@ -321,7 +321,7 @@ static ColorStopList expand_repeat_length(ColorStopList const& color_stop_list, 
         }
     }
 
-    for (auto repeat_count = 0; repeat_count < positive_repeat_count; repeat_count++) {
+    for (auto repeat_count = 1; repeat_count < positive_repeat_count; repeat_count++) {
         for (auto stop : color_stop_list) {
             stop.position += repeat_length * static_cast<float>(repeat_count);
             if (stop.position > 1) {
@@ -399,41 +399,39 @@ static SkGradientShader::Interpolation to_skia_interpolation(CSS::InterpolationM
 void DisplayListPlayerSkia::paint_linear_gradient(PaintLinearGradient const& command)
 {
     auto const& linear_gradient_data = command.linear_gradient_data;
-    auto color_stop_list = linear_gradient_data.color_stops.list;
+    auto const& color_stop_list = linear_gradient_data.color_stops.list;
     auto const& repeat_length = linear_gradient_data.color_stops.repeat_length;
     VERIFY(!color_stop_list.is_empty());
-    if (repeat_length.has_value())
-        color_stop_list = expand_repeat_length(color_stop_list, *repeat_length);
 
     auto stops_with_replaced_transition_hints = replace_transition_hints_with_normal_color_stops(color_stop_list);
 
     Vector<SkColor4f> colors;
     Vector<SkScalar> positions;
+    auto const first_position = repeat_length.has_value() ? stops_with_replaced_transition_hints.first().position : 0.f;
     for (size_t stop_index = 0; stop_index < stops_with_replaced_transition_hints.size(); stop_index++) {
         auto const& stop = stops_with_replaced_transition_hints[stop_index];
         if (stop_index > 0 && stop == stops_with_replaced_transition_hints[stop_index - 1])
             continue;
+
         colors.append(to_skia_color4f(stop.color));
-        positions.append(stop.position);
+        positions.append((stop.position - first_position) / repeat_length.value_or(1));
     }
 
-    auto const& rect = command.gradient_rect;
-    auto length = calculate_gradient_length<int>(rect.size(), linear_gradient_data.gradient_angle);
-    auto bottom = rect.center().translated(0, -length / 2);
-    auto top = rect.center().translated(0, length / 2);
+    auto rect = command.gradient_rect.to_type<float>();
+    auto length = calculate_gradient_length<float>(rect.size(), linear_gradient_data.gradient_angle);
 
-    Array points {
-        to_skia_point(top),
-        to_skia_point(bottom),
-    };
+    // Starting and ending points before rotation (0deg / "to top")
+    auto rect_center = rect.center();
+    auto start = rect_center.translated(0, (.5f - first_position) * length);
+    auto end = start.translated(0, repeat_length.value_or(1) * -length);
+    Array const points { to_skia_point(start), to_skia_point(end) };
 
-    auto center = to_skia_rect(rect).center();
     SkMatrix matrix;
-    matrix.setRotate(linear_gradient_data.gradient_angle, center.x(), center.y());
+    matrix.setRotate(linear_gradient_data.gradient_angle, rect_center.x(), rect_center.y());
 
     auto color_space = SkColorSpace::MakeSRGB();
     auto interpolation = to_skia_interpolation(linear_gradient_data.interpolation_method);
-    auto shader = SkGradientShader::MakeLinear(points.data(), colors.data(), color_space, positions.data(), positions.size(), SkTileMode::kClamp, interpolation, &matrix);
+    auto shader = SkGradientShader::MakeLinear(points.data(), colors.data(), color_space, positions.data(), positions.size(), SkTileMode::kRepeat, interpolation, &matrix);
 
     SkPaint paint;
     paint.setDither(true);

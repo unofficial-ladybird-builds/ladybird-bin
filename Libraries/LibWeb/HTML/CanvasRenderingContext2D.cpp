@@ -23,6 +23,7 @@
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/ImageBitmap.h>
 #include <LibWeb/HTML/ImageData.h>
+#include <LibWeb/HTML/ImageRequest.h>
 #include <LibWeb/HTML/Path2D.h>
 #include <LibWeb/HTML/TextMetrics.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
@@ -170,6 +171,22 @@ WebIDL::ExceptionOr<void> CanvasRenderingContext2D::draw_image_internal(CanvasIm
     //    The source rectangle is the rectangle whose corners are the four points (sx, sy), (sx+sw, sy), (sx+sw, sy+sh), (sx, sy+sh).
     //    The destination rectangle is the rectangle whose corners are the four points (dx, dy), (dx+dw, dy), (dx+dw, dy+dh), (dx, dy+dh).
     // NOTE: Implemented in drawImage() overloads
+    if (source_width < 0) {
+        source_x += source_width;
+        source_width = abs(source_width);
+    }
+    if (source_height < 0) {
+        source_y += source_height;
+        source_height = abs(source_height);
+    }
+    if (destination_width < 0) {
+        destination_x += destination_width;
+        destination_width = abs(destination_width);
+    }
+    if (destination_height < 0) {
+        destination_y += destination_height;
+        destination_height = abs(destination_height);
+    }
 
     //    The source rectangle is the rectangle whose corners are the four points (sx, sy), (sx+sw, sy), (sx+sw, sy+sh), (sx, sy+sh).
     auto source_rect = Gfx::FloatRect { source_x, source_y, source_width, source_height };
@@ -802,7 +819,9 @@ WebIDL::ExceptionOr<CanvasImageSourceUsability> check_usability_of_image(CanvasI
     auto usability = TRY(image.visit(
         // HTMLOrSVGImageElement
         [](GC::Root<HTMLImageElement> const& image_element) -> WebIDL::ExceptionOr<Optional<CanvasImageSourceUsability>> {
-            // FIXME: If image's current request's state is broken, then throw an "InvalidStateError" DOMException.
+            // If image's current request's state is broken, then throw an "InvalidStateError" DOMException.
+            if (image_element->current_request().state() == HTML::ImageRequest::State::Broken)
+                return WebIDL::InvalidStateError::create(image_element->realm(), "Image element state is broken"_utf16);
 
             // If image is not fully decodable, then return bad.
             if (!image_element->immutable_bitmap())
