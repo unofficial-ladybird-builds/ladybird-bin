@@ -1405,6 +1405,13 @@ Optional<CalculatedStyleValue::CalculationResult> SignCalculationNode::run_opera
         [](Percentage const& percentage) { return percentage.as_fraction(); },
         [](auto const& dimension) { return dimension.raw_value(); });
 
+    auto return_type = NumericType {}.made_consistent_with(numeric_child.numeric_type().value_or({}));
+
+    // https://drafts.csswg.org/css-values-4/#calc-ieee
+    // Any operation with at least one NaN argument produces NaN.
+    if (isnan(raw_value))
+        return CalculatedStyleValue::CalculationResult { AK::NaN<double>, return_type };
+
     double sign = 0;
     if (raw_value < 0) {
         sign = -1;
@@ -1415,7 +1422,7 @@ Optional<CalculatedStyleValue::CalculationResult> SignCalculationNode::run_opera
         sign = extractor.sign ? -0.0 : 0.0;
     }
 
-    return CalculatedStyleValue::CalculationResult { sign, NumericType {}.made_consistent_with(numeric_child.numeric_type().value_or({})) };
+    return CalculatedStyleValue::CalculationResult { sign, return_type };
 }
 
 void SignCalculationNode::dump(StringBuilder& builder, int indent) const
@@ -1814,7 +1821,7 @@ bool Atan2CalculationNode::contains_percentage() const
 
 NonnullRefPtr<CalculationNode const> Atan2CalculationNode::with_simplified_children(CalculationContext const& context, CalculationResolutionContext const& resolution_context) const
 {
-    return simplify_2_children(*this, m_x, m_y, context, resolution_context);
+    return simplify_2_children(*this, m_y, m_x, context, resolution_context);
 }
 
 // https://drafts.csswg.org/css-values-4/#funcdef-atan2
@@ -2524,7 +2531,7 @@ CalculatedStyleValue::CalculationResult CalculatedStyleValue::CalculationResult:
                 return AK::NaN<double>;
             }
 
-            return length.to_px(context.length_resolution_context.value()).to_double();
+            return length.to_px_without_rounding(context.length_resolution_context.value());
         },
         [](Resolution const& resolution) { return resolution.to_dots_per_pixel(); },
         [](Time const& time) { return time.to_seconds(); },
@@ -2893,7 +2900,7 @@ NonnullRefPtr<CalculationNode const> simplify_a_calculation_tree(CalculationNode
                     if (length.is_absolute())
                         return NumericCalculationNode::create(Length::make_px(length.absolute_length_to_px()).percentage_of(*percentage), context);
                     if (resolution_context.length_resolution_context.has_value())
-                        return NumericCalculationNode::create(Length::make_px(length.to_px(resolution_context.length_resolution_context.value())).percentage_of(*percentage), context);
+                        return NumericCalculationNode::create(Length::make_px(length.to_px_without_rounding(resolution_context.length_resolution_context.value())).percentage_of(*percentage), context);
                     return nullptr;
                 },
                 [&](Time const& time) -> RefPtr<NumericCalculationNode const> {
@@ -2931,9 +2938,9 @@ NonnullRefPtr<CalculationNode const> simplify_a_calculation_tree(CalculationNode
                     if (length.unit() == LengthUnit::Px)
                         return nullptr;
                     if (length.is_absolute())
-                        return NumericCalculationNode::create(Length::make_px(length.absolute_length_to_px()), context);
+                        return NumericCalculationNode::create(Length::make_px(length.absolute_length_to_px_without_rounding()), context);
                     if (resolution_context.length_resolution_context.has_value())
-                        return NumericCalculationNode::create(Length::make_px(length.to_px(resolution_context.length_resolution_context.value())), context);
+                        return NumericCalculationNode::create(Length::make_px(length.to_px_without_rounding(resolution_context.length_resolution_context.value())), context);
                     return nullptr;
                 },
                 [&](Number const&) -> RefPtr<CalculationNode const> {

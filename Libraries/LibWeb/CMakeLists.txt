@@ -274,7 +274,6 @@ set(SOURCES
     CSS/StyleValues/SuperellipseStyleValue.cpp
     CSS/StyleValues/TextUnderlinePositionStyleValue.cpp
     CSS/StyleValues/TransformationStyleValue.cpp
-    CSS/StyleValues/TransitionStyleValue.cpp
     CSS/StyleValues/TreeCountingFunctionStyleValue.cpp
     CSS/StyleValues/UnicodeRangeStyleValue.cpp
     CSS/StyleValues/UnresolvedStyleValue.cpp
@@ -913,6 +912,7 @@ set(SOURCES
     SVG/SVGElement.cpp
     SVG/SVGEllipseElement.cpp
     SVG/SVGFEBlendElement.cpp
+    SVG/SVGFEColorMatrixElement.cpp
     SVG/SVGFECompositeElement.cpp
     SVG/SVGFEFloodElement.cpp
     SVG/SVGFEGaussianBlurElement.cpp
@@ -1080,6 +1080,7 @@ set(SOURCES
     XHR/XMLHttpRequestUpload.cpp
     XLink/AttributeNames.cpp
     XML/XMLDocumentBuilder.cpp
+    XML/XMLFragmentParser.cpp
     XPath/XPath.cpp
     XPath/XPathEvaluator.cpp
     XPath/XPathExpression.cpp

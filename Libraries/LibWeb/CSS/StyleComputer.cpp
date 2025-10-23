@@ -76,7 +76,6 @@
 #include <LibWeb/CSS/StyleValues/SuperellipseStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
-#include <LibWeb/CSS/StyleValues/TransitionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/Document.h>
@@ -712,42 +711,6 @@ void StyleComputer::for_each_property_expanding_shorthands(PropertyID property_i
         return;
     }
 
-    if (property_id == CSS::PropertyID::Transition) {
-        if (value.to_keyword() == Keyword::None) {
-            // Handle `none` as a shorthand for `all 0s ease 0s`.
-            set_longhand_property(CSS::PropertyID::TransitionProperty, KeywordStyleValue::create(Keyword::All));
-            set_longhand_property(CSS::PropertyID::TransitionDuration, TimeStyleValue::create(CSS::Time::make_seconds(0)));
-            set_longhand_property(CSS::PropertyID::TransitionDelay, TimeStyleValue::create(CSS::Time::make_seconds(0)));
-            set_longhand_property(CSS::PropertyID::TransitionTimingFunction, KeywordStyleValue::create(Keyword::Ease));
-            set_longhand_property(CSS::PropertyID::TransitionBehavior, KeywordStyleValue::create(Keyword::Normal));
-        } else if (value.is_transition()) {
-            auto const& transitions = value.as_transition().transitions();
-            Array<Vector<ValueComparingNonnullRefPtr<StyleValue const>>, 5> transition_values;
-            for (auto const& transition : transitions) {
-                transition_values[0].append(*transition.property_name);
-                transition_values[1].append(transition.duration.as_style_value());
-                transition_values[2].append(transition.delay.as_style_value());
-                if (transition.easing)
-                    transition_values[3].append(*transition.easing);
-                transition_values[4].append(KeywordStyleValue::create(to_keyword(transition.transition_behavior)));
-            }
-
-            set_longhand_property(CSS::PropertyID::TransitionProperty, StyleValueList::create(move(transition_values[0]), StyleValueList::Separator::Comma));
-            set_longhand_property(CSS::PropertyID::TransitionDuration, StyleValueList::create(move(transition_values[1]), StyleValueList::Separator::Comma));
-            set_longhand_property(CSS::PropertyID::TransitionDelay, StyleValueList::create(move(transition_values[2]), StyleValueList::Separator::Comma));
-            set_longhand_property(CSS::PropertyID::TransitionTimingFunction, StyleValueList::create(move(transition_values[3]), StyleValueList::Separator::Comma));
-            set_longhand_property(CSS::PropertyID::TransitionBehavior, StyleValueList::create(move(transition_values[4]), StyleValueList::Separator::Comma));
-        } else {
-            set_longhand_property(CSS::PropertyID::TransitionProperty, value);
-            set_longhand_property(CSS::PropertyID::TransitionDuration, value);
-            set_longhand_property(CSS::PropertyID::TransitionDelay, value);
-            set_longhand_property(CSS::PropertyID::TransitionTimingFunction, value);
-            set_longhand_property(CSS::PropertyID::TransitionBehavior, value);
-        }
-
-        return;
-    }
-
     if (property_is_shorthand(property_id)) {
         // ShorthandStyleValue was handled already, as were unresolved shorthands.
         // That means the only values we should see are the CSS-wide keywords, or the guaranteed-invalid value.
@@ -1351,11 +1314,11 @@ static void compute_transitioned_properties(ComputedProperties const& style, DOM
     element.clear_transitions(pseudo_element);
     element.set_cached_transition_property_source(pseudo_element, *source_declaration);
 
-    auto const& transition_properties_value = style.property(PropertyID::TransitionProperty);
-    auto transition_properties = transition_properties_value.is_value_list()
-        ? transition_properties_value.as_value_list().values()
-        : StyleValueVector { transition_properties_value };
+    auto coordinated_transition_list = style.assemble_coordinated_value_list(
+        PropertyID::TransitionProperty,
+        { PropertyID::TransitionProperty, PropertyID::TransitionDuration, PropertyID::TransitionTimingFunction, PropertyID::TransitionDelay, PropertyID::TransitionBehavior });
 
+    auto transition_properties = coordinated_transition_list.get(PropertyID::TransitionProperty).value();
     Vector<Vector<PropertyID>> properties;
 
     for (size_t i = 0; i < transition_properties.size(); i++) {
@@ -1371,14 +1334,18 @@ static void compute_transitioned_properties(ComputedProperties const& style, DOM
 
         if (property_value->is_keyword()) {
             auto keyword = property_value->as_keyword().keyword();
-            if (keyword == Keyword::None)
+            if (keyword == Keyword::None) {
+                properties.append({});
                 continue;
+            }
             if (keyword == Keyword::All)
                 properties_for_this_transition = expanded_longhands_for_shorthand(PropertyID::All);
         } else {
             auto maybe_property = property_id_from_string(property_value->as_custom_ident().custom_ident());
-            if (!maybe_property.has_value())
+            if (!maybe_property.has_value()) {
+                properties.append({});
                 continue;
+            }
 
             auto transition_property = maybe_property.release_value();
             if (property_is_shorthand(transition_property)) {
@@ -1392,44 +1359,13 @@ static void compute_transitioned_properties(ComputedProperties const& style, DOM
         properties.append(move(properties_for_this_transition));
     }
 
-    auto normalize_transition_length_list = [&properties, &style](PropertyID property, auto make_default_value) {
-        auto const& style_value = style.property(property);
-        StyleValueVector list;
-
-        if (!style_value.is_value_list()) {
-            for (size_t i = 0; i < properties.size(); i++)
-                list.append(style_value);
-            return list;
-        }
-
-        if (style_value.as_value_list().size() == 0) {
-            auto default_value = make_default_value();
-            for (size_t i = 0; i < properties.size(); i++)
-                list.append(default_value);
-            return list;
-        }
-
-        auto const& value_list = style_value.as_value_list();
-        for (size_t i = 0; i < properties.size(); i++)
-            list.append(value_list.value_at(i, true));
-
-        return list;
-    };
-
-    auto delays = normalize_transition_length_list(
-        PropertyID::TransitionDelay,
-        [] { return TimeStyleValue::create(Time::make_seconds(0.0)); });
-    auto durations = normalize_transition_length_list(
-        PropertyID::TransitionDuration,
-        [] { return TimeStyleValue::create(Time::make_seconds(0.0)); });
-    auto timing_functions = normalize_transition_length_list(
-        PropertyID::TransitionTimingFunction,
-        [] { return KeywordStyleValue::create(Keyword::Ease); });
-    auto transition_behaviors = normalize_transition_length_list(
-        PropertyID::TransitionBehavior,
-        [] { return KeywordStyleValue::create(Keyword::None); });
-
-    element.add_transitioned_properties(pseudo_element, move(properties), move(delays), move(durations), move(timing_functions), move(transition_behaviors));
+    element.add_transitioned_properties(
+        pseudo_element,
+        move(properties),
+        move(coordinated_transition_list.get(PropertyID::TransitionDelay).value()),
+        move(coordinated_transition_list.get(PropertyID::TransitionDuration).value()),
+        move(coordinated_transition_list.get(PropertyID::TransitionTimingFunction).value()),
+        move(coordinated_transition_list.get(PropertyID::TransitionBehavior).value()));
 }
 
 // https://drafts.csswg.org/css-transitions/#starting
