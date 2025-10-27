@@ -15,7 +15,6 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/ShadowRootPrototype.h>
 #include <LibWeb/CSS/CascadedProperties.h>
-#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StyleProperty.h>
@@ -33,6 +32,9 @@
 #include <LibWeb/HTML/ScrollOptions.h>
 #include <LibWeb/HTML/TagNames.h>
 #include <LibWeb/IntersectionObserver/IntersectionObserver.h>
+#include <LibWeb/TrustedTypes/TrustedHTML.h>
+#include <LibWeb/TrustedTypes/TrustedScript.h>
+#include <LibWeb/TrustedTypes/TrustedScriptURL.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/WebIDL/Types.h>
 
@@ -147,10 +149,10 @@ public:
 
     Optional<String> lang() const;
 
-    WebIDL::ExceptionOr<void> set_attribute(FlyString const& name, String const& value);
-    WebIDL::ExceptionOr<void> set_attribute(FlyString const& name, Utf16String const& value);
+    WebIDL::ExceptionOr<void> set_attribute(FlyString qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, String> const& value);
+    WebIDL::ExceptionOr<void> set_attribute(FlyString qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> const& value);
 
-    WebIDL::ExceptionOr<void> set_attribute_ns(Optional<FlyString> const& namespace_, FlyString const& qualified_name, String const& value);
+    WebIDL::ExceptionOr<void> set_attribute_ns(Optional<FlyString> const& namespace_, FlyString const& qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> const& value);
     void set_attribute_value(FlyString const& local_name, String const& value, Optional<FlyString> const& prefix = {}, Optional<FlyString> const& namespace_ = {});
     WebIDL::ExceptionOr<GC::Ptr<Attr>> set_attribute_node(Attr&);
     WebIDL::ExceptionOr<GC::Ptr<Attr>> set_attribute_node_ns(Attr&);
@@ -237,17 +239,17 @@ public:
 
     [[nodiscard]] GC::Ptr<Element const> element_to_inherit_style_from(Optional<CSS::PseudoElement>) const;
 
-    WebIDL::ExceptionOr<String> inner_html() const;
-    WebIDL::ExceptionOr<void> set_inner_html(StringView);
+    WebIDL::ExceptionOr<TrustedTypes::TrustedHTMLOrString> inner_html() const;
+    WebIDL::ExceptionOr<void> set_inner_html(TrustedTypes::TrustedHTMLOrString const&);
 
-    WebIDL::ExceptionOr<void> set_html_unsafe(StringView);
+    WebIDL::ExceptionOr<void> set_html_unsafe(TrustedTypes::TrustedHTMLOrString const&);
 
     WebIDL::ExceptionOr<String> get_html(GetHTMLOptions const&) const;
 
-    WebIDL::ExceptionOr<void> insert_adjacent_html(String const& position, String const&);
+    WebIDL::ExceptionOr<void> insert_adjacent_html(String const& position, TrustedTypes::TrustedHTMLOrString const&);
 
-    WebIDL::ExceptionOr<String> outer_html() const;
-    WebIDL::ExceptionOr<void> set_outer_html(String const&);
+    WebIDL::ExceptionOr<TrustedTypes::TrustedHTMLOrString> outer_html() const;
+    WebIDL::ExceptionOr<void> set_outer_html(TrustedTypes::TrustedHTMLOrString const&);
 
     bool is_focused() const;
     bool is_active() const;
@@ -495,41 +497,6 @@ public:
     void maybe_invalidate_ordinals_for_list_owner(Optional<Element*> skip_node = {});
     i32 ordinal_value();
 
-    template<typename Callback>
-    void for_each_numbered_item_owned_by_list_owner(Callback callback) const
-    {
-        const_cast<Element*>(this)->for_each_numbered_item_owned_by_list_owner(move(callback));
-    }
-
-    template<typename Callback>
-    void for_each_numbered_item_owned_by_list_owner(Callback callback)
-    {
-        for (auto* node = this->first_child(); node != nullptr; node = node->next_in_pre_order(this)) {
-            auto* element = as_if<Element>(node);
-            if (!element)
-                continue;
-
-            element->m_is_contained_in_list_subtree = true;
-
-            if (node->is_html_ol_ul_menu_element()) {
-                // Skip list nodes and their descendents. They have their own, unrelated ordinals.
-                while (node->last_child() != nullptr) // Find the last node (preorder) in the subtree headed by node. O(1).
-                    node = node->last_child();
-
-                continue;
-            }
-
-            if (!node->layout_node())
-                continue; // Skip nodes that do not participate in the layout.
-
-            if (!element->computed_properties()->display().is_list_item())
-                continue; // Skip nodes that are not list items.
-
-            if (callback(element) == IterationDecision::Break)
-                return;
-        }
-    }
-
     bool captured_in_a_view_transition() const { return m_captured_in_a_view_transition; }
     void set_captured_in_a_view_transition(bool value) { m_captured_in_a_view_transition = value; }
 
@@ -589,6 +556,15 @@ private:
     Optional<Directionality> auto_directionality() const;
     Optional<Directionality> contained_text_auto_directionality(bool can_exclude_root) const;
     Directionality parent_directionality() const;
+
+    template<typename Callback>
+    void for_each_numbered_item_owned_by_list_owner(Callback callback) const
+    {
+        const_cast<Element*>(this)->for_each_numbered_item_owned_by_list_owner(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_numbered_item_owned_by_list_owner(Callback callback);
 
     QualifiedName m_qualified_name;
     mutable Optional<FlyString> m_html_uppercased_qualified_name;
