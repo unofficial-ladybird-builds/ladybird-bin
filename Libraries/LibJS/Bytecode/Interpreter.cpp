@@ -256,12 +256,7 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
     // 13. If result.[[Type]] is normal, then
     if (executable) {
         // a. Set result to Completion(Evaluation of script).
-        auto result_or_error = run_executable(*script_context, *executable, {}, {});
-        if (result_or_error.value.is_error())
-            result = result_or_error.value.release_error();
-        else {
-            result = result_or_error.return_register_value.is_special_empty_value() ? normal_completion(js_undefined()) : result_or_error.return_register_value;
-        }
+        result = run_executable(*script_context, *executable, {}, {});
 
         // b. If result is a normal completion and result.[[Value]] is empty, then
         if (result.type() == Completion::Type::Normal && result.value().is_special_empty_value()) {
@@ -385,7 +380,7 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
 
         handle_End: {
             auto& instruction = *reinterpret_cast<Op::End const*>(&bytecode[program_counter]);
-            accumulator() = get(instruction.value());
+            reg(Register::return_value()) = get(instruction.value());
             return;
         }
 
@@ -707,7 +702,7 @@ Utf16FlyString const& Interpreter::get_identifier(IdentifierTableIndex index) co
     return m_running_execution_context->identifier_table.data()[index.value];
 }
 
-Interpreter::ResultAndReturnRegister Interpreter::run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point, Value initial_accumulator_value)
+ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point, Value initial_accumulator_value)
 {
     dbgln_if(JS_BYTECODE_DEBUG, "Bytecode::Interpreter will run unit {}", &executable);
 
@@ -719,13 +714,11 @@ Interpreter::ResultAndReturnRegister Interpreter::run_executable(ExecutionContex
     context.global_declarative_environment = realm().global_environment().declarative_record();
     context.identifier_table = executable.identifier_table->identifiers();
 
-    u32 registers_and_constants_and_locals_count = executable.number_of_registers + executable.constants.size() + executable.local_variable_names.size();
-    VERIFY(registers_and_constants_and_locals_count <= context.registers_and_constants_and_locals_and_arguments_span().size());
+    ASSERT(executable.registers_and_constants_and_locals_count <= context.registers_and_constants_and_locals_and_arguments_span().size());
 
     context.registers_and_constants_and_locals_arguments = context.registers_and_constants_and_locals_and_arguments_span();
 
     reg(Register::accumulator()) = initial_accumulator_value;
-    reg(Register::return_value()) = js_special_empty_value();
 
     // NOTE: We only copy the `this` value from ExecutionContext if it's not already set.
     //       If we are re-entering an async/generator context, the `this` value
@@ -754,17 +747,17 @@ Interpreter::ResultAndReturnRegister Interpreter::run_executable(ExecutionContex
         }
     }
 
-    auto return_value = js_undefined();
-    if (!reg(Register::return_value()).is_special_empty_value())
-        return_value = reg(Register::return_value());
-    auto exception = reg(Register::exception());
-
     vm().run_queued_promise_jobs();
     vm().finish_execution_generation();
 
-    if (!exception.is_special_empty_value())
-        return { throw_completion(exception), registers_and_constants_and_locals_and_arguments[0] };
-    return { return_value, registers_and_constants_and_locals_and_arguments[0] };
+    auto exception = reg(Register::exception());
+    if (!exception.is_special_empty_value()) [[unlikely]]
+        return throw_completion(exception);
+
+    auto return_value = reg(Register::return_value());
+    if (return_value.is_special_empty_value())
+        return_value = js_undefined();
+    return return_value;
 }
 
 void Interpreter::enter_unwind_context()
