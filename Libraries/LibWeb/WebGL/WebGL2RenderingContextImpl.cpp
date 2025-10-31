@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  * Copyright (c) 2024-2025, Luke Wilde <luke@ladybird.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,7 +16,6 @@ extern "C" {
 
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/ArrayBuffer.h>
-#include <LibJS/Runtime/DataView.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
 #include <LibWeb/WebGL/WebGL2RenderingContextImpl.h>
@@ -66,6 +66,58 @@ void WebGL2RenderingContextImpl::copy_buffer_sub_data(WebIDL::UnsignedLong read_
 {
     m_context->make_current();
     glCopyBufferSubData(read_target, write_target, read_offset, write_offset, size);
+}
+
+// https://registry.khronos.org/webgl/specs/latest/2.0/#3.7.3
+void WebGL2RenderingContextImpl::get_buffer_sub_data(WebIDL::UnsignedLong target, WebIDL::LongLong src_byte_offset,
+    GC::Root<WebIDL::ArrayBufferView> dst_buffer, WebIDL::UnsignedLongLong dst_offset, WebIDL::UnsignedLong length)
+{
+    // If dstBuffer is a DataView, let elementSize be 1; otherwise, let elementSize be dstBuffer.BYTES_PER_ELEMENT.
+    size_t element_size = dst_buffer->element_size();
+
+    // If length is 0:
+    size_t copy_length;
+    if (length == 0) {
+        // If dstBuffer is a DataView, let copyLength be dstBuffer.byteLength - dstOffset; the typed elements in the
+        // text below are bytes. Otherwise, let copyLength be dstBuffer.length - dstOffset.
+        copy_length = dst_buffer->byte_length() / element_size - dst_offset;
+    }
+
+    // Otherwise, let copyLength be length.
+    else {
+        copy_length = length;
+    }
+
+    // If copyLength is 0, no data is written to dstBuffer, but this does not cause a GL error to be generated.
+    if (copy_length == 0)
+        return;
+
+    // If dstOffset is greater than dstBuffer.length (or dstBuffer.byteLength in the case of DataView), generates an
+    // INVALID_VALUE error.
+    size_t dst_offset_in_bytes = dst_offset * element_size;
+    if (dst_offset_in_bytes > dst_buffer->byte_length()) {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    // If dstOffset + copyLength is greater than dstBuffer.length (or dstBuffer.byteLength in the case of DataView),
+    // generates an INVALID_VALUE error.
+    size_t copy_bytes = copy_length * element_size;
+    if (dst_offset_in_bytes + copy_bytes > dst_buffer->byte_length()) {
+        set_error(GL_INVALID_VALUE);
+        return;
+    }
+
+    // If copyLength is greater than zero, copy copyLength typed elements (each of size elementSize) from buf into
+    // dstBuffer, reading buf starting at byte index srcByteOffset and writing into dstBuffer starting at element
+    // index dstOffset.
+    auto* buffer_data = glMapBufferRange(target, src_byte_offset, copy_bytes, GL_MAP_READ_BIT);
+    if (!buffer_data)
+        return;
+
+    dst_buffer->write({ buffer_data, copy_bytes }, dst_offset_in_bytes);
+
+    glUnmapBuffer(target);
 }
 
 void WebGL2RenderingContextImpl::blit_framebuffer(WebIDL::Long src_x0, WebIDL::Long src_y0, WebIDL::Long src_x1, WebIDL::Long src_y1, WebIDL::Long dst_x0, WebIDL::Long dst_y0, WebIDL::Long dst_x1, WebIDL::Long dst_y1, WebIDL::UnsignedLong mask, WebIDL::UnsignedLong filter)
@@ -1496,6 +1548,19 @@ void WebGL2RenderingContextImpl::read_pixels(WebIDL::Long x, WebIDL::Long y, Web
     glReadPixelsRobustANGLE(x, y, width, height, format, type, span.size(), nullptr, nullptr, nullptr, span.data());
 }
 
+void WebGL2RenderingContextImpl::read_pixels(WebIDL::Long x, WebIDL::Long y, WebIDL::Long width, WebIDL::Long height,
+    WebIDL::UnsignedLong format, WebIDL::UnsignedLong type, WebIDL::LongLong offset)
+{
+    m_context->make_current();
+
+    if (!m_pixel_pack_buffer_binding) {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
+
+    glReadPixelsRobustANGLE(x, y, width, height, format, type, 0, nullptr, nullptr, nullptr, reinterpret_cast<void*>(offset));
+}
+
 void WebGL2RenderingContextImpl::active_texture(WebIDL::UnsignedLong texture)
 {
     m_context->make_current();
@@ -1591,15 +1656,8 @@ void WebGL2RenderingContextImpl::bind_buffer(WebIDL::UnsignedLong target, GC::Ro
     }
 
     switch (target) {
-    case GL_ELEMENT_ARRAY_BUFFER:
-        m_element_array_buffer_binding = buffer;
-        break;
     case GL_ARRAY_BUFFER:
         m_array_buffer_binding = buffer;
-        break;
-
-    case GL_UNIFORM_BUFFER:
-        m_uniform_buffer_binding = buffer;
         break;
     case GL_COPY_READ_BUFFER:
         m_copy_read_buffer_binding = buffer;
@@ -1607,8 +1665,20 @@ void WebGL2RenderingContextImpl::bind_buffer(WebIDL::UnsignedLong target, GC::Ro
     case GL_COPY_WRITE_BUFFER:
         m_copy_write_buffer_binding = buffer;
         break;
+    case GL_ELEMENT_ARRAY_BUFFER:
+        m_element_array_buffer_binding = buffer;
+        break;
+    case GL_PIXEL_PACK_BUFFER:
+        m_pixel_pack_buffer_binding = buffer;
+        break;
+    case GL_PIXEL_UNPACK_BUFFER:
+        m_pixel_unpack_buffer_binding = buffer;
+        break;
     case GL_TRANSFORM_FEEDBACK_BUFFER:
         m_transform_feedback_buffer_binding = buffer;
+        break;
+    case GL_UNIFORM_BUFFER:
+        m_uniform_buffer_binding = buffer;
         break;
     default:
         dbgln("Unknown WebGL buffer object binding target for storing current binding: 0x{:04x}", target);
@@ -2844,6 +2914,16 @@ JS::Value WebGL2RenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
             return JS::js_null();
         return JS::Value(m_transform_feedback_buffer_binding);
     }
+    case GL_PIXEL_PACK_BUFFER_BINDING: {
+        if (!m_pixel_pack_buffer_binding)
+            return JS::js_null();
+        return JS::Value(m_pixel_pack_buffer_binding);
+    }
+    case GL_PIXEL_UNPACK_BUFFER_BINDING: {
+        if (!m_pixel_unpack_buffer_binding)
+            return JS::js_null();
+        return JS::Value(m_pixel_unpack_buffer_binding);
+    }
     case GL_TRANSFORM_FEEDBACK_PAUSED: {
         GLboolean result { GL_FALSE };
         glGetBooleanvRobustANGLE(GL_TRANSFORM_FEEDBACK_PAUSED, 1, nullptr, &result);
@@ -3440,6 +3520,8 @@ void WebGL2RenderingContextImpl::visit_edges(JS::Cell::Visitor& visitor)
     visitor.visit(m_texture_binding_2d_array);
     visitor.visit(m_texture_binding_3d);
     visitor.visit(m_transform_feedback_binding);
+    visitor.visit(m_pixel_pack_buffer_binding);
+    visitor.visit(m_pixel_unpack_buffer_binding);
 }
 
 }

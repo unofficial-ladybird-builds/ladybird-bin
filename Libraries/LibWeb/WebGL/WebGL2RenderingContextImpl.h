@@ -29,6 +29,7 @@ public:
     virtual void needs_to_present() = 0;
     virtual void set_error(GLenum) = 0;
     void copy_buffer_sub_data(WebIDL::UnsignedLong read_target, WebIDL::UnsignedLong write_target, WebIDL::LongLong read_offset, WebIDL::LongLong write_offset, WebIDL::LongLong size);
+    void get_buffer_sub_data(WebIDL::UnsignedLong target, WebIDL::LongLong src_byte_offset, GC::Root<WebIDL::ArrayBufferView> dst_buffer, WebIDL::UnsignedLongLong dst_offset, WebIDL::UnsignedLong length);
     void blit_framebuffer(WebIDL::Long src_x0, WebIDL::Long src_y0, WebIDL::Long src_x1, WebIDL::Long src_y1, WebIDL::Long dst_x0, WebIDL::Long dst_y0, WebIDL::Long dst_x1, WebIDL::Long dst_y1, WebIDL::UnsignedLong mask, WebIDL::UnsignedLong filter);
     void framebuffer_texture_layer(WebIDL::UnsignedLong target, WebIDL::UnsignedLong attachment, GC::Root<WebGLTexture> texture, WebIDL::Long level, WebIDL::Long layer);
     void invalidate_framebuffer(WebIDL::UnsignedLong target, Vector<WebIDL::UnsignedLong> attachments);
@@ -132,6 +133,7 @@ public:
     void uniform_matrix3fv(GC::Root<WebGLUniformLocation> location, bool transpose, Float32List data, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length);
     void uniform_matrix4fv(GC::Root<WebGLUniformLocation> location, bool transpose, Float32List data, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length);
     void read_pixels(WebIDL::Long x, WebIDL::Long y, WebIDL::Long width, WebIDL::Long height, WebIDL::UnsignedLong format, WebIDL::UnsignedLong type, GC::Root<WebIDL::ArrayBufferView> pixels);
+    void read_pixels(WebIDL::Long x, WebIDL::Long y, WebIDL::Long width, WebIDL::Long height, WebIDL::UnsignedLong format, WebIDL::UnsignedLong type, WebIDL::LongLong offset);
     void active_texture(WebIDL::UnsignedLong texture);
     void attach_shader(GC::Root<WebGLProgram> program, GC::Root<WebGLShader> shader);
     void bind_attrib_location(GC::Root<WebGLProgram> program, WebIDL::UnsignedLong index, String name);
@@ -257,6 +259,8 @@ private:
     GC::Ptr<WebGLBuffer> m_copy_read_buffer_binding;
     GC::Ptr<WebGLBuffer> m_copy_write_buffer_binding;
     GC::Ptr<WebGLBuffer> m_transform_feedback_buffer_binding;
+    GC::Ptr<WebGLBuffer> m_pixel_pack_buffer_binding;
+    GC::Ptr<WebGLBuffer> m_pixel_unpack_buffer_binding;
     GC::Ptr<WebGLTexture> m_texture_binding_2d_array;
     GC::Ptr<WebGLTexture> m_texture_binding_3d;
     GC::Ptr<WebGLTransformFeedback> m_transform_feedback_binding;
