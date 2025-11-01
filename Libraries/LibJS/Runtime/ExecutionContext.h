@@ -21,14 +21,37 @@ namespace JS {
 
 using ScriptOrModule = Variant<Empty, GC::Ref<Script>, GC::Ref<Module>>;
 
-struct CachedSourceRange : public RefCounted<CachedSourceRange> {
+class CachedSourceRange final : public GC::Cell {
+    GC_CELL(CachedSourceRange, GC::Cell);
+    GC_DECLARE_ALLOCATOR(CachedSourceRange);
+
+public:
     CachedSourceRange(size_t program_counter, Variant<UnrealizedSourceRange, SourceRange> source_range)
         : program_counter(program_counter)
         , source_range(move(source_range))
     {
     }
+
     size_t program_counter { 0 };
     Variant<UnrealizedSourceRange, SourceRange> source_range;
+};
+
+class JS_API ExecutionContextRareData final : public GC::Cell {
+    GC_CELL(ExecutionContextRareData, GC::Cell);
+    GC_DECLARE_ALLOCATOR(ExecutionContextRareData);
+
+public:
+    Vector<Bytecode::UnwindInfo> unwind_contexts;
+    Vector<Optional<size_t>> previously_scheduled_jumps;
+    Vector<GC::Ptr<Environment>> saved_lexical_environments;
+
+    mutable GC::Ptr<CachedSourceRange> cached_source_range;
+
+    // Non-standard: This points at something that owns this ExecutionContext, in case it needs to be protected from GC.
+    GC::Ptr<Cell> context_owner;
+
+private:
+    virtual void visit_edges(Cell::Visitor&) override;
 };
 
 // 9.4 Execution Contexts, https://tc39.es/ecma262/#sec-execution-contexts
@@ -36,7 +59,7 @@ struct JS_API ExecutionContext {
     static NonnullOwnPtr<ExecutionContext> create(u32 registers_and_constants_and_locals_count, u32 arguments_count);
     [[nodiscard]] NonnullOwnPtr<ExecutionContext> copy() const;
 
-    ~ExecutionContext();
+    ~ExecutionContext() = default;
 
     void visit_edges(Cell::Visitor&);
 
@@ -44,7 +67,17 @@ private:
     friend class ExecutionContextAllocator;
 
 public:
-    ExecutionContext(u32 registers_and_constants_and_locals_count, u32 arguments_count);
+    ALWAYS_INLINE ExecutionContext(u32 registers_and_constants_and_locals_count, u32 arguments_count)
+    {
+        registers_and_constants_and_locals_and_arguments_count = registers_and_constants_and_locals_count + arguments_count;
+        auto* registers_and_constants_and_locals_and_arguments = this->registers_and_constants_and_locals_and_arguments();
+        for (size_t i = 0; i < registers_and_constants_and_locals_count; ++i)
+            registers_and_constants_and_locals_and_arguments[i] = js_special_empty_value();
+        arguments = { registers_and_constants_and_locals_and_arguments + registers_and_constants_and_locals_count, arguments_count };
+    }
+
+    GC::Ptr<ExecutionContextRareData> rare_data() const { return m_rare_data; }
+    GC::Ref<ExecutionContextRareData> ensure_rare_data();
 
     void operator delete(void* ptr);
 
@@ -58,19 +91,13 @@ public:
     Optional<size_t> scheduled_jump;
     GC::Ptr<Object> global_object;
     GC::Ptr<DeclarativeEnvironment> global_declarative_environment;
-    Span<Value> registers_and_constants_and_locals_arguments;
-    ReadonlySpan<Utf16FlyString> identifier_table;
-
-    // Non-standard: This points at something that owns this ExecutionContext, in case it needs to be protected from GC.
-    GC::Ptr<Cell> context_owner;
+    Utf16FlyString const* identifier_table { nullptr };
 
     u32 program_counter { 0 };
 
     // https://html.spec.whatwg.org/multipage/webappapis.html#skip-when-determining-incumbent-counter
     // FIXME: Move this out of LibJS (e.g. by using the CustomData concept), as it's used exclusively by LibWeb.
     u32 skip_when_determining_incumbent_counter { 0 };
-
-    mutable RefPtr<CachedSourceRange> cached_source_range;
 
     Optional<Value> this_value;
 
@@ -90,19 +117,14 @@ public:
     {
         if (index >= arguments.size()) [[unlikely]]
             return js_undefined();
-        return arguments[index];
-    }
-
-    Value& local(size_t index)
-    {
-        return registers_and_constants_and_locals_and_arguments()[index];
+        return arguments.data()[index];
     }
 
     Span<Value> arguments;
 
-    Vector<Bytecode::UnwindInfo> unwind_contexts;
-    Vector<Optional<size_t>> previously_scheduled_jumps;
-    Vector<GC::Ptr<Environment>> saved_lexical_environments;
+    // NOTE: Rarely used data members go here to keep the size of ExecutionContext down,
+    //       and to avoid needing an ExecutionContext destructor in the common case.
+    GC::Ptr<ExecutionContextRareData> m_rare_data;
 
     u32 passed_argument_count { 0 };
 
@@ -117,21 +139,19 @@ private:
     u32 registers_and_constants_and_locals_and_arguments_count { 0 };
 };
 
-#define ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(execution_context,  \
-    registers_and_constants_and_locals_count,                                                \
-    arguments_count)                                                                         \
-    auto execution_context_size = sizeof(JS::ExecutionContext)                               \
-        + (((registers_and_constants_and_locals_count) + (arguments_count))                  \
-            * sizeof(JS::Value));                                                            \
-                                                                                             \
-    void* execution_context_memory = alloca(execution_context_size);                         \
-                                                                                             \
-    execution_context = new (execution_context_memory)                                       \
-        JS::ExecutionContext((registers_and_constants_and_locals_count), (arguments_count)); \
-                                                                                             \
-    ScopeGuard run_execution_context_destructor([execution_context] {                        \
-        execution_context->~ExecutionContext();                                              \
-    })
+static_assert(IsTriviallyDestructible<ExecutionContext>);
+
+#define ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(execution_context, \
+    registers_and_constants_and_locals_count,                                               \
+    arguments_count)                                                                        \
+    auto execution_context_size = sizeof(JS::ExecutionContext)                              \
+        + (((registers_and_constants_and_locals_count) + (arguments_count))                 \
+            * sizeof(JS::Value));                                                           \
+                                                                                            \
+    void* execution_context_memory = alloca(execution_context_size);                        \
+                                                                                            \
+    execution_context = new (execution_context_memory)                                      \
+        JS::ExecutionContext((registers_and_constants_and_locals_count), (arguments_count));
 
 #define ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK(execution_context, registers_and_constants_and_locals_count, \
     arguments_count)                                                                                            \
@@ -145,7 +165,7 @@ private:
 
 struct StackTraceElement {
     ExecutionContext* execution_context;
-    RefPtr<CachedSourceRange> source_range;
+    GC::Root<CachedSourceRange> source_range;
 };
 
 }

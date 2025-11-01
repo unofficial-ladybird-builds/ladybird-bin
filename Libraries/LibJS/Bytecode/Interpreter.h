@@ -34,22 +34,23 @@ public:
     ThrowCompletionOr<Value> run(Script&, GC::Ptr<Environment> lexical_environment_override = nullptr);
     ThrowCompletionOr<Value> run(SourceTextModule&);
 
-    ThrowCompletionOr<Value> run(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point = {}, Value initial_accumulator_value = js_special_empty_value())
-    {
-        return run_executable(context, executable, entry_point, initial_accumulator_value);
-    }
+    ThrowCompletionOr<Value> run_executable(ExecutionContext&, Executable&, Optional<size_t> entry_point);
 
-    ThrowCompletionOr<Value> run_executable(ExecutionContext&, Executable&, Optional<size_t> entry_point, Value initial_accumulator_value = js_special_empty_value());
+    ThrowCompletionOr<Value> run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point, Value initial_accumulator_value)
+    {
+        context.registers_and_constants_and_locals_and_arguments_span()[0] = initial_accumulator_value;
+        return run_executable(context, executable, entry_point);
+    }
 
     ALWAYS_INLINE Value& accumulator() { return reg(Register::accumulator()); }
     ALWAYS_INLINE Value& saved_return_value() { return reg(Register::saved_return_value()); }
     Value& reg(Register const& r)
     {
-        return m_running_execution_context->registers_and_constants_and_locals_arguments.data()[r.index()];
+        return m_running_execution_context->registers_and_constants_and_locals_and_arguments()[r.index()];
     }
     Value reg(Register const& r) const
     {
-        return m_running_execution_context->registers_and_constants_and_locals_arguments.data()[r.index()];
+        return m_running_execution_context->registers_and_constants_and_locals_and_arguments()[r.index()];
     }
 
     [[nodiscard]] Value get(Operand) const;
@@ -58,6 +59,8 @@ public:
     Value do_yield(Value value, Optional<Label> continuation);
     void do_return(Value value)
     {
+        if (value.is_special_empty_value())
+            value = js_undefined();
         reg(Register::return_value()) = value;
         reg(Register::exception()) = js_special_empty_value();
     }

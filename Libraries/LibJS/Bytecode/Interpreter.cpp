@@ -167,12 +167,12 @@ Interpreter::~Interpreter()
 
 ALWAYS_INLINE Value Interpreter::get(Operand op) const
 {
-    return m_running_execution_context->registers_and_constants_and_locals_arguments.data()[op.index()];
+    return m_running_execution_context->registers_and_constants_and_locals_and_arguments()[op.index()];
 }
 
 ALWAYS_INLINE void Interpreter::set(Operand op, Value value)
 {
-    m_running_execution_context->registers_and_constants_and_locals_arguments.data()[op.index()] = value;
+    m_running_execution_context->registers_and_constants_and_locals_and_arguments()[op.index()] = value;
 }
 
 ALWAYS_INLINE Value Interpreter::do_yield(Value value, Optional<Label> continuation)
@@ -311,8 +311,8 @@ NEVER_INLINE Interpreter::HandleExceptionResponse Interpreter::handle_exception(
     auto& handler = handlers->handler_offset;
     auto& finalizer = handlers->finalizer_offset;
 
-    VERIFY(!running_execution_context().unwind_contexts.is_empty());
-    auto& unwind_context = running_execution_context().unwind_contexts.last();
+    auto& unwind_contexts = running_execution_context().ensure_rare_data()->unwind_contexts;
+    auto& unwind_context = unwind_contexts.last();
     VERIFY(unwind_context.executable == &current_executable());
 
     if (handler.has_value()) {
@@ -380,7 +380,10 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
 
         handle_End: {
             auto& instruction = *reinterpret_cast<Op::End const*>(&bytecode[program_counter]);
-            reg(Register::return_value()) = get(instruction.value());
+            auto value = get(instruction.value());
+            if (value.is_special_empty_value())
+                value = js_undefined();
+            reg(Register::return_value()) = value;
             return;
         }
 
@@ -485,11 +488,11 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
                 do_return(saved_return_value());
                 if (auto handlers = executable.exception_handlers_for_offset(program_counter); handlers.has_value()) {
                     if (auto finalizer = handlers.value().finalizer_offset; finalizer.has_value()) {
-                        VERIFY(!running_execution_context.unwind_contexts.is_empty());
-                        auto& unwind_context = running_execution_context.unwind_contexts.last();
+                        auto& unwind_contexts = running_execution_context.ensure_rare_data()->unwind_contexts;
+                        auto& unwind_context = unwind_contexts.last();
                         VERIFY(unwind_context.executable == &current_executable());
                         reg(Register::saved_return_value()) = reg(Register::return_value());
-                        reg(Register::return_value()) = js_special_empty_value();
+                        reg(Register::return_value()) = js_undefined();
                         program_counter = finalizer.value();
                         // the unwind_context will be pop'ed when entering the finally block
                         goto start;
@@ -497,7 +500,7 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
                 }
                 return;
             }
-            auto const old_scheduled_jump = running_execution_context.previously_scheduled_jumps.take_last();
+            auto const old_scheduled_jump = running_execution_context.ensure_rare_data()->previously_scheduled_jumps.take_last();
             if (m_running_execution_context->scheduled_jump.has_value()) {
                 program_counter = m_running_execution_context->scheduled_jump.value();
                 m_running_execution_context->scheduled_jump = {};
@@ -699,10 +702,10 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
 
 Utf16FlyString const& Interpreter::get_identifier(IdentifierTableIndex index) const
 {
-    return m_running_execution_context->identifier_table.data()[index.value];
+    return m_running_execution_context->identifier_table[index.value];
 }
 
-ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point, Value initial_accumulator_value)
+ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point)
 {
     dbgln_if(JS_BYTECODE_DEBUG, "Bytecode::Interpreter will run unit {}", &executable);
 
@@ -712,13 +715,9 @@ ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, 
     context.executable = executable;
     context.global_object = realm().global_object();
     context.global_declarative_environment = realm().global_environment().declarative_record();
-    context.identifier_table = executable.identifier_table->identifiers();
+    context.identifier_table = executable.identifier_table->identifiers().data();
 
     ASSERT(executable.registers_and_constants_and_locals_count <= context.registers_and_constants_and_locals_and_arguments_span().size());
-
-    context.registers_and_constants_and_locals_arguments = context.registers_and_constants_and_locals_and_arguments_span();
-
-    reg(Register::accumulator()) = initial_accumulator_value;
 
     // NOTE: We only copy the `this` value from ExecutionContext if it's not already set.
     //       If we are re-entering an async/generator context, the `this` value
@@ -754,31 +753,28 @@ ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, 
     if (!exception.is_special_empty_value()) [[unlikely]]
         return throw_completion(exception);
 
-    auto return_value = reg(Register::return_value());
-    if (return_value.is_special_empty_value())
-        return_value = js_undefined();
-    return return_value;
+    return reg(Register::return_value());
 }
 
 void Interpreter::enter_unwind_context()
 {
-    running_execution_context().unwind_contexts.empend(
+    running_execution_context().ensure_rare_data()->unwind_contexts.empend(
         current_executable(),
         running_execution_context().lexical_environment);
-    running_execution_context().previously_scheduled_jumps.append(m_running_execution_context->scheduled_jump);
+    running_execution_context().rare_data()->previously_scheduled_jumps.append(m_running_execution_context->scheduled_jump);
     m_running_execution_context->scheduled_jump = {};
 }
 
 void Interpreter::leave_unwind_context()
 {
-    running_execution_context().unwind_contexts.take_last();
+    running_execution_context().rare_data()->unwind_contexts.take_last();
 }
 
 void Interpreter::catch_exception(Operand dst)
 {
     set(dst, reg(Register::exception()));
     reg(Register::exception()) = js_special_empty_value();
-    auto& context = running_execution_context().unwind_contexts.last();
+    auto& context = running_execution_context().rare_data()->unwind_contexts.last();
     VERIFY(!context.handler_called);
     VERIFY(context.executable == &current_executable());
     context.handler_called = true;
@@ -787,19 +783,19 @@ void Interpreter::catch_exception(Operand dst)
 
 void Interpreter::restore_scheduled_jump()
 {
-    m_running_execution_context->scheduled_jump = running_execution_context().previously_scheduled_jumps.take_last();
+    m_running_execution_context->scheduled_jump = running_execution_context().rare_data()->previously_scheduled_jumps.take_last();
 }
 
 void Interpreter::leave_finally()
 {
     reg(Register::exception()) = js_special_empty_value();
-    m_running_execution_context->scheduled_jump = running_execution_context().previously_scheduled_jumps.take_last();
+    m_running_execution_context->scheduled_jump = running_execution_context().rare_data()->previously_scheduled_jumps.take_last();
 }
 
 void Interpreter::enter_object_environment(Object& object)
 {
     auto& old_environment = running_execution_context().lexical_environment;
-    running_execution_context().saved_lexical_environments.append(old_environment);
+    running_execution_context().ensure_rare_data()->saved_lexical_environments.append(old_environment);
     running_execution_context().lexical_environment = new_object_environment(object, true, old_environment);
 }
 
@@ -1593,7 +1589,7 @@ inline ThrowCompletionOr<ECMAScriptFunctionObject*> new_class(VM& vm, Value supe
 
     // NOTE: NewClass expects classEnv to be active lexical environment
     auto* class_environment = vm.lexical_environment();
-    vm.running_execution_context().lexical_environment = vm.running_execution_context().saved_lexical_environments.take_last();
+    vm.running_execution_context().lexical_environment = vm.running_execution_context().rare_data()->saved_lexical_environments.take_last();
 
     Optional<Utf16FlyString> binding_name;
     Utf16FlyString class_name;
@@ -2416,7 +2412,7 @@ void CreateLexicalEnvironment::execute_impl(Bytecode::Interpreter& interpreter) 
         return environment;
     };
     auto& running_execution_context = interpreter.running_execution_context();
-    running_execution_context.saved_lexical_environments.append(make_and_swap_envs(running_execution_context.lexical_environment));
+    running_execution_context.ensure_rare_data()->saved_lexical_environments.append(make_and_swap_envs(running_execution_context.lexical_environment));
     if (m_dst.has_value())
         interpreter.set(*m_dst, running_execution_context.lexical_environment);
 }
@@ -2837,49 +2833,61 @@ static ThrowCompletionOr<Value> dispatch_builtin_call(Bytecode::Interpreter& int
     VERIFY_NOT_REACHED();
 }
 
-// NOTE: This is a macro instead of an inline function because it needs to alloca() in the callers scope.
-#define IMPLEMENT_CALL_INSTRUCTION(call_type, callee, this_value)                                                                                                                                                                    \
-    TRY(throw_if_needed_for_call(interpreter, callee, call_type, m_expression_string));                                                                                                                                              \
-    auto& function = callee.as_function();                                                                                                                                                                                           \
-    ExecutionContext* callee_context = nullptr;                                                                                                                                                                                      \
-    size_t registers_and_constants_and_locals_count = 0;                                                                                                                                                                             \
-    size_t argument_count = m_argument_count;                                                                                                                                                                                        \
-    TRY(function.get_stack_frame_size(registers_and_constants_and_locals_count, argument_count));                                                                                                                                    \
-    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(m_argument_count, argument_count));                                                               \
-    auto* callee_context_argument_values = callee_context->arguments.data();                                                                                                                                                         \
-    auto const callee_context_argument_count = callee_context->arguments.size();                                                                                                                                                     \
-    for (size_t i = 0; i < m_argument_count; ++i)                                                                                                                                                                                    \
-        callee_context_argument_values[i] = interpreter.get(m_arguments[i]);                                                                                                                                                         \
-    for (size_t i = m_argument_count; i < callee_context_argument_count; ++i)                                                                                                                                                        \
-        callee_context_argument_values[i] = js_undefined();                                                                                                                                                                          \
-    callee_context->passed_argument_count = m_argument_count;                                                                                                                                                                        \
-    Value retval;                                                                                                                                                                                                                    \
-    if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {                                                                                                                           \
-        retval = TRY(perform_eval(interpreter.vm(), !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), strict() == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct)); \
-    } else if (call_type == CallType::Construct) {                                                                                                                                                                                   \
-        retval = TRY(function.internal_construct(*callee_context, function));                                                                                                                                                        \
-    } else {                                                                                                                                                                                                                         \
-        retval = TRY(function.internal_call(*callee_context, this_value));                                                                                                                                                           \
-    }                                                                                                                                                                                                                                \
-    interpreter.set(m_dst, retval);                                                                                                                                                                                                  \
+template<CallType call_type>
+static ThrowCompletionOr<void> execute_call(
+    Bytecode::Interpreter& interpreter,
+    Value callee,
+    Value this_value,
+    ReadonlySpan<Operand> arguments,
+    Operand dst,
+    Optional<StringTableIndex> const& expression_string,
+    Strict strict)
+{
+    TRY(throw_if_needed_for_call(interpreter, callee, call_type, expression_string));
+
+    auto& function = callee.as_function();
+
+    ExecutionContext* callee_context = nullptr;
+    size_t registers_and_constants_and_locals_count = 0;
+    size_t argument_count = arguments.size();
+    TRY(function.get_stack_frame_size(registers_and_constants_and_locals_count, argument_count));
+    ALLOCATE_EXECUTION_CONTEXT_ON_NATIVE_STACK_WITHOUT_CLEARING_ARGS(callee_context, registers_and_constants_and_locals_count, max(arguments.size(), argument_count));
+
+    auto* callee_context_argument_values = callee_context->arguments.data();
+    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto const insn_argument_count = arguments.size();
+
+    for (size_t i = 0; i < insn_argument_count; ++i)
+        callee_context_argument_values[i] = interpreter.get(arguments[i]);
+    for (size_t i = insn_argument_count; i < callee_context_argument_count; ++i)
+        callee_context_argument_values[i] = js_undefined();
+    callee_context->passed_argument_count = insn_argument_count;
+
+    Value retval;
+    if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {
+        retval = TRY(perform_eval(interpreter.vm(), !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), strict == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
+    } else if (call_type == CallType::Construct) {
+        retval = TRY(function.internal_construct(*callee_context, function));
+    } else {
+        retval = TRY(function.internal_call(*callee_context, this_value));
+    }
+    interpreter.set(dst, retval);
     return {};
+}
 
 ThrowCompletionOr<void> Call::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
-    IMPLEMENT_CALL_INSTRUCTION(CallType::Call, callee, interpreter.get(m_this_value));
+    return execute_call<CallType::Call>(interpreter, interpreter.get(m_callee), interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string, strict());
 }
 
 NEVER_INLINE ThrowCompletionOr<void> CallConstruct::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
-    IMPLEMENT_CALL_INSTRUCTION(CallType::Construct, callee, Value());
+    return execute_call<CallType::Construct>(interpreter, interpreter.get(m_callee), js_undefined(), { m_arguments, m_argument_count }, m_dst, m_expression_string, strict());
 }
 
 ThrowCompletionOr<void> CallDirectEval::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto callee = interpreter.get(m_callee);
-    IMPLEMENT_CALL_INSTRUCTION(CallType::DirectEval, callee, Value());
+    return execute_call<CallType::DirectEval>(interpreter, interpreter.get(m_callee), interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string, strict());
 }
 
 ThrowCompletionOr<void> CallBuiltin::execute_impl(Bytecode::Interpreter& interpreter) const
@@ -2891,7 +2899,7 @@ ThrowCompletionOr<void> CallBuiltin::execute_impl(Bytecode::Interpreter& interpr
         return {};
     }
 
-    IMPLEMENT_CALL_INSTRUCTION(CallType::Call, callee, interpreter.get(m_this_value));
+    return execute_call<CallType::Call>(interpreter, callee, interpreter.get(m_this_value), { m_arguments, m_argument_count }, m_dst, m_expression_string, strict());
 }
 
 template<CallType call_type>
@@ -3161,7 +3169,7 @@ ThrowCompletionOr<void> ThrowIfTDZ::execute_impl(Bytecode::Interpreter& interpre
 void LeaveLexicalEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& running_execution_context = interpreter.running_execution_context();
-    running_execution_context.lexical_environment = running_execution_context.saved_lexical_environments.take_last();
+    running_execution_context.lexical_environment = running_execution_context.rare_data()->saved_lexical_environments.take_last();
 }
 
 void LeavePrivateEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
