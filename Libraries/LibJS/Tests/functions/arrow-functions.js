@@ -90,7 +90,7 @@ test("currying", () => {
 
 test("with comma operator", () => {
     let foo, bar;
-    (foo = bar), baz => {};
+    ((foo = bar), baz => {});
     expect(foo).toBe(undefined);
     expect(bar).toBe(undefined);
 });
@@ -119,10 +119,7 @@ test("cannot be constructed", () => {
     let foo = () => {};
     expect(() => {
         new foo();
-    }).toThrowWithMessage(
-        TypeError,
-        "[object ECMAScriptFunctionObject] is not a constructor (evaluated from 'foo')"
-    );
+    }).toThrowWithMessage(TypeError, "[object ECMAScriptFunctionObject] is not a constructor (evaluated from 'foo')");
 });
 
 test("syntax errors", () => {
