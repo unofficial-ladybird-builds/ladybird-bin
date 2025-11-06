@@ -46,6 +46,8 @@ public:
     virtual OpenGLContext& context() = 0;
     virtual bool ext_texture_filter_anisotropic_extension_enabled() const = 0;
     virtual bool angle_instanced_arrays_extension_enabled() const = 0;
+    virtual bool oes_standard_derivatives_extension_enabled() const = 0;
+    virtual bool webgl_draw_buffers_extension_enabled() const = 0;
     virtual ReadonlySpan<WebIDL::UnsignedLong> enabled_compressed_texture_formats() const = 0;
 
     template<typename T>
@@ -138,6 +140,9 @@ protected:
         return result;
     }
 
+    GLenum get_error_value();
+    void set_error(GLenum error);
+
     // UNPACK_FLIP_Y_WEBGL of type boolean
     //      If set, then during any subsequent calls to texImage2D or texSubImage2D, the source data is flipped along
     //      the vertical axis, so that conceptually the last row is the first one transferred. The initial value is false.
@@ -149,6 +154,9 @@ protected:
     //      if present, is multiplied into the color channels during the data transfer. The initial value is false.
     //      Any non-zero value is interpreted as true.
     bool m_unpack_premultiply_alpha { false };
+
+private:
+    GLenum m_error { 0 };
 };
 
 }

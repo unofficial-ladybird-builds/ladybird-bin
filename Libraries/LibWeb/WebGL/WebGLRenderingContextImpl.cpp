@@ -1236,8 +1236,8 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
         return JS::Int32Array::create(m_realm, 4, array_buffer);
     }
 
-    case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: {
-        if (m_context->webgl_version() == OpenGLContext::WebGLVersion::WebGL2) { // FIXME: Allow this code path for GL_FRAGMENT_SHADER_DERIVATIVE_HINT_OES
+    case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: { // NOTE: This has the same value as GL_FRAGMENT_SHADER_DERIVATIVE_HINT_OES
+        if (oes_standard_derivatives_extension_enabled() || m_context->webgl_version() == OpenGLContext::WebGLVersion::WebGL2) {
             GLint result { 0 };
             glGetIntegervRobustANGLE(GL_FRAGMENT_SHADER_DERIVATIVE_HINT, 1, nullptr, &result);
             return JS::Value(result);
@@ -1246,8 +1246,8 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
         set_error(GL_INVALID_ENUM);
         return JS::js_null();
     }
-    case GL_MAX_COLOR_ATTACHMENTS: {
-        if (m_context->webgl_version() == OpenGLContext::WebGLVersion::WebGL2) { // FIXME: Allow this code path for MAX_COLOR_ATTACHMENTS_WEBGL
+    case GL_MAX_COLOR_ATTACHMENTS: { // NOTE: This has the same value as MAX_COLOR_ATTACHMENTS_WEBGL
+        if (webgl_draw_buffers_extension_enabled() || m_context->webgl_version() == OpenGLContext::WebGLVersion::WebGL2) {
             GLint result { 0 };
             glGetIntegervRobustANGLE(GL_MAX_COLOR_ATTACHMENTS, 1, nullptr, &result);
             return JS::Value(result);
@@ -1535,7 +1535,7 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
 WebIDL::UnsignedLong WebGLRenderingContextImpl::get_error()
 {
     m_context->make_current();
-    return glGetError();
+    return get_error_value();
 }
 
 JS::Value WebGLRenderingContextImpl::get_program_parameter(GC::Root<WebGLProgram> program, WebIDL::UnsignedLong pname)
@@ -2205,6 +2205,12 @@ void WebGLRenderingContextImpl::vertex_attrib4fv(WebIDL::UnsignedLong index, Flo
 void WebGLRenderingContextImpl::vertex_attrib_pointer(WebIDL::UnsignedLong index, WebIDL::Long size, WebIDL::UnsignedLong type, bool normalized, WebIDL::Long stride, WebIDL::LongLong offset)
 {
     m_context->make_current();
+
+    // If no WebGLBuffer is bound to the ARRAY_BUFFER target and offset is non-zero, an INVALID_OPERATION error will be generated.
+    if (!m_array_buffer_binding && offset != 0) {
+        set_error(GL_INVALID_OPERATION);
+        return;
+    }
 
     glVertexAttribPointer(index, size, type, normalized, stride, reinterpret_cast<void*>(offset));
 }

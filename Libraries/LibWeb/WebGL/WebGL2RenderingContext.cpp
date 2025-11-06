@@ -109,15 +109,6 @@ void WebGL2RenderingContext::needs_to_present()
     m_canvas_element->paintable()->set_needs_display();
 }
 
-void WebGL2RenderingContext::set_error(GLenum error)
-{
-    auto context_error = glGetError();
-    if (context_error != GL_NO_ERROR)
-        m_error = context_error;
-    else
-        m_error = error;
-}
-
 bool WebGL2RenderingContext::is_context_lost() const
 {
     dbgln_if(WEBGL_CONTEXT_DEBUG, "WebGLRenderingContext::is_context_lost()");
@@ -257,6 +248,16 @@ bool WebGL2RenderingContext::ext_texture_filter_anisotropic_extension_enabled() 
 }
 
 bool WebGL2RenderingContext::angle_instanced_arrays_extension_enabled() const
+{
+    return false;
+}
+
+bool WebGL2RenderingContext::oes_standard_derivatives_extension_enabled() const
+{
+    return false;
+}
+
+bool WebGL2RenderingContext::webgl_draw_buffers_extension_enabled() const
 {
     return false;
 }
