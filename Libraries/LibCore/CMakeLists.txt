@@ -71,14 +71,14 @@ else()
         TCPServer.cpp)
 endif()
 
-if (NOT WIN32 AND NOT EMSCRIPTEN)
+if (NOT WIN32)
     list(APPEND SOURCES LocalServer.cpp)
-elseif (WIN32)
+else()
     list(APPEND SOURCES LocalServerWindows.cpp)
 endif()
 
 # FIXME: Implement these for other systems.
-if (LINUX AND NOT EMSCRIPTEN)
+if (LINUX)
     list(APPEND SOURCES
         FileWatcherLinux.cpp
         Platform/ProcessStatisticsLinux.cpp
@@ -134,6 +134,10 @@ if (APPLE)
     target_link_libraries(LibCore PUBLIC "-framework CoreServices")
     target_link_libraries(LibCore PUBLIC "-framework Foundation")
     target_link_libraries(LibCore PUBLIC "-framework IOSurface")
+endif()
+
+if (WIN32)
+    target_link_libraries(LibCore PRIVATE ntdll.dll)
 endif()
 
 if (ANDROID)
