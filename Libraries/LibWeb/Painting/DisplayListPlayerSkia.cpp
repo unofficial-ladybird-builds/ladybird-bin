@@ -155,6 +155,7 @@ void DisplayListPlayerSkia::draw_painting_surface(DrawPaintingSurface const& com
     auto& canvas = surface().canvas();
     auto image = sk_surface.makeImageSnapshot();
     SkPaint paint;
+    paint.setAntiAlias(true);
     canvas.drawImageRect(image, src_rect, dst_rect, to_skia_sampling_options(command.scaling_mode), &paint, SkCanvas::kStrict_SrcRectConstraint);
 }
 
@@ -164,8 +165,9 @@ void DisplayListPlayerSkia::draw_scaled_immutable_bitmap(DrawScaledImmutableBitm
     auto clip_rect = to_skia_rect(command.clip_rect);
     auto& canvas = surface().canvas();
     SkPaint paint;
+    paint.setAntiAlias(true);
     canvas.save();
-    canvas.clipRect(clip_rect);
+    canvas.clipRect(clip_rect, true);
     canvas.drawImageRect(command.bitmap->sk_image(), dst_rect, to_skia_sampling_options(command.scaling_mode), &paint);
     canvas.restore();
 }
@@ -184,6 +186,7 @@ void DisplayListPlayerSkia::draw_repeated_immutable_bitmap(DrawRepeatedImmutable
     auto shader = command.bitmap->sk_image()->makeShader(tile_mode_x, tile_mode_y, sampling_options, matrix);
 
     SkPaint paint;
+    paint.setAntiAlias(true);
     paint.setShader(shader);
     auto& canvas = surface().canvas();
     canvas.drawPaint(paint);
@@ -193,7 +196,7 @@ void DisplayListPlayerSkia::add_clip_rect(AddClipRect const& command)
 {
     auto& canvas = surface().canvas();
     auto const& rect = command.rect;
-    canvas.clipRect(to_skia_rect(rect));
+    canvas.clipRect(to_skia_rect(rect), true);
 }
 
 void DisplayListPlayerSkia::save(Save const&)
@@ -780,7 +783,7 @@ void DisplayListPlayerSkia::apply_backdrop_filter(ApplyBackdropFilter const& com
 
     auto rect = to_skia_rect(command.backdrop_region);
     canvas.save();
-    canvas.clipRect(rect);
+    canvas.clipRect(rect, true);
     ScopeGuard guard = [&] { canvas.restore(); };
 
     if (command.backdrop_filter.has_value()) {
