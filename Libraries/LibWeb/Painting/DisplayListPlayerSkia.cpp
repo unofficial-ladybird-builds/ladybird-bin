@@ -617,7 +617,7 @@ static SkTileMode to_skia_tile_mode(SVGLinearGradientPaintStyle::SpreadMethod sp
     }
 }
 
-static SkPaint paint_style_to_skia_paint(Painting::SVGGradientPaintStyle const& paint_style, Gfx::FloatRect bounding_rect)
+static SkPaint paint_style_to_skia_paint(Painting::SVGGradientPaintStyle const& paint_style, Gfx::FloatRect const& bounding_rect)
 {
     SkPaint paint;
 
@@ -968,7 +968,7 @@ void DisplayListPlayerSkia::apply_composite_and_blending_operator(ApplyComposite
     canvas.saveLayer(nullptr, &paint);
 }
 
-void DisplayListPlayerSkia::apply_filters(ApplyFilter const& command)
+void DisplayListPlayerSkia::apply_filter(ApplyFilter const& command)
 {
     sk_sp<SkImageFilter> image_filter = to_skia_image_filter(command.filter);
 

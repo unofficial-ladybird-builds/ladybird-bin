@@ -72,6 +72,11 @@ struct CompletionPacket {
     CompletionType type;
 };
 
+struct EventLoopWake final : CompletionPacket {
+    OwnHandle wait_packet;
+    OwnHandle wait_event;
+};
+
 struct EventLoopTimer final : CompletionPacket {
 
     ~EventLoopTimer()
@@ -92,12 +97,12 @@ struct EventLoopNotifier final : CompletionPacket {
     }
 
     Notifier::Type notifier_type() const { return m_notifier_type; }
-    int fd() const { return to_fd(object_handle); }
+    int notifier_fd() const { return m_notifier_fd; }
 
     // These are a space tradeoff for avoiding a double indirection through the notifier*.
     Notifier* notifier;
     Notifier::Type m_notifier_type;
-    HANDLE object_handle;
+    int m_notifier_fd { -1 };
     OwnHandle wait_packet;
     OwnHandle wait_event;
 };
@@ -112,11 +117,24 @@ struct ThreadData {
     }
 
     ThreadData()
-        : wake_completion_key(make<CompletionPacket>(CompletionType::Wake))
+        : wake_data(make<EventLoopWake>())
     {
+        wake_data->type = CompletionType::Wake;
+        wake_data->wait_event.handle = CreateEvent(NULL, FALSE, FALSE, NULL);
+
         // Consider a way for different event loops to have a different number of threads
         iocp.handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
         VERIFY(iocp.handle);
+
+        NTSTATUS status = g_system.NtCreateWaitCompletionPacket(&wake_data->wait_packet.handle, GENERIC_READ | GENERIC_WRITE, NULL);
+        VERIFY(NT_SUCCESS(status));
+        status = g_system.NtAssociateWaitCompletionPacket(wake_data->wait_packet.handle, iocp.handle, wake_data->wait_event.handle, wake_data.ptr(), NULL, 0, 0, NULL);
+        VERIFY(NT_SUCCESS(status));
+    }
+    ~ThreadData()
+    {
+        NTSTATUS status = g_system.NtCancelWaitCompletionPacket(wake_data->wait_packet.handle, TRUE);
+        VERIFY(NT_SUCCESS(status));
     }
 
     OwnHandle iocp;
@@ -125,12 +143,12 @@ struct ThreadData {
     HashMap<intptr_t, NonnullOwnPtr<EventLoopTimer>> timers;
     HashMap<Notifier*, NonnullOwnPtr<EventLoopNotifier>> notifiers;
 
-    // The wake completion key is posted to the thread's event loop to wake it.
-    NonnullOwnPtr<CompletionPacket> wake_completion_key;
+    // The wake completion packet is posted to the thread's event loop to wake it.
+    NonnullOwnPtr<EventLoopWake> wake_data;
 };
 
 EventLoopImplementationWindows::EventLoopImplementationWindows()
-    : m_wake_completion_key((void*)ThreadData::the()->wake_completion_key.ptr())
+    : m_wake_event(ThreadData::the()->wake_data->wait_event.handle)
 {
 }
 
@@ -175,21 +193,27 @@ size_t EventLoopImplementationWindows::pump(PumpMode pump_mode)
             auto& entry = entries[i];
             auto* packet = reinterpret_cast<CompletionPacket*>(entry.lpCompletionKey);
 
-            if (packet == thread_data->wake_completion_key) {
+            if (packet->type == CompletionType::Wake) {
+                auto* wake_data = static_cast<EventLoopWake*>(packet);
+                NTSTATUS status = g_system.NtAssociateWaitCompletionPacket(wake_data->wait_packet.handle, thread_data->iocp.handle, wake_data->wait_event.handle, wake_data, NULL, 0, 0, NULL);
+                VERIFY(NT_SUCCESS(status));
                 continue;
             }
             if (packet->type == CompletionType::Timer) {
                 auto* timer = static_cast<EventLoopTimer*>(packet);
                 if (auto owner = timer->owner.strong_ref())
                     event_queue.post_event(*owner, make<TimerEvent>());
-                if (timer->is_periodic)
-                    g_system.NtAssociateWaitCompletionPacket(timer->wait_packet.handle, thread_data->iocp.handle, timer->timer.handle, timer, NULL, 0, 0, NULL);
+                if (timer->is_periodic) {
+                    NTSTATUS status = g_system.NtAssociateWaitCompletionPacket(timer->wait_packet.handle, thread_data->iocp.handle, timer->timer.handle, timer, NULL, 0, 0, NULL);
+                    VERIFY(NT_SUCCESS(status));
+                }
                 continue;
             }
             if (packet->type == CompletionType::Notifer) {
-                auto* notifier_data = reinterpret_cast<EventLoopNotifier*>(packet);
-                event_queue.post_event(*notifier_data->notifier, make<NotifierActivationEvent>(notifier_data->fd(), notifier_data->notifier_type()));
-                g_system.NtAssociateWaitCompletionPacket(notifier_data->wait_packet.handle, thread_data->iocp.handle, notifier_data->wait_event.handle, notifier_data, NULL, 0, 0, NULL);
+                auto* notifier_data = static_cast<EventLoopNotifier*>(packet);
+                event_queue.post_event(*notifier_data->notifier, make<NotifierActivationEvent>(notifier_data->notifier_fd(), notifier_data->notifier_type()));
+                NTSTATUS status = g_system.NtAssociateWaitCompletionPacket(notifier_data->wait_packet.handle, thread_data->iocp.handle, notifier_data->wait_event.handle, notifier_data, NULL, 0, 0, NULL);
+                VERIFY(NT_SUCCESS(status));
                 continue;
             }
             VERIFY_NOT_REACHED();
@@ -223,8 +247,7 @@ void EventLoopImplementationWindows::post_event(EventReceiver& receiver, Nonnull
 
 void EventLoopImplementationWindows::wake()
 {
-    auto* thread_data = ThreadData::the();
-    PostQueuedCompletionStatus(thread_data->iocp.handle, 0, (ULONG_PTR)m_wake_completion_key, NULL);
+    SetEvent(m_wake_event);
 }
 
 static int notifier_type_to_network_event(NotificationType type)
@@ -258,9 +281,9 @@ void EventLoopManagerWindows::register_notifier(Notifier& notifier)
     notifier_data->notifier = &notifier;
     notifier_data->m_notifier_type = notifier.type();
     notifier_data->wait_event.handle = event;
-    NTSTATUS status = NtCreateWaitCompletionPacket(&notifier_data->wait_packet.handle, GENERIC_READ | GENERIC_WRITE, NULL);
+    NTSTATUS status = g_system.NtCreateWaitCompletionPacket(&notifier_data->wait_packet.handle, GENERIC_READ | GENERIC_WRITE, NULL);
     VERIFY(NT_SUCCESS(status));
-    status = NtAssociateWaitCompletionPacket(notifier_data->wait_packet.handle, thread_data->iocp.handle, event, notifier_data.ptr(), NULL, 0, 0, NULL);
+    status = g_system.NtAssociateWaitCompletionPacket(notifier_data->wait_packet.handle, thread_data->iocp.handle, event, notifier_data.ptr(), NULL, 0, 0, NULL);
     VERIFY(NT_SUCCESS(status));
     notifiers.set(&notifier, move(notifier_data));
 }
@@ -288,9 +311,14 @@ intptr_t EventLoopManagerWindows::register_timer(EventReceiver& object, int mill
     VERIFY(thread_data);
     auto& timers = thread_data->timers;
 
+    // FIXME: This is a temporary fix for issue #3641
+    bool manual_reset = static_cast<Timer&>(object).is_single_shot();
+    HANDLE timer = CreateWaitableTimer(NULL, manual_reset, NULL);
+    VERIFY(timer);
+
     auto timer_data = make<EventLoopTimer>();
     timer_data->type = CompletionType::Timer;
-    timer_data->timer.handle = CreateWaitableTimer(NULL, FALSE, NULL);
+    timer_data->timer.handle = timer;
     timer_data->owner = object.make_weak_ptr();
     timer_data->is_periodic = should_reload;
     VERIFY(timer_data->timer.handle);
@@ -320,7 +348,8 @@ void EventLoopManagerWindows::unregister_timer(intptr_t timer_id)
         if (!maybe_timer.has_value())
             return;
         auto timer = move(maybe_timer.value());
-        g_system.NtCancelWaitCompletionPacket(timer->wait_packet.handle, TRUE);
+        NTSTATUS status = g_system.NtCancelWaitCompletionPacket(timer->wait_packet.handle, TRUE);
+        VERIFY(NT_SUCCESS(status));
     }
 }
 
