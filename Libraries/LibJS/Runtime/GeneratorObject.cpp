@@ -18,7 +18,7 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(GeneratorObject);
 
-ThrowCompletionOr<GC::Ref<GeneratorObject>> GeneratorObject::create(Realm& realm, Value initial_value, ECMAScriptFunctionObject* generating_function, NonnullOwnPtr<ExecutionContext> execution_context)
+GC::Ref<GeneratorObject> GeneratorObject::create(Realm& realm, Value initial_value, ECMAScriptFunctionObject* generating_function, NonnullOwnPtr<ExecutionContext> execution_context)
 {
     auto& vm = realm.vm();
     // This is "g1.prototype" in figure-2 (https://tc39.es/ecma262/img/figure-2.png)
@@ -30,17 +30,19 @@ ThrowCompletionOr<GC::Ref<GeneratorObject>> GeneratorObject::create(Realm& realm
         generating_function_prototype = realm.intrinsics().generator_prototype();
     } else {
         static Bytecode::PropertyLookupCache cache;
-        generating_function_prototype = TRY(generating_function->get(vm.names.prototype, cache));
+        generating_function_prototype = MUST(generating_function->get(vm.names.prototype, cache));
     }
-    auto generating_function_prototype_object = TRY(generating_function_prototype.to_object(vm));
+    GC::Ptr<Object> generating_function_prototype_object = nullptr;
+    if (!generating_function_prototype.is_nullish())
+        generating_function_prototype_object = MUST(generating_function_prototype.to_object(vm));
     auto object = realm.create<GeneratorObject>(realm, generating_function_prototype_object, move(execution_context));
     object->m_generating_function = generating_function;
     object->m_previous_value = initial_value;
     return object;
 }
 
-GeneratorObject::GeneratorObject(Realm&, Object& prototype, NonnullOwnPtr<ExecutionContext> context, Optional<StringView> generator_brand)
-    : Object(ConstructWithPrototypeTag::Tag, prototype)
+GeneratorObject::GeneratorObject(Realm& realm, Object* prototype, NonnullOwnPtr<ExecutionContext> context, Optional<StringView> generator_brand)
+    : Object(realm, prototype)
     , m_execution_context(move(context))
     , m_generator_brand(move(generator_brand))
 {
@@ -99,7 +101,7 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
         return {};
     };
 
-    auto compleion_cell = heap().allocate<CompletionCell>(completion);
+    auto completion_cell = heap().allocate<CompletionCell>(completion);
 
     auto& bytecode_interpreter = vm.bytecode_interpreter();
 
@@ -108,7 +110,7 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
     // We should never enter `execute` again after the generator is complete.
     VERIFY(next_block.has_value());
 
-    auto result_value = bytecode_interpreter.run_executable(vm.running_execution_context(), *m_generating_function->bytecode_executable(), next_block, compleion_cell);
+    auto result_value = bytecode_interpreter.run_executable(vm.running_execution_context(), *m_generating_function->bytecode_executable(), next_block, completion_cell);
 
     vm.pop_execution_context();
 
