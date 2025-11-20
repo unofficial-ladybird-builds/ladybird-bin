@@ -15,21 +15,26 @@ namespace RequestServer {
 
 static constexpr auto INDEX_DATABASE = "INDEX"sv;
 
-ErrorOr<DiskCache> DiskCache::create()
+ErrorOr<DiskCache> DiskCache::create(Mode mode)
 {
-    auto cache_directory = LexicalPath::join(Core::StandardPaths::cache_directory(), "Ladybird"sv, "Cache"sv);
+    auto cache_name = mode == Mode::Normal ? "Cache"sv : "TestCache"sv;
+    auto cache_directory = LexicalPath::join(Core::StandardPaths::cache_directory(), "Ladybird"sv, cache_name);
 
     auto database = TRY(Database::Database::create(cache_directory.string(), INDEX_DATABASE));
     auto index = TRY(CacheIndex::create(database));
 
-    return DiskCache { move(database), move(cache_directory), move(index) };
+    return DiskCache { mode, move(database), move(cache_directory), move(index) };
 }
 
-DiskCache::DiskCache(NonnullRefPtr<Database::Database> database, LexicalPath cache_directory, CacheIndex index)
-    : m_database(move(database))
+DiskCache::DiskCache(Mode mode, NonnullRefPtr<Database::Database> database, LexicalPath cache_directory, CacheIndex index)
+    : m_mode(mode)
+    , m_database(move(database))
     , m_cache_directory(move(cache_directory))
     , m_index(move(index))
 {
+    // Start with a clean slate in test mode.
+    if (m_mode == Mode::Testing)
+        remove_entries_accessed_since(UnixDateTime::earliest());
 }
 
 Variant<Optional<CacheEntryWriter&>, DiskCache::CacheHasOpenEntry> DiskCache::create_entry(Request& request)
@@ -37,13 +42,18 @@ Variant<Optional<CacheEntryWriter&>, DiskCache::CacheHasOpenEntry> DiskCache::cr
     if (!is_cacheable(request.method()))
         return Optional<CacheEntryWriter&> {};
 
+    if (m_mode == Mode::Testing) {
+        if (!request.request_headers().contains(TEST_CACHE_ENABLED_HEADER))
+            return Optional<CacheEntryWriter&> {};
+    }
+
     auto serialized_url = serialize_url_for_cache_storage(request.url());
     auto cache_key = create_cache_key(serialized_url, request.method());
 
     if (check_if_cache_has_open_entry(request, cache_key, CheckReaderEntries::Yes))
         return CacheHasOpenEntry {};
 
-    auto cache_entry = CacheEntryWriter::create(*this, m_index, cache_key, move(serialized_url), request.request_start_time());
+    auto cache_entry = CacheEntryWriter::create(*this, m_index, cache_key, move(serialized_url), request.request_start_time(), request.current_time_offset_for_testing());
     if (cache_entry.is_error()) {
         dbgln("\033[31;1mUnable to create cache entry for\033[0m {}: {}", request.url(), cache_entry.error());
         return Optional<CacheEntryWriter&> {};
@@ -83,8 +93,8 @@ Variant<Optional<CacheEntryReader&>, DiskCache::CacheHasOpenEntry> DiskCache::op
     }
 
     auto const& response_headers = cache_entry.value()->response_headers();
-    auto freshness_lifetime = calculate_freshness_lifetime(cache_entry.value()->status_code(), response_headers);
-    auto current_age = calculate_age(response_headers, index_entry->request_time, index_entry->response_time);
+    auto freshness_lifetime = calculate_freshness_lifetime(cache_entry.value()->status_code(), response_headers, request.current_time_offset_for_testing());
+    auto current_age = calculate_age(response_headers, index_entry->request_time, index_entry->response_time, request.current_time_offset_for_testing());
 
     switch (cache_lifetime_status(response_headers, freshness_lifetime, current_age)) {
     case CacheLifetimeStatus::Fresh:

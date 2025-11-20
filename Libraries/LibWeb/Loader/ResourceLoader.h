@@ -14,6 +14,7 @@
 #include <LibGC/Function.h>
 #include <LibHTTP/HeaderMap.h>
 #include <LibRequests/Forward.h>
+#include <LibRequests/RequestTimingInfo.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Loader/UserAgent.h>
@@ -29,17 +30,11 @@ public:
 
     void set_client(NonnullRefPtr<Requests::RequestClient>);
 
-    using SuccessCallback = GC::Function<void(ReadonlyBytes, Requests::RequestTimingInfo const&, HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase)>;
-    using ErrorCallback = GC::Function<void(ByteString const&, Requests::RequestTimingInfo const&, Optional<u32> status_code, Optional<String> const& reason_phrase, ReadonlyBytes payload, HTTP::HeaderMap const& response_headers)>;
-    using TimeoutCallback = GC::Function<void()>;
-
-    void load(LoadRequest&, GC::Root<SuccessCallback> success_callback, GC::Root<ErrorCallback> error_callback = nullptr, Optional<u32> timeout = {}, GC::Root<TimeoutCallback> timeout_callback = nullptr);
-
     using OnHeadersReceived = GC::Function<void(HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase)>;
     using OnDataReceived = GC::Function<void(ReadonlyBytes data)>;
     using OnComplete = GC::Function<void(bool success, Requests::RequestTimingInfo const& timing_info, Optional<StringView> error_message)>;
 
-    void load_unbuffered(LoadRequest&, GC::Root<OnHeadersReceived>, GC::Root<OnDataReceived>, GC::Root<OnComplete>);
+    void load(LoadRequest&, GC::Root<OnHeadersReceived>, GC::Root<OnDataReceived>, GC::Root<OnComplete>);
 
     RefPtr<Requests::RequestClient>& request_client() { return m_request_client; }
 
@@ -71,6 +66,18 @@ public:
 
 private:
     explicit ResourceLoader(GC::Heap&, NonnullRefPtr<Requests::RequestClient>);
+
+    struct FileLoadResult {
+        ReadonlyBytes data;
+        HTTP::HeaderMap response_headers;
+        Requests::RequestTimingInfo timing_info;
+    };
+    template<typename FileHandler, typename ErrorHandler>
+    void handle_file_load_request(LoadRequest& request, FileHandler on_file, ErrorHandler on_error);
+    template<typename Callback>
+    void handle_about_load_request(LoadRequest const& request, Callback callback);
+    template<typename ResourceHandler, typename ErrorHandler>
+    void handle_resource_load_request(LoadRequest const& request, ResourceHandler on_resource, ErrorHandler on_error);
 
     RefPtr<Requests::Request> start_network_request(LoadRequest const&);
     void handle_network_response_headers(LoadRequest const&, HTTP::HeaderMap const&);

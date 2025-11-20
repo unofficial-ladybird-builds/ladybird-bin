@@ -6,6 +6,7 @@
 
 #include <LibCrypto/Hash/SHA1.h>
 #include <LibURL/URL.h>
+#include <RequestServer/Cache/DiskCache.h>
 #include <RequestServer/Cache/Utilities.h>
 
 namespace RequestServer {
@@ -192,7 +193,7 @@ bool is_header_exempted_from_storage(StringView name)
         "Proxy-Connection"sv,
         "TE"sv,
         "Transfer-Encoding"sv,
-        "Upgrade"sv
+        "Upgrade"sv,
 
         // * Likewise, some fields' semantics require them to be removed before forwarding the message, and this MAY be
         //   implemented by doing so before storage; see Section 7.6.1 of [HTTP] for some examples.
@@ -204,11 +205,15 @@ bool is_header_exempted_from_storage(StringView name)
         //   unless the cache incorporates the identity of the proxy into the cache key. Effectively, this is limited to
         //   Proxy-Authenticate (Section 11.7.1 of [HTTP]), Proxy-Authentication-Info (Section 11.7.3 of [HTTP]), and
         //   Proxy-Authorization (Section 11.7.2 of [HTTP]).
-    );
+
+        // AD-HOC: Exclude headers used only for testing.
+        TEST_CACHE_ENABLED_HEADER,
+        TEST_CACHE_STATUS_HEADER,
+        TEST_CACHE_REQUEST_TIME_OFFSET);
 }
 
 // https://httpwg.org/specs/rfc9111.html#heuristic.freshness
-static AK::Duration calculate_heuristic_freshness_lifetime(HTTP::HeaderMap const& headers)
+static AK::Duration calculate_heuristic_freshness_lifetime(HTTP::HeaderMap const& headers, AK::Duration current_time_offset_for_testing)
 {
     // Since origin servers do not always provide explicit expiration times, a cache MAY assign a heuristic expiration
     // time when an explicit time is not specified, employing algorithms that use other field values (such as the
@@ -227,7 +232,7 @@ static AK::Duration calculate_heuristic_freshness_lifetime(HTTP::HeaderMap const
     if (!last_modified.has_value())
         return {};
 
-    auto now = UnixDateTime::now();
+    auto now = UnixDateTime::now() + current_time_offset_for_testing;
     auto since_last_modified = now - *last_modified;
     auto seconds = since_last_modified.to_seconds();
 
@@ -240,7 +245,7 @@ static AK::Duration calculate_heuristic_freshness_lifetime(HTTP::HeaderMap const
 }
 
 // https://httpwg.org/specs/rfc9111.html#calculating.freshness.lifetime
-AK::Duration calculate_freshness_lifetime(u32 status_code, HTTP::HeaderMap const& headers)
+AK::Duration calculate_freshness_lifetime(u32 status_code, HTTP::HeaderMap const& headers, AK::Duration current_time_offset_for_testing)
 {
     // A cache can calculate the freshness lifetime (denoted as freshness_lifetime) of a response by evaluating the
     // following rules and using the first match:
@@ -262,8 +267,8 @@ AK::Duration calculate_freshness_lifetime(u32 status_code, HTTP::HeaderMap const
     // * If the Expires response header field (Section 5.3) is present, use its value minus the value of the Date response
     //   header field (using the time the message was received if it is not present, as per Section 6.6.1 of [HTTP]), or
     if (auto expires = parse_http_date(headers.get("Expires"sv)); expires.has_value()) {
-        auto date = parse_http_date(headers.get("Date"sv)).value_or_lazy_evaluated([]() {
-            return UnixDateTime::now();
+        auto date = parse_http_date(headers.get("Date"sv)).value_or_lazy_evaluated([&]() {
+            return UnixDateTime::now() + current_time_offset_for_testing;
         });
 
         return *expires - date;
@@ -284,14 +289,14 @@ AK::Duration calculate_freshness_lifetime(u32 status_code, HTTP::HeaderMap const
     }
 
     if (heuristics_allowed)
-        return calculate_heuristic_freshness_lifetime(headers);
+        return calculate_heuristic_freshness_lifetime(headers, current_time_offset_for_testing);
 
     // No explicit expiration time, and heuristics not allowed or not applicable.
     return {};
 }
 
 // https://httpwg.org/specs/rfc9111.html#age.calculations
-AK::Duration calculate_age(HTTP::HeaderMap const& headers, UnixDateTime request_time, UnixDateTime response_time)
+AK::Duration calculate_age(HTTP::HeaderMap const& headers, UnixDateTime request_time, UnixDateTime response_time, AK::Duration current_time_offset_for_testing)
 {
     // The term "age_value" denotes the value of the Age header field (Section 5.1), in a form appropriate for arithmetic
     // operation; or 0, if not available.
@@ -303,24 +308,24 @@ AK::Duration calculate_age(HTTP::HeaderMap const& headers, UnixDateTime request_
     }
 
     // The term "now" means the current value of this implementation's clock (Section 5.6.7 of [HTTP]).
-    auto now = UnixDateTime::now();
+    auto now = UnixDateTime::now() + current_time_offset_for_testing;
 
     // The term "date_value" denotes the value of the Date header field, in a form appropriate for arithmetic operations.
     // See Section 6.6.1 of [HTTP] for the definition of the Date header field and for requirements regarding responses
     // without it.
     auto date_value = parse_http_date(headers.get("Date"sv)).value_or(now);
 
-    auto apparent_age = max(0LL, (response_time - date_value).to_seconds());
+    auto apparent_age = max(AK::Duration::zero(), (response_time - date_value));
 
     auto response_delay = response_time - request_time;
     auto corrected_age_value = age_value + response_delay;
 
-    auto corrected_initial_age = max(apparent_age, corrected_age_value.to_seconds());
+    auto corrected_initial_age = max(apparent_age, corrected_age_value);
 
-    auto resident_time = (now - response_time).to_seconds();
+    auto resident_time = now - response_time;
     auto current_age = corrected_initial_age + resident_time;
 
-    return AK::Duration::from_seconds(current_age);
+    return current_age;
 }
 
 CacheLifetimeStatus cache_lifetime_status(HTTP::HeaderMap const& headers, AK::Duration freshness_lifetime, AK::Duration current_age)
@@ -401,6 +406,18 @@ void update_header_fields(HTTP::HeaderMap& stored_headers, HTTP::HeaderMap const
         if (!is_header_exempted_from_update(updated_header.name))
             stored_headers.set(updated_header.name, updated_header.value);
     }
+}
+
+AK::Duration compute_current_time_offset_for_testing(Optional<DiskCache&> disk_cache, HTTP::HeaderMap const& request_headers)
+{
+    if (disk_cache.has_value() && disk_cache->mode() == DiskCache::Mode::Testing) {
+        if (auto header = request_headers.get(TEST_CACHE_REQUEST_TIME_OFFSET); header.has_value()) {
+            if (auto offset = header->to_number<i64>(); offset.has_value())
+                return AK::Duration::from_seconds(*offset);
+        }
+    }
+
+    return {};
 }
 
 }
