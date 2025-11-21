@@ -901,6 +901,7 @@ set(SOURCES
     SVG/SVGAElement.cpp
     SVG/SVGAnimatedEnumeration.cpp
     SVG/SVGAnimatedLength.cpp
+    SVG/SVGAnimatedLengthList.cpp
     SVG/SVGAnimatedNumber.cpp
     SVG/SVGAnimatedNumberList.cpp
     SVG/SVGAnimatedRect.cpp
@@ -940,6 +941,7 @@ set(SOURCES
     SVG/SVGGraphicsElement.cpp
     SVG/SVGImageElement.cpp
     SVG/SVGLength.cpp
+    SVG/SVGLengthList.cpp
     SVG/SVGLinearGradientElement.cpp
     SVG/SVGLineElement.cpp
     SVG/SVGList.cpp

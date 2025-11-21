@@ -1094,6 +1094,7 @@ namespace Web::SVG {
 class Path;
 class SVGAnimatedEnumeration;
 class SVGAnimatedLength;
+class SVGAnimatedLengthList;
 class SVGAnimatedNumber;
 class SVGAnimatedNumberList;
 class SVGAnimatedRect;
@@ -1125,6 +1126,7 @@ class SVGGeometryElement;
 class SVGGraphicsElement;
 class SVGImageElement;
 class SVGLength;
+class SVGLengthList;
 class SVGLineElement;
 class SVGMaskElement;
 class SVGMetadataElement;
@@ -1137,6 +1139,7 @@ class SVGRectElement;
 class SVGScriptElement;
 class SVGSVGElement;
 class SVGTitleElement;
+class SVGTransformList;
 class SVGViewElement;
 
 }
