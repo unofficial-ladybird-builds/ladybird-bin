@@ -161,9 +161,12 @@ void ComputedProperties::remove_animated_property(PropertyID id)
     m_animated_property_values.remove(id);
 }
 
-void ComputedProperties::reset_animated_properties(Badge<Animations::KeyframeEffect>)
+void ComputedProperties::reset_non_inherited_animated_properties(Badge<Animations::KeyframeEffect>)
 {
-    m_animated_property_values.clear();
+    for (auto property_id : m_animated_property_values.keys()) {
+        if (!is_animated_property_inherited(property_id))
+            m_animated_property_values.remove(property_id);
+    }
 }
 
 StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnimationsApplied return_animated_value) const
@@ -319,6 +322,25 @@ Color ComputedProperties::color_or_fallback(PropertyID id, ColorResolutionContex
     if (!value.has_color())
         return fallback;
     return value.to_color(color_resolution_context).value();
+}
+
+Position ComputedProperties::position_value(PropertyID id) const
+{
+    auto const& position = property(id).as_position();
+    Position position_value;
+    auto const& edge_x = position.edge_x();
+    auto const& edge_y = position.edge_y();
+    if (edge_x->is_edge()) {
+        auto const& edge = edge_x->as_edge();
+        position_value.edge_x = edge.edge().value_or(PositionEdge::Left);
+        position_value.offset_x = edge.offset();
+    }
+    if (edge_y->is_edge()) {
+        auto const& edge = edge_y->as_edge();
+        position_value.edge_y = edge.edge().value_or(PositionEdge::Top);
+        position_value.offset_y = edge.offset();
+    }
+    return position_value;
 }
 
 // https://drafts.csswg.org/css-values-4/#linked-properties
@@ -727,6 +749,11 @@ Optional<CSSPixels> ComputedProperties::perspective() const
         return value.as_calculated().resolve_length({ .length_resolution_context = {} })->absolute_length_to_px();
 
     VERIFY_NOT_REACHED();
+}
+
+Position ComputedProperties::perspective_origin() const
+{
+    return position_value(PropertyID::PerspectiveOrigin);
 }
 
 TransformOrigin ComputedProperties::transform_origin() const
@@ -2021,24 +2048,9 @@ ObjectFit ComputedProperties::object_fit() const
     return keyword_to_object_fit(value.to_keyword()).release_value();
 }
 
-ObjectPosition ComputedProperties::object_position() const
+Position ComputedProperties::object_position() const
 {
-    auto const& value = property(PropertyID::ObjectPosition);
-    auto const& position = value.as_position();
-    ObjectPosition object_position;
-    auto const& edge_x = position.edge_x();
-    auto const& edge_y = position.edge_y();
-    if (edge_x->is_edge()) {
-        auto const& edge = edge_x->as_edge();
-        object_position.edge_x = edge.edge().value_or(PositionEdge::Left);
-        object_position.offset_x = edge.offset();
-    }
-    if (edge_y->is_edge()) {
-        auto const& edge = edge_y->as_edge();
-        object_position.edge_y = edge.edge().value_or(PositionEdge::Top);
-        object_position.offset_y = edge.offset();
-    }
-    return object_position;
+    return position_value(PropertyID::ObjectPosition);
 }
 
 TableLayout ComputedProperties::table_layout() const

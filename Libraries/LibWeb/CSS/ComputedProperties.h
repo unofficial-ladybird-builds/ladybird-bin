@@ -50,7 +50,7 @@ public:
     };
 
     HashMap<PropertyID, NonnullRefPtr<StyleValue const>> const& animated_property_values() const { return m_animated_property_values; }
-    void reset_animated_properties(Badge<Animations::KeyframeEffect>);
+    void reset_non_inherited_animated_properties(Badge<Animations::KeyframeEffect>);
 
     bool is_property_important(PropertyID property_id) const;
     bool is_property_inherited(PropertyID property_id) const;
@@ -176,7 +176,7 @@ public:
     CSS::EmptyCells empty_cells() const;
     Vector<Vector<String>> grid_template_areas() const;
     ObjectFit object_fit() const;
-    ObjectPosition object_position() const;
+    Position object_position() const;
     TableLayout table_layout() const;
     Direction direction() const;
     UnicodeBidi unicode_bidi() const;
@@ -213,6 +213,7 @@ public:
     Optional<Transformation> translate() const;
     Optional<Transformation> scale() const;
     Optional<CSSPixels> perspective() const;
+    Position perspective_origin() const;
 
     MaskType mask_type() const;
     float stop_opacity() const;
@@ -288,6 +289,7 @@ private:
 
     Overflow overflow(PropertyID) const;
     Vector<ShadowData> shadow(PropertyID, Layout::Node const&) const;
+    Position position_value(PropertyID) const;
 
     GC::Ptr<CSSStyleDeclaration const> m_transition_property_source;
 

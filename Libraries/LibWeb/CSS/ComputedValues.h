@@ -63,11 +63,22 @@ struct QuotesData {
     Vector<Array<FlyString, 2>> strings {};
 };
 
-struct ObjectPosition {
+struct Position {
     PositionEdge edge_x { PositionEdge::Left };
     LengthPercentage offset_x { Percentage(50) };
     PositionEdge edge_y { PositionEdge::Top };
     LengthPercentage offset_y { Percentage(50) };
+
+    CSSPixelPoint resolved(Layout::Node const& node, CSSPixelRect const& rect) const
+    {
+        CSSPixels x = offset_x.to_px(node, rect.width());
+        CSSPixels y = offset_y.to_px(node, rect.height());
+        if (edge_x == PositionEdge::Right)
+            x = rect.width() - x;
+        if (edge_y == PositionEdge::Bottom)
+            y = rect.height() - y;
+        return CSSPixelPoint { rect.x() + x, rect.y() + y };
+    }
 };
 
 // https://drafts.csswg.org/css-contain-2/#containment-types
@@ -238,7 +249,7 @@ public:
     static Vector<Vector<String>> grid_template_areas() { return {}; }
     static Time transition_delay() { return Time::make_seconds(0); }
     static ObjectFit object_fit() { return ObjectFit::Fill; }
-    static ObjectPosition object_position() { return {}; }
+    static Position object_position() { return {}; }
     static Color outline_color() { return Color::Black; }
     static Length outline_offset() { return Length::make_px(0); }
     static OutlineStyle outline_style() { return OutlineStyle::None; }
@@ -566,7 +577,7 @@ public:
     EmptyCells empty_cells() const { return m_inherited.empty_cells; }
     Vector<Vector<String>> const& grid_template_areas() const { return m_noninherited.grid_template_areas; }
     ObjectFit object_fit() const { return m_noninherited.object_fit; }
-    ObjectPosition object_position() const { return m_noninherited.object_position; }
+    Position object_position() const { return m_noninherited.object_position; }
     Direction direction() const { return m_inherited.direction; }
     UnicodeBidi unicode_bidi() const { return m_noninherited.unicode_bidi; }
     WritingMode writing_mode() const { return m_inherited.writing_mode; }
@@ -645,6 +656,7 @@ public:
     Optional<Transformation> const& translate() const { return m_noninherited.translate; }
     Optional<Transformation> const& scale() const { return m_noninherited.scale; }
     Optional<CSSPixels> const& perspective() const { return m_noninherited.perspective; }
+    Position const& perspective_origin() const { return m_noninherited.perspective_origin; }
 
     Gfx::FontCascadeList const& font_list() const { return *m_inherited.font_list; }
     CSSPixels font_size() const { return m_inherited.font_size; }
@@ -833,7 +845,7 @@ protected:
         CSSPixels outline_width { InitialValues::outline_width() };
         TableLayout table_layout { InitialValues::table_layout() };
         ObjectFit object_fit { InitialValues::object_fit() };
-        ObjectPosition object_position { InitialValues::object_position() };
+        Position object_position { InitialValues::object_position() };
         UnicodeBidi unicode_bidi { InitialValues::unicode_bidi() };
         UserSelect user_select { InitialValues::user_select() };
         Isolation isolation { InitialValues::isolation() };
@@ -848,6 +860,7 @@ protected:
         Optional<Transformation> translate;
         Optional<Transformation> scale;
         Optional<CSSPixels> perspective;
+        Position perspective_origin;
 
         Optional<MaskReference> mask;
         MaskType mask_type { InitialValues::mask_type() };
@@ -1001,6 +1014,7 @@ public:
     void set_rotate(Transformation value) { m_noninherited.rotate = move(value); }
     void set_scale(Transformation value) { m_noninherited.scale = move(value); }
     void set_perspective(Optional<CSSPixels> value) { m_noninherited.perspective = move(value); }
+    void set_perspective_origin(Position value) { m_noninherited.perspective_origin = move(value); }
     void set_transformations(Vector<Transformation> value) { m_noninherited.transformations = move(value); }
     void set_transform_box(TransformBox value) { m_noninherited.transform_box = value; }
     void set_transform_origin(TransformOrigin value) { m_noninherited.transform_origin = move(value); }
@@ -1031,7 +1045,7 @@ public:
     void set_table_layout(TableLayout value) { m_noninherited.table_layout = value; }
     void set_quotes(QuotesData value) { m_inherited.quotes = move(value); }
     void set_object_fit(ObjectFit value) { m_noninherited.object_fit = value; }
-    void set_object_position(ObjectPosition value) { m_noninherited.object_position = move(value); }
+    void set_object_position(Position value) { m_noninherited.object_position = move(value); }
     void set_direction(Direction value) { m_inherited.direction = value; }
     void set_unicode_bidi(UnicodeBidi value) { m_noninherited.unicode_bidi = value; }
     void set_writing_mode(WritingMode value) { m_inherited.writing_mode = value; }
