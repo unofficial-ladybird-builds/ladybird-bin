@@ -58,17 +58,11 @@ private:
     GC::Ptr<WebIDL::CallbackType> m_callback;
 
     // https://dom.spec.whatwg.org/#mutationobserver-node-list
-    // NOTE: These are weak, per https://dom.spec.whatwg.org/#garbage-collection
     // Registered observers in a node’s registered observer list have a weak reference to the node.
     Vector<GC::Weak<Node>> m_node_list;
 
     // https://dom.spec.whatwg.org/#concept-mo-queue
     Vector<GC::Ref<MutationRecord>> m_record_queue;
-
-    IntrusiveListNode<MutationObserver> m_list_node;
-
-public:
-    using List = IntrusiveList<&MutationObserver::m_list_node>;
 };
 
 // https://dom.spec.whatwg.org/#registered-observer

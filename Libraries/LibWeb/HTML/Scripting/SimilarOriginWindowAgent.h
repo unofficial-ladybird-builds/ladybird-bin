@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2025, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -11,9 +12,7 @@
 #include <LibGC/Root.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/Agent.h>
-#include <LibWeb/DOM/MutationObserver.h>
 #include <LibWeb/Export.h>
-#include <LibWeb/Forward.h>
 #include <LibWeb/HTML/CustomElements/CustomElementReactionsStack.h>
 #include <LibWeb/HTML/Scripting/Agent.h>
 
@@ -29,7 +28,7 @@ struct SimilarOriginWindowAgent : public Agent {
 
     // https://dom.spec.whatwg.org/#mutation-observer-list
     // Each similar-origin window agent also has pending mutation observers (a set of zero or more MutationObserver objects), which is initially empty.
-    DOM::MutationObserver::List pending_mutation_observers;
+    GC::RootVector<GC::Ref<DOM::MutationObserver>> pending_mutation_observers;
 
     // https://html.spec.whatwg.org/multipage/custom-elements.html#custom-element-reactions-stack
     // Each similar-origin window agent has a custom element reactions stack, which is initially empty.
@@ -37,7 +36,7 @@ struct SimilarOriginWindowAgent : public Agent {
 
     // https://dom.spec.whatwg.org/#signal-slot-list
     // Each similar-origin window agent has signal slots (a set of slots), which is initially empty. [HTML]
-    Vector<GC::Root<HTML::HTMLSlotElement>> signal_slots;
+    GC::RootVector<GC::Ref<HTMLSlotElement>> signal_slots;
 
     // https://html.spec.whatwg.org/multipage/custom-elements.html#current-element-queue
     // A similar-origin window agent's current element queue is the element queue at the top of its custom element reactions stack.
@@ -45,10 +44,7 @@ struct SimilarOriginWindowAgent : public Agent {
     Vector<GC::Root<DOM::Element>> const& current_element_queue() const { return custom_element_reactions_stack.element_queue_stack.last(); }
 
 private:
-    explicit SimilarOriginWindowAgent(CanBlock can_block)
-        : Agent(can_block)
-    {
-    }
+    SimilarOriginWindowAgent(GC::Heap&, CanBlock);
 };
 
 WEB_API SimilarOriginWindowAgent& relevant_similar_origin_window_agent(JS::Object const&);
