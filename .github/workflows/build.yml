@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    #runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest # Pretend I wasn't shipping broken builds for months due to Blacksmith applying intel-only instructions that would crash Ladybird at startup. Builds are a log longer. 
+
 
     steps:
       - name: Checkout repository
