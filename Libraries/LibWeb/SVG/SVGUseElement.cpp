@@ -28,7 +28,7 @@ namespace Web::SVG {
 GC_DEFINE_ALLOCATOR(SVGUseElement);
 
 SVGUseElement::SVGUseElement(DOM::Document& document, DOM::QualifiedName qualified_name)
-    : SVGGraphicsElement(document, qualified_name)
+    : SVGGraphicsElement(document, move(qualified_name))
 {
 }
 
@@ -103,11 +103,6 @@ Gfx::AffineTransform SVGUseElement::element_transform() const
     // The x and y properties define an additional transformation (translate(x,y), where x and y represent the computed value of the corresponding property)
     // to be applied to the ‘use’ element, after any transformations specified with other properties
     return Base::element_transform().translate(m_x.value_or(0), m_y.value_or(0));
-}
-
-void SVGUseElement::inserted()
-{
-    Base::inserted();
 }
 
 void SVGUseElement::svg_element_changed(SVGElement& svg_element)
