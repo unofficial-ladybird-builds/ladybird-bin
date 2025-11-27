@@ -17,7 +17,7 @@
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Time.h>
-#include <LibHTTP/HttpResponse.h>
+#include <LibHTTP/Status.h>
 #include <LibWeb/WebDriver/Client.h>
 
 namespace Web::WebDriver {
@@ -181,7 +181,7 @@ Client::Client(NonnullOwnPtr<Core::BufferedTCPSocket> socket)
 {
     m_socket->on_ready_to_read = [this] {
         if (auto result = on_ready_to_read(); result.is_error())
-            handle_error({}, result.release_error());
+            handle_error(HTTP::HttpRequest { HTTP::HeaderList::create() }, result.release_error());
     };
 }
 
@@ -249,7 +249,7 @@ ErrorOr<JsonValue, Client::WrappedError> Client::read_body_as_json(HTTP::HttpReq
     // FIXME: Check the Content-Type is actually application/json.
     size_t content_length = 0;
 
-    for (auto const& header : request.headers().headers()) {
+    for (auto const& header : request.headers()) {
         if (header.name.equals_ignoring_ascii_case("Content-Length"sv)) {
             content_length = header.value.to_number<size_t>(TrimWhitespace::Yes).value_or(0);
             break;
@@ -326,7 +326,7 @@ ErrorOr<void, Client::WrappedError> Client::send_error_response(HTTP::HttpReques
 {
     // FIXME: Implement to spec.
     dbgln_if(WEBDRIVER_DEBUG, "Sending error response: {} {}: {}", error.http_status, error.error, error.message);
-    auto reason = HTTP::HttpResponse::reason_phrase_for_code(error.http_status);
+    auto reason = HTTP::reason_phrase_for_code(error.http_status);
 
     JsonObject error_response;
     error_response.set("error"sv, error.error);

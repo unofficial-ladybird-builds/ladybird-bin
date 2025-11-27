@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
+#include <LibHTTP/HeaderList.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/Fetch/Infrastructure/NoSniffBlocking.h>
@@ -13,7 +14,7 @@
 namespace Web::Fetch::Infrastructure {
 
 // https://fetch.spec.whatwg.org/#determine-nosniff
-bool determine_nosniff(HeaderList const& list)
+bool determine_nosniff(HTTP::HeaderList const& list)
 {
     // 1. Let values be the result of getting, decoding, and splitting `X-Content-Type-Options` from list.
     auto values = list.get_decode_and_split("X-Content-Type-Options"sv.bytes());
@@ -38,7 +39,7 @@ RequestOrResponseBlocking should_response_to_request_be_blocked_due_to_nosniff(R
         return RequestOrResponseBlocking::Allowed;
 
     // 2. Let mimeType be the result of extracting a MIME type from response’s header list.
-    auto mime_type = response.header_list()->extract_mime_type();
+    auto mime_type = Infrastructure::extract_mime_type(response.header_list());
 
     // 3. Let destination be request’s destination.
     auto const& destination = request.destination();

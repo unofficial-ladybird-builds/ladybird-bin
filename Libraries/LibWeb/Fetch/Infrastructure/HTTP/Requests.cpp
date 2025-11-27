@@ -7,6 +7,7 @@
 #include <AK/Array.h>
 #include <LibGC/Heap.h>
 #include <LibJS/Runtime/Realm.h>
+#include <LibTextCodec/Encoder.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/Names.h>
 #include <LibWeb/ContentSecurityPolicy/PolicyList.h>
 #include <LibWeb/ContentSecurityPolicy/Violation.h>
@@ -14,21 +15,24 @@
 #include <LibWeb/Fetch/Fetching/PendingResponse.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
-#include <LibWeb/Infra/Strings.h>
 
 namespace Web::Fetch::Infrastructure {
 
 GC_DEFINE_ALLOCATOR(Request);
 
-Request::Request(GC::Ref<HeaderList> header_list)
-    : m_header_list(header_list)
+GC::Ref<Request> Request::create(JS::VM& vm)
+{
+    return vm.heap().allocate<Request>(HTTP::HeaderList::create());
+}
+
+Request::Request(NonnullRefPtr<HTTP::HeaderList> header_list)
+    : m_header_list(move(header_list))
 {
 }
 
 void Request::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_header_list);
     visitor.visit(m_client);
     m_body.visit(
         [&](GC::Ref<Body>& body) { visitor.visit(body); },
@@ -42,11 +46,6 @@ void Request::visit_edges(JS::Cell::Visitor& visitor)
     m_policy_container.visit(
         [&](GC::Ref<HTML::PolicyContainer> const& policy_container) { visitor.visit(policy_container); },
         [](auto const&) {});
-}
-
-GC::Ref<Request> Request::create(JS::VM& vm)
-{
-    return vm.heap().allocate<Request>(HeaderList::create(vm));
 }
 
 // https://fetch.spec.whatwg.org/#concept-request-url
@@ -217,7 +216,7 @@ ByteString Request::byte_serialize_origin() const
 {
     // Byte-serializing a request origin, given a request request, is to return the result of serializing a request
     // origin with request, isomorphic encoded.
-    return Infra::isomorphic_encode(serialize_origin());
+    return TextCodec::isomorphic_encode(serialize_origin());
 }
 
 // https://fetch.spec.whatwg.org/#concept-request-clone

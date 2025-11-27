@@ -10,6 +10,7 @@
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Response.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
@@ -216,7 +217,7 @@ static void update(JS::VM& vm, GC::Ref<Job> job)
 
         // 1. Append `Service-Worker`/`script` to request’s header list.
         // Note: See https://w3c.github.io/ServiceWorker/#service-worker
-        request->header_list()->append(Fetch::Infrastructure::Header::isomorphic_encode("Service-Worker"sv, "script"sv));
+        request->header_list()->append(HTTP::Header::isomorphic_encode("Service-Worker"sv, "script"sv));
 
         // 2. Set request’s cache mode to "no-cache" if any of the following are true:
         //  - registration’s update via cache mode is not "all".
@@ -254,7 +255,7 @@ static void update(JS::VM& vm, GC::Ref<Job> job)
 
         fetch_algorithms_input.process_response = [request, job, state, newest_worker, &realm, &registration, &process_response_completion_result](GC::Ref<Fetch::Infrastructure::Response> response) mutable -> void {
             // 7. Extract a MIME type from the response’s header list. If s MIME type (ignoring parameters) is not a JavaScript MIME type, then:
-            auto mime_type = response->header_list()->extract_mime_type();
+            auto mime_type = Fetch::Infrastructure::extract_mime_type(response->header_list());
             if (!mime_type.has_value() || !mime_type->is_javascript()) {
                 // 1. Invoke Reject Job Promise with job and "SecurityError" DOMException.
                 reject_job_promise<WebIDL::SecurityError>(job, "Service Worker script response is not a JavaScript MIME type"_utf16);
@@ -272,7 +273,7 @@ static void update(JS::VM& vm, GC::Ref<Job> job)
             // FIXME: CSP not implemented yet
 
             // 10. If serviceWorkerAllowed is failure, then:
-            if (service_worker_allowed.has<Fetch::Infrastructure::HeaderList::ExtractHeaderParseFailure>()) {
+            if (service_worker_allowed.has<HTTP::HeaderList::ExtractHeaderParseFailure>()) {
                 // FIXME: Should we reject the job promise with a security error here?
 
                 // 1. Asynchronously complete these steps with a network error.
