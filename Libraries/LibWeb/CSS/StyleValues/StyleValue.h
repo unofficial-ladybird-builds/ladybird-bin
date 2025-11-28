@@ -79,6 +79,7 @@ namespace Web::CSS {
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Resolution, resolution, ResolutionStyleValue)                                    \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(ScrollbarColor, scrollbar_color, ScrollbarColorStyleValue)                       \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(ScrollbarGutter, scrollbar_gutter, ScrollbarGutterStyleValue)                    \
+    __ENUMERATE_CSS_STYLE_VALUE_TYPE(ScrollFunction, scroll_function, ScrollFunctionStyleValue)                       \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Shadow, shadow, ShadowStyleValue)                                                \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Shorthand, shorthand, ShorthandStyleValue)                                       \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(String, string, StringStyleValue)                                                \
@@ -91,7 +92,8 @@ namespace Web::CSS {
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(UnicodeRange, unicode_range, UnicodeRangeStyleValue)                             \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Unresolved, unresolved, UnresolvedStyleValue)                                    \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(URL, url, URLStyleValue)                                                         \
-    __ENUMERATE_CSS_STYLE_VALUE_TYPE(ValueList, value_list, StyleValueList)
+    __ENUMERATE_CSS_STYLE_VALUE_TYPE(ValueList, value_list, StyleValueList)                                           \
+    __ENUMERATE_CSS_STYLE_VALUE_TYPE(ViewFunction, view_function, ViewFunctionStyleValue)
 
 template<typename T>
 struct ValueComparingNonnullRefPtr : public NonnullRefPtr<T> {

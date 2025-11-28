@@ -43,12 +43,15 @@ enum class ValueType : u8 {
     Ratio,
     Rect,
     Resolution,
+    ScrollFunction,
     String,
     Time,
     TimePercentage,
     TransformFunction,
     TransformList,
     Url,
+    ViewFunction,
+    ViewTimelineInset
 };
 
 StringView value_type_to_string(ValueType);

@@ -268,6 +268,7 @@ set(SOURCES
     CSS/StyleValues/RectStyleValue.cpp
     CSS/StyleValues/RepeatStyleStyleValue.cpp
     CSS/StyleValues/ScrollbarColorStyleValue.cpp
+    CSS/StyleValues/ScrollFunctionStyleValue.cpp
     CSS/StyleValues/ShadowStyleValue.cpp
     CSS/StyleValues/ShorthandStyleValue.cpp
     CSS/StyleValues/StyleValue.cpp
@@ -279,6 +280,7 @@ set(SOURCES
     CSS/StyleValues/TreeCountingFunctionStyleValue.cpp
     CSS/StyleValues/UnicodeRangeStyleValue.cpp
     CSS/StyleValues/UnresolvedStyleValue.cpp
+    CSS/StyleValues/ViewFunctionStyleValue.cpp
     CSS/Supports.cpp
     CSS/SyntaxHighlighter/SyntaxHighlighter.cpp
     CSS/SystemColor.cpp

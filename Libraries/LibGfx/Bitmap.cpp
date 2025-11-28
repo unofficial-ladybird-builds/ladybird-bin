@@ -31,14 +31,26 @@ struct BackingStore {
     size_t size_in_bytes { 0 };
 };
 
+StringView bitmap_format_name(BitmapFormat format)
+{
+    switch (format) {
+#define ENUMERATE_BITMAP_FORMAT(format) \
+    case BitmapFormat::format:          \
+        return #format##sv;
+        ENUMERATE_BITMAP_FORMATS(ENUMERATE_BITMAP_FORMAT)
+#undef ENUMERATE_BITMAP_FORMAT
+    }
+    VERIFY_NOT_REACHED();
+}
+
 size_t Bitmap::minimum_pitch(size_t width, BitmapFormat format)
 {
     size_t element_size;
-    switch (determine_storage_format(format)) {
-    case StorageFormat::BGRx8888:
-    case StorageFormat::BGRA8888:
-    case StorageFormat::RGBx8888:
-    case StorageFormat::RGBA8888:
+    switch (format) {
+    case BitmapFormat::BGRx8888:
+    case BitmapFormat::BGRA8888:
+    case BitmapFormat::RGBx8888:
+    case BitmapFormat::RGBA8888:
         element_size = 4;
         break;
     default:
@@ -241,7 +253,7 @@ Bitmap::~Bitmap()
 void Bitmap::strip_alpha_channel()
 {
     VERIFY(m_format == BitmapFormat::BGRA8888 || m_format == BitmapFormat::BGRx8888);
-    for (ARGB32& pixel : *this)
+    for (BGRA8888& pixel : *this)
         pixel = 0xff000000 | (pixel & 0xffffff);
     m_format = BitmapFormat::BGRx8888;
 }

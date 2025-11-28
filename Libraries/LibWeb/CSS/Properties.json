@@ -232,7 +232,8 @@
       "animation-direction",
       "animation-fill-mode",
       "animation-play-state",
-      "animation-name"
+      "animation-name",
+      "animation-timeline"
     ]
   },
   "animation-composition": {
@@ -337,6 +338,23 @@
       "running",
       "paused"
     ]
+  },
+  "animation-timeline": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "auto",
+    "valid-types": [
+      "dashed-ident",
+      "scroll-function",
+      "view-function"
+    ],
+    "valid-identifiers": [
+      "auto",
+      "none"
+    ],
+    "__comment": "FIXME: animation properties should be coordinating-lists",
+    "multiplicity": "single"
   },
   "animation-timing-function": {
     "affects-layout": false,
@@ -3440,6 +3458,39 @@
     "affects-layout": false,
     "affects-stacking-context": true
   },
+  "scroll-timeline": {
+    "affects-layout": false,
+    "inherited": false,
+    "initial": "none block",
+    "multiplicity": "coordinating-list",
+    "longhands": [
+      "scroll-timeline-name",
+      "scroll-timeline-axis"
+    ]
+  },
+  "scroll-timeline-axis": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "block",
+    "valid-types": [
+      "axis"
+    ],
+    "multiplicity": "coordinating-list"
+  },
+  "scroll-timeline-name": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "none",
+    "valid-identifiers": [
+      "none"
+    ],
+    "valid-types": [
+      "dashed-ident"
+    ],
+    "multiplicity": "coordinating-list"
+  },
   "scrollbar-color": {
     "affects-layout": false,
     "animation-type": "by-computed-value",
@@ -3979,6 +4030,51 @@
     "quirks": [
       "unitless-length"
     ]
+  },
+  "view-timeline": {
+    "affects-layout": false,
+    "inherited": false,
+    "initial": "none",
+    "multiplicity": "coordinating-list",
+    "longhands": [
+      "view-timeline-name",
+      "view-timeline-axis",
+      "view-timeline-inset"
+    ]
+  },
+  "view-timeline-axis": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "block",
+    "valid-types": [
+      "axis"
+    ],
+    "multiplicity": "coordinating-list"
+  },
+  "view-timeline-inset": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "auto",
+    "valid-types": [
+      "view-timeline-inset"
+    ],
+    "percentages-resolve-to": "length",
+    "multiplicity": "coordinating-list"
+  },
+  "view-timeline-name": {
+    "affects-layout": false,
+    "animation-type": "none",
+    "inherited": false,
+    "initial": "none",
+    "valid-identifiers": [
+      "none"
+    ],
+    "valid-types": [
+      "dashed-ident"
+    ],
+    "multiplicity": "coordinating-list"
   },
   "view-transition-name": {
     "affects-layout": false,

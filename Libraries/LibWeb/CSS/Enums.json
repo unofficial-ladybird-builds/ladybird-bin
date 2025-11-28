@@ -110,6 +110,12 @@
     "textarea",
     "textfield"
   ],
+  "axis": [
+    "block",
+    "inline",
+    "x",
+    "y"
+  ],
   "background-attachment": [
     "fixed",
     "local",
@@ -714,6 +720,11 @@
     "auto",
     "thin",
     "none"
+  ],
+  "scroller": [
+    "root",
+    "nearest",
+    "self"
   ],
   "shape-box": [
     "content-box",

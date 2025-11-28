@@ -5,6 +5,7 @@
  */
 
 #include <AK/Array.h>
+#include <LibGfx/ImmutableBitmap.h>
 #include <LibMedia/Sinks/DisplayingVideoSink.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLMediaElement.h>
@@ -17,8 +18,8 @@
 
 namespace Web::Painting {
 
-static constexpr auto control_box_color = Gfx::Color::from_rgb(0x26'26'26);
-static constexpr auto control_highlight_color = Gfx::Color::from_rgb(0x1d'99'f3);
+static constexpr auto control_box_color = Gfx::Color::from_bgrx(0x26'26'26);
+static constexpr auto control_highlight_color = Gfx::Color::from_bgrx(0x1d'99'f3);
 
 GC_DEFINE_ALLOCATOR(VideoPaintable);
 
@@ -133,7 +134,7 @@ void VideoPaintable::paint(DisplayListRecordingContext& context, PaintPhase phas
     };
 
     auto paint_transparent_black = [&]() {
-        static constexpr auto transparent_black = Gfx::Color::from_argb(0x00'00'00'00);
+        static constexpr auto transparent_black = Gfx::Color::from_bgra(0x00'00'00'00);
         context.display_list_recorder().fill_rect(video_rect.to_type<int>(), transparent_black);
     };
 

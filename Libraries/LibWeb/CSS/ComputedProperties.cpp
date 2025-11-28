@@ -92,6 +92,14 @@ bool ComputedProperties::is_animated_property_inherited(PropertyID property_id) 
     return m_animated_property_inherited[n / 8] & (1 << (n % 8));
 }
 
+bool ComputedProperties::is_animated_property_result_of_transition(PropertyID property_id) const
+{
+    VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
+
+    size_t n = to_underlying(property_id) - to_underlying(first_longhand_property_id);
+    return m_animated_property_result_of_transition[n / 8] & (1 << (n % 8));
+}
+
 void ComputedProperties::set_property_inherited(PropertyID property_id, Inherited inherited)
 {
     VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
@@ -112,6 +120,17 @@ void ComputedProperties::set_animated_property_inherited(PropertyID property_id,
         m_animated_property_inherited[n / 8] |= (1 << (n % 8));
     else
         m_animated_property_inherited[n / 8] &= ~(1 << (n % 8));
+}
+
+void ComputedProperties::set_animated_property_result_of_transition(PropertyID property_id, AnimatedPropertyResultOfTransition animated_value_result_of_transition)
+{
+    VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
+
+    size_t n = to_underlying(property_id) - to_underlying(first_longhand_property_id);
+    if (animated_value_result_of_transition == AnimatedPropertyResultOfTransition::Yes)
+        m_animated_property_result_of_transition[n / 8] |= (1 << (n % 8));
+    else
+        m_animated_property_result_of_transition[n / 8] &= ~(1 << (n % 8));
 }
 
 void ComputedProperties::set_property(PropertyID id, NonnullRefPtr<StyleValue const> value, Inherited inherited, Important important)
@@ -149,10 +168,11 @@ void ComputedProperties::set_display_before_box_type_transformation(Display valu
     m_display_before_box_type_transformation = value;
 }
 
-void ComputedProperties::set_animated_property(PropertyID id, NonnullRefPtr<StyleValue const> value, Inherited inherited)
+void ComputedProperties::set_animated_property(PropertyID id, NonnullRefPtr<StyleValue const> value, AnimatedPropertyResultOfTransition animated_property_result_of_transition, Inherited inherited)
 {
     m_animated_property_values.set(id, move(value));
     set_animated_property_inherited(id, inherited);
+    set_animated_property_result_of_transition(id, animated_property_result_of_transition);
 }
 
 void ComputedProperties::remove_animated_property(PropertyID id)
@@ -172,8 +192,8 @@ StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnima
 {
     VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
 
-    // Important properties override animated properties
-    if (!is_property_important(property_id) && return_animated_value == WithAnimationsApplied::Yes) {
+    // Important properties override animated but not transitioned properties
+    if ((!is_property_important(property_id) || is_animated_property_result_of_transition(property_id)) && return_animated_value == WithAnimationsApplied::Yes) {
         if (auto animated_value = m_animated_property_values.get(property_id); animated_value.has_value())
             return *animated_value.value();
     }
@@ -2287,7 +2307,27 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
         auto animation_fill_mode_style_value = coordinated_properties.get(PropertyID::AnimationFillMode).value()[i];
         auto animation_composition_style_value = coordinated_properties.get(PropertyID::AnimationComposition).value()[i];
 
-        auto duration = Time::from_style_value(animation_duration_style_value, {}).to_milliseconds();
+        // https://drafts.csswg.org/css-animations-2/#animation-duration
+        auto duration = [&] -> Variant<double, String> {
+            // auto
+            if (animation_duration_style_value->to_keyword() == Keyword::Auto) {
+                // For time-driven animations, equivalent to 0s.
+                return 0;
+
+                // FIXME: For scroll-driven animations, equivalent to the duration necessary to fill the timeline in
+                //        consideration of animation-range, animation-delay, and animation-iteration-count. See
+                //        Scroll-driven Animations § 4.1 Finite Timeline Calculations.
+            }
+
+            // <time [0s,∞]>
+
+            // FIXME: For scroll-driven animations, treated as auto.
+
+            // For time-driven animations, specifies the length of time that an animation takes to complete one cycle.
+            // A negative <time> is invalid.
+            return Time::from_style_value(animation_duration_style_value, {}).to_milliseconds();
+        }();
+
         auto timing_function = EasingFunction::from_style_value(animation_timing_function_style_value);
 
         auto iteration_count = [&] {

@@ -64,6 +64,7 @@
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RepeatStyleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ResolutionStyleValue.h>
+#include <LibWeb/CSS/StyleValues/ScrollFunctionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
 #include <LibWeb/CSS/StyleValues/SuperellipseStyleValue.h>
@@ -72,6 +73,7 @@
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnicodeRangeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
+#include <LibWeb/CSS/StyleValues/ViewFunctionStyleValue.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Dump.h>
 #include <LibWeb/Infra/CharacterTypes.h>
@@ -1377,6 +1379,43 @@ RefPtr<StyleValue const> Parser::parse_time_percentage_value(TokenStream<Compone
     return nullptr;
 }
 
+// https://drafts.csswg.org/scroll-animations-1/#view-timeline-inset
+RefPtr<StyleValue const> Parser::parse_view_timeline_inset_value(TokenStream<ComponentValue>& tokens)
+{
+    // [ [ auto | <length-percentage> ]{1,2} ]
+    auto transaction = tokens.begin_transaction();
+
+    StyleValueVector inset_values;
+
+    while (tokens.has_next_token() && inset_values.size() < 2) {
+        tokens.discard_whitespace();
+
+        if (tokens.next_token().is_ident("auto"sv)) {
+            tokens.discard_a_token(); // auto
+            inset_values.append(KeywordStyleValue::create(Keyword::Auto));
+            continue;
+        }
+
+        if (auto length_percentage = parse_length_percentage_value(tokens)) {
+            inset_values.append(length_percentage.release_nonnull());
+            continue;
+        }
+
+        break;
+    }
+
+    if (inset_values.is_empty())
+        return nullptr;
+
+    transaction.commit();
+
+    // If the second value is omitted, it is set to the first.
+    if (inset_values.size() == 1)
+        return StyleValueList::create({ inset_values[0], inset_values[0] }, StyleValueList::Separator::Space);
+
+    return StyleValueList::create(move(inset_values), StyleValueList::Separator::Space);
+}
+
 RefPtr<StyleValue const> Parser::parse_keyword_value(TokenStream<ComponentValue>& tokens)
 {
     tokens.discard_whitespace();
@@ -1390,6 +1429,113 @@ RefPtr<StyleValue const> Parser::parse_keyword_value(TokenStream<ComponentValue>
     }
 
     return nullptr;
+}
+
+// https://drafts.csswg.org/scroll-animations-1/#funcdef-scroll
+RefPtr<ScrollFunctionStyleValue const> Parser::parse_scroll_function_value(TokenStream<ComponentValue>& tokens)
+{
+    // <scroll()> = scroll( [ <scroller> || <axis> ]? )
+    auto transaction = tokens.begin_transaction();
+    auto const& function_token = tokens.consume_a_token();
+    if (!function_token.is_function("scroll"sv))
+        return nullptr;
+
+    Optional<Scroller> scroller;
+    Optional<Axis> axis;
+
+    auto argument_tokens = TokenStream { function_token.function().value };
+
+    while (argument_tokens.has_next_token()) {
+        tokens.discard_whitespace();
+
+        if (!argument_tokens.has_next_token())
+            break;
+
+        auto keyword_value = parse_keyword_value(argument_tokens);
+
+        if (!keyword_value)
+            return nullptr;
+
+        if (auto maybe_scroller = keyword_to_scroller(keyword_value->to_keyword()); maybe_scroller.has_value()) {
+            if (scroller.has_value())
+                return nullptr;
+
+            scroller = maybe_scroller;
+            continue;
+        }
+
+        if (auto maybe_axis = keyword_to_axis(keyword_value->to_keyword()); maybe_axis.has_value()) {
+            if (axis.has_value())
+                return nullptr;
+
+            axis = maybe_axis;
+            continue;
+        }
+
+        return nullptr;
+    }
+
+    // By default, scroll() references the block axis of the nearest ancestor scroll container.
+    if (!scroller.has_value())
+        scroller = Scroller::Nearest;
+
+    if (!axis.has_value())
+        axis = Axis::Block;
+
+    transaction.commit();
+    return ScrollFunctionStyleValue::create(scroller.value(), axis.value());
+}
+
+// https://drafts.csswg.org/scroll-animations-1/#funcdef-view
+RefPtr<ViewFunctionStyleValue const> Parser::parse_view_function_value(TokenStream<ComponentValue>& tokens)
+{
+    // <view()> = view( [ <axis> || <'view-timeline-inset'> ]? )
+    auto transaction = tokens.begin_transaction();
+    auto const& function_token = tokens.consume_a_token();
+    if (!function_token.is_function("view"sv))
+        return nullptr;
+
+    auto context_guard = push_temporary_value_parsing_context(FunctionContext { "view"sv });
+
+    Optional<Axis> axis;
+    RefPtr<StyleValue const> inset;
+
+    auto argument_tokens = TokenStream { function_token.function().value };
+
+    while (argument_tokens.has_next_token()) {
+        argument_tokens.discard_whitespace();
+
+        if (!argument_tokens.has_next_token())
+            break;
+
+        if (auto inset_value = parse_view_timeline_inset_value(argument_tokens); inset_value) {
+            if (inset)
+                return nullptr;
+
+            inset = inset_value;
+            continue;
+        }
+
+        if (auto keyword_value = parse_keyword_value(argument_tokens); keyword_value && keyword_to_axis(keyword_value->to_keyword()).has_value()) {
+            if (axis.has_value())
+                return nullptr;
+
+            axis = keyword_to_axis(keyword_value->to_keyword());
+            continue;
+        }
+
+        return nullptr;
+    }
+
+    // By default, view() references the block axis
+    if (!axis.has_value())
+        axis = Axis::Block;
+
+    if (!inset)
+        inset = StyleValueList::create({ KeywordStyleValue::create(Keyword::Auto), KeywordStyleValue::create(Keyword::Auto) }, StyleValueList::Separator::Space);
+
+    transaction.commit();
+    return ViewFunctionStyleValue::create(axis.value(), inset.release_nonnull());
 }
 
 // https://www.w3.org/TR/CSS2/visufx.html#value-def-shape
@@ -4221,6 +4367,9 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                         "circle"sv, "ellipse"sv, "inset"sv, "polygon"sv, "rect"sv, "xywh"sv)) {
                     return CalculationContext { .percentages_resolve_as = ValueType::Length };
                 }
+                if (function.name.equals_ignoring_ascii_case("view"sv)) {
+                    return CalculationContext { .percentages_resolve_as = ValueType::Length };
+                }
                 // FIXME: Add other functions that provide a context for resolving values
                 return {};
             },
@@ -5037,6 +5186,8 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_rect_value(tokens);
     case ValueType::Resolution:
         return parse_resolution_value(tokens);
+    case ValueType::ScrollFunction:
+        return parse_scroll_function_value(tokens);
     case ValueType::String:
         return parse_string_value(tokens);
     case ValueType::Time:
@@ -5049,6 +5200,10 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_transform_list_value(tokens);
     case ValueType::Url:
         return parse_url_value(tokens);
+    case ValueType::ViewFunction:
+        return parse_view_function_value(tokens);
+    case ValueType::ViewTimelineInset:
+        return parse_view_timeline_inset_value(tokens);
     }
     VERIFY_NOT_REACHED();
 }

@@ -10,7 +10,9 @@
  */
 
 #include <AK/OwnPtr.h>
+#include <LibGfx/Bitmap.h>
 #include <LibGfx/CompositingAndBlendingOperator.h>
+#include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/PainterSkia.h>
 #include <LibGfx/Rect.h>
 #include <LibJS/Runtime/TypedArray.h>
@@ -18,6 +20,7 @@
 #include <LibUnicode/Segmenter.h>
 #include <LibWeb/Bindings/CanvasRenderingContext2DPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/HTML/CanvasRenderingContext2D.h>
 #include <LibWeb/HTML/HTMLCanvasElement.h>

@@ -67,6 +67,8 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::Rect;
     if (string.equals_ignoring_ascii_case("resolution"sv))
         return ValueType::Resolution;
+    if (string.equals_ignoring_ascii_case("scroll-function"sv))
+        return ValueType::ScrollFunction;
     if (string.equals_ignoring_ascii_case("string"sv))
         return ValueType::String;
     if (string.equals_ignoring_ascii_case("time"sv))
@@ -79,6 +81,10 @@ Optional<ValueType> value_type_from_string(StringView string)
         return ValueType::TransformList;
     if (string.equals_ignoring_ascii_case("url"sv))
         return ValueType::Url;
+    if (string.equals_ignoring_ascii_case("view-function"sv))
+        return ValueType::ViewFunction;
+    if (string.equals_ignoring_ascii_case("view-timeline-inset"sv))
+        return ValueType::ViewTimelineInset;
     return {};
 }
 
@@ -145,6 +151,8 @@ StringView value_type_to_string(ValueType value_type)
         return "Rect"sv;
     case Web::CSS::ValueType::Resolution:
         return "Resolution"sv;
+    case Web::CSS::ValueType::ScrollFunction:
+        return "ScrollFunction"sv;
     case Web::CSS::ValueType::String:
         return "String"sv;
     case Web::CSS::ValueType::Time:
@@ -157,6 +165,10 @@ StringView value_type_to_string(ValueType value_type)
         return "TransformList"sv;
     case Web::CSS::ValueType::Url:
         return "Url"sv;
+    case Web::CSS::ValueType::ViewFunction:
+        return "ViewFunction"sv;
+    case Web::CSS::ValueType::ViewTimelineInset:
+        return "ViewTimelineInset"sv;
     }
 
     VERIFY_NOT_REACHED();

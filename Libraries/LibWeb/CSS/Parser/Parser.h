@@ -443,10 +443,14 @@ private:
     RefPtr<StyleValue const> parse_time_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_time_percentage_value(TokenStream<ComponentValue>&);
 
+    RefPtr<StyleValue const> parse_view_timeline_inset_value(TokenStream<ComponentValue>&);
+    RefPtr<ScrollFunctionStyleValue const> parse_scroll_function_value(TokenStream<ComponentValue>&);
+    RefPtr<ViewFunctionStyleValue const> parse_view_function_value(TokenStream<ComponentValue>&);
+
     using ParseFunction = AK::Function<RefPtr<StyleValue const>(TokenStream<ComponentValue>&)>;
     RefPtr<StyleValue const> parse_comma_separated_value_list(TokenStream<ComponentValue>&, ParseFunction);
     RefPtr<StyleValue const> parse_simple_comma_separated_value_list(PropertyID, TokenStream<ComponentValue>&);
-    RefPtr<StyleValue const> parse_coordinating_value_list_shorthand(TokenStream<ComponentValue>&, PropertyID shorthand_id, Vector<PropertyID> const& longhand_ids);
+    RefPtr<StyleValue const> parse_coordinating_value_list_shorthand(TokenStream<ComponentValue>&, PropertyID shorthand_id, Vector<PropertyID> const& longhand_ids, Vector<PropertyID> const& reset_only_longhand_ids);
     RefPtr<StyleValue const> parse_all_as_single_keyword_value(TokenStream<ComponentValue>&, Keyword);
 
     RefPtr<StyleValue const> parse_anchor_name_value(TokenStream<ComponentValue>&);
@@ -499,6 +503,7 @@ private:
     RefPtr<StyleValue const> parse_position_visibility_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_quotes_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_single_repeat_style_value(PropertyID, TokenStream<ComponentValue>&);
+    RefPtr<StyleValue const> parse_scroll_timeline_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_scrollbar_color_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_scrollbar_gutter_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_shadow_value(TokenStream<ComponentValue>&, ShadowStyleValue::ShadowType);
@@ -529,11 +534,10 @@ private:
     RefPtr<StyleValue const> parse_grid_area_shorthand_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_grid_shorthand_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_touch_action_value(TokenStream<ComponentValue>&);
+    RefPtr<StyleValue const> parse_view_timeline_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_white_space_shorthand(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_white_space_trim_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_will_change_value(TokenStream<ComponentValue>&);
-
-    RefPtr<StyleValue const> parse_list_of_time_values(PropertyID, TokenStream<ComponentValue>&);
 
     RefPtr<CalculationNode const> convert_to_calculation_node(CalcParsing::Node const&, CalculationContext const&);
     RefPtr<CalculationNode const> parse_a_calculation(Vector<ComponentValue> const&, CalculationContext const&);
