@@ -6,7 +6,8 @@ dictionary Algorithm {
     required DOMString name;
 };
 
-enum KeyFormat { "raw", "spki", "pkcs8", "jwk" };
+// https://wicg.github.io/webcrypto-modern-algos/#subtlecrypto-interface-keyformat
+enum KeyFormat { "raw-public", "raw-private", "raw-seed", "raw-secret", "raw", "spki", "pkcs8", "jwk" };
 
 dictionary RsaOtherPrimesInfo {
     // The following fields are defined in Section 6.3.2.7 of JSON Web Algorithms
@@ -41,6 +42,18 @@ dictionary JsonWebKey {
     DOMString k;
 };
 
+// https://wicg.github.io/webcrypto-modern-algos/#encapsulation
+dictionary EncapsulatedKey {
+    CryptoKey sharedKey;
+    ArrayBuffer ciphertext;
+};
+
+// https://wicg.github.io/webcrypto-modern-algos/#encapsulation
+dictionary EncapsulatedBits {
+    ArrayBuffer sharedKey;
+    ArrayBuffer ciphertext;
+};
+
 // https://w3c.github.io/webcrypto/#subtlecrypto-interface
 [SecureContext,Exposed=(Window,Worker)]
 interface SubtleCrypto {
@@ -61,4 +74,8 @@ interface SubtleCrypto {
 
     Promise<any> wrapKey(KeyFormat format, CryptoKey key, CryptoKey wrappingKey, AlgorithmIdentifier wrapAlgorithm);
     Promise<CryptoKey> unwrapKey(KeyFormat format, BufferSource wrappedKey, CryptoKey unwrappingKey, AlgorithmIdentifier unwrapAlgorithm, AlgorithmIdentifier unwrappedKeyAlgorithm, boolean extractable, sequence<KeyUsage> keyUsages);
+
+    // https://wicg.github.io/webcrypto-modern-algos/#partial-subtlecrypto-interface
+    Promise<EncapsulatedKey> encapsulateKey(AlgorithmIdentifier encapsulationAlgorithm, CryptoKey encapsulationKey, AlgorithmIdentifier sharedKeyAlgorithm, boolean extractable, sequence<KeyUsage> keyUsages);
+    Promise<EncapsulatedBits> encapsulateBits(AlgorithmIdentifier encapsulationAlgorithm, CryptoKey encapsulationKey);
 };
