@@ -89,18 +89,23 @@ JS_DEFINE_NATIVE_FUNCTION(Uint8ArrayConstructorHelpers::from_base64)
     if (!string_value.is_string())
         return vm.throw_completion<TypeError>(ErrorType::NotAString, string_value);
 
-    // 2. Let opts be ? GetOptionsObject(options).
-    auto options = TRY(get_options_object(vm, options_value));
+    // OPTIMIZATION: Avoid allocating an empty options object if none was provided.
+    Alphabet alphabet = Alphabet::Base64;
+    AK::LastChunkHandling last_chunk_handling = AK::LastChunkHandling::Loose;
+    if (!options_value.is_undefined()) {
+        // 2. Let opts be ? GetOptionsObject(options).
+        auto options = TRY(get_options_object(vm, options_value));
 
-    // 3. Let alphabet be ? Get(opts, "alphabet").
-    // 4. If alphabet is undefined, set alphabet to "base64".
-    // 5. If alphabet is neither "base64" nor "base64url", throw a TypeError exception.
-    auto alphabet = TRY(parse_alphabet(vm, *options));
+        // 3. Let alphabet be ? Get(opts, "alphabet").
+        // 4. If alphabet is undefined, set alphabet to "base64".
+        // 5. If alphabet is neither "base64" nor "base64url", throw a TypeError exception.
+        alphabet = TRY(parse_alphabet(vm, *options));
 
-    // 6. Let lastChunkHandling be ? Get(opts, "lastChunkHandling").
-    // 7. If lastChunkHandling is undefined, set lastChunkHandling to "loose".
-    // 8. If lastChunkHandling is not one of "loose", "strict", or "stop-before-partial", throw a TypeError exception.
-    auto last_chunk_handling = TRY(parse_last_chunk_handling(vm, *options));
+        // 6. Let lastChunkHandling be ? Get(opts, "lastChunkHandling").
+        // 7. If lastChunkHandling is undefined, set lastChunkHandling to "loose".
+        // 8. If lastChunkHandling is not one of "loose", "strict", or "stop-before-partial", throw a TypeError exception.
+        last_chunk_handling = TRY(parse_last_chunk_handling(vm, *options));
+    }
 
     // 9. Let result be FromBase64(string, alphabet, lastChunkHandling).
     auto result = JS::from_base64(vm, string_value.as_string().utf8_string_view(), alphabet, last_chunk_handling);
@@ -115,17 +120,13 @@ JS_DEFINE_NATIVE_FUNCTION(Uint8ArrayConstructorHelpers::from_base64)
     auto result_length = result.bytes.size();
 
     // 12. Let ta be ? AllocateTypedArray("Uint8Array", %Uint8Array%, "%Uint8Array.prototype%", resultLength).
-    auto typed_array = TRY(Uint8Array::create(realm, result_length));
+    // 14. Set the value at each index of ta.[[ViewedArrayBuffer]].[[ArrayBufferData]] to the value at the corresponding
+    //     index of result.[[Bytes]].
+    auto array_buffer = ArrayBuffer::create(realm, move(result.bytes));
+    auto typed_array = Uint8Array::create(realm, result_length, array_buffer);
 
     // 13. Assert: ta.[[ViewedArrayBuffer]].[[ArrayBufferByteLength]] is the number of elements in result.[[Bytes]].
     VERIFY(typed_array->viewed_array_buffer()->byte_length() == result_length);
-
-    // 14. Set the value at each index of ta.[[ViewedArrayBuffer]].[[ArrayBufferData]] to the value at the corresponding
-    //     index of result.[[Bytes]].
-    auto& array_buffer_data = typed_array->viewed_array_buffer()->buffer();
-
-    for (size_t index = 0; index < result_length; ++index)
-        array_buffer_data[index] = result.bytes[index];
 
     // 15. Return ta.
     return typed_array;
@@ -314,35 +315,51 @@ JS_DEFINE_NATIVE_FUNCTION(Uint8ArrayPrototypeHelpers::to_base64)
     // 2. Perform ? ValidateUint8Array(O).
     auto typed_array = TRY(validate_uint8_array(vm));
 
-    // 3. Let opts be ? GetOptionsObject(options).
-    auto options = TRY(get_options_object(vm, options_value));
+    // OPTIMIZATION: Avoid allocating an empty options object if none was provided.
+    Alphabet alphabet = Alphabet::Base64;
+    AK::OmitPadding omit_padding = AK::OmitPadding::No;
+    if (!options_value.is_undefined()) {
+        // 3. Let opts be ? GetOptionsObject(options).
+        auto options = TRY(get_options_object(vm, options_value));
 
-    // 4. Let alphabet be ? Get(opts, "alphabet").
-    // 5. If alphabet is undefined, set alphabet to "base64".
-    // 6. If alphabet is neither "base64" nor "base64url", throw a TypeError exception.
-    auto alphabet = TRY(parse_alphabet(vm, *options));
+        // 4. Let alphabet be ? Get(opts, "alphabet").
+        // 5. If alphabet is undefined, set alphabet to "base64".
+        // 6. If alphabet is neither "base64" nor "base64url", throw a TypeError exception.
+        alphabet = TRY(parse_alphabet(vm, *options));
 
-    // 7. Let omitPadding be ToBoolean(? Get(opts, "omitPadding")).
-    auto omit_padding_value = TRY(options->get(vm.names.omitPadding)).to_boolean();
-    auto omit_padding = omit_padding_value ? AK::OmitPadding::Yes : AK::OmitPadding::No;
+        // 7. Let omitPadding be ToBoolean(? Get(opts, "omitPadding")).
+        auto omit_padding_value = TRY(options->get(vm.names.omitPadding)).to_boolean();
+        omit_padding = omit_padding_value ? AK::OmitPadding::Yes : AK::OmitPadding::No;
+    }
 
     // 8. Let toEncode be ? GetUint8ArrayBytes(O).
-    auto to_encode = TRY(get_uint8_array_bytes(vm, typed_array));
-
     String out_ascii;
 
-    // 9. If alphabet is "base64", then
-    if (alphabet == Alphabet::Base64) {
-        // a. Let outAscii be the sequence of code points which results from encoding toEncode according to the base64
-        //    encoding specified in section 4 of RFC 4648. Padding is included if and only if omitPadding is false.
-        out_ascii = MUST(encode_base64(to_encode, omit_padding));
-    }
-    // 10. Else,
-    else {
-        // a. Assert: alphabet is "base64url".
-        // b. Let outAscii be the sequence of code points which results from encoding toEncode according to the base64url
-        //    encoding specified in section 5 of RFC 4648. Padding is included if and only if omitPadding is false.
-        out_ascii = MUST(encode_base64url(to_encode, omit_padding));
+    // OPTIMIZATION: If the ArrayBuffer is not shared, we can avoid copying the bytes.
+    if (!typed_array->viewed_array_buffer()->is_shared_array_buffer()
+        && !typed_array->viewed_array_buffer()->is_detached()) {
+        auto to_encode = TRY(get_uint8_array_bytes_view(vm, typed_array));
+        if (alphabet == Alphabet::Base64) {
+            out_ascii = MUST(encode_base64(to_encode, omit_padding));
+        } else {
+            out_ascii = MUST(encode_base64url(to_encode, omit_padding));
+        }
+    } else {
+        auto to_encode = TRY(get_uint8_array_bytes(vm, typed_array));
+
+        // 9. If alphabet is "base64", then
+        if (alphabet == Alphabet::Base64) {
+            // a. Let outAscii be the sequence of code points which results from encoding toEncode according to the base64
+            //    encoding specified in section 4 of RFC 4648. Padding is included if and only if omitPadding is false.
+            out_ascii = MUST(encode_base64(to_encode, omit_padding));
+        }
+        // 10. Else,
+        else {
+            // a. Assert: alphabet is "base64url".
+            // b. Let outAscii be the sequence of code points which results from encoding toEncode according to the base64url
+            //    encoding specified in section 5 of RFC 4648. Padding is included if and only if omitPadding is false.
+            out_ascii = MUST(encode_base64url(to_encode, omit_padding));
+        }
     }
 
     // 11. Return CodePointsToString(outAscii).
@@ -430,6 +447,26 @@ ThrowCompletionOr<ByteBuffer> get_uint8_array_bytes(VM& vm, TypedArrayBase const
 
     // 9. Return bytes.
     return bytes;
+}
+
+// 23.3.3.2 GetUint8ArrayBytes ( ta ), https://tc39.es/ecma262/#sec-getuint8arraybytes
+// NOTE: This is an optimized version that returns a view into the underlying buffer when possible.
+//       It's only safe to use when the ArrayBuffer is known to not be shared or detached.
+ThrowCompletionOr<ReadonlyBytes> get_uint8_array_bytes_view(VM& vm, TypedArrayBase const& typed_array)
+{
+    VERIFY(typed_array.kind() == TypedArrayBase::Kind::Uint8Array);
+    VERIFY(!typed_array.viewed_array_buffer()->is_shared_array_buffer());
+    VERIFY(!typed_array.viewed_array_buffer()->is_detached());
+    auto typed_array_record = make_typed_array_with_buffer_witness_record(typed_array, ArrayBuffer::Order::SeqCst);
+    if (is_typed_array_out_of_bounds(typed_array_record))
+        return vm.throw_completion<TypeError>(ErrorType::BufferOutOfBounds, "TypedArray"sv);
+    auto length = typed_array_length(typed_array_record);
+    auto byte_offset = typed_array.byte_offset();
+
+    return ReadonlyBytes {
+        typed_array.viewed_array_buffer()->buffer().data() + byte_offset,
+        length
+    };
 }
 
 // 23.3.3.3 SetUint8ArrayBytes ( into, bytes ), https://tc39.es/ecma262/#sec-setuint8arraybytes
