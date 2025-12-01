@@ -33,6 +33,7 @@
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
+#include <LibWeb/CSS/StyleValues/RandomValueSharingStyleValue.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/DOMTokenList.h>
 #include <LibWeb/DOM/Document.h>
@@ -210,8 +211,7 @@ GC::Ptr<Attr> Element::get_attribute_node_ns(Optional<FlyString> const& namespac
     return m_attributes->get_attribute_ns(namespace_, name);
 }
 
-// FIXME: Trusted Types integration with DOM is still under review https://github.com/whatwg/dom/pull/1268
-// https://whatpr.org/dom/1268.html#dom-element-setattribute
+// https://dom.spec.whatwg.org/#dom-element-setattribute
 WebIDL::ExceptionOr<void> Element::set_attribute_for_bindings(FlyString qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> const& value)
 {
     // 1. If qualifiedName is not a valid attribute local name, then throw an "InvalidCharacterError" DOMException.
@@ -230,23 +230,23 @@ WebIDL::ExceptionOr<void> Element::set_attribute_for_bindings(FlyString qualifie
     // 4. Let attribute be the first attribute in this’s attribute list whose qualified name is qualifiedName, and null otherwise.
     auto* attribute = attributes()->get_attribute(qualified_name);
 
-    // 5. If attribute is null, create an attribute whose local name is qualifiedName, value is verifiedValue, and node document
-    //    is this’s node document, then append this attribute to this, and then return.
-    if (!attribute) {
-        auto new_attribute = Attr::create(document(), qualified_name, verified_value.to_utf8_but_should_be_ported_to_utf16());
-        m_attributes->append_attribute(new_attribute);
-
+    // 5. If attribute is non-null, then change attribute to verifiedValue and return.
+    if (attribute) {
+        attribute->change_attribute(verified_value.to_utf8_but_should_be_ported_to_utf16());
         return {};
     }
 
-    // 6. Change attribute to verifiedValue.
-    attribute->change_attribute(verified_value.to_utf8_but_should_be_ported_to_utf16());
+    // 6. Set attribute to a new attribute whose local name is qualifiedName, value is verifiedValue,
+    //    and node document is this’s node document.
+    attribute = Attr::create(document(), qualified_name, verified_value.to_utf8_but_should_be_ported_to_utf16());
+
+    // 7. Append attribute to this.
+    m_attributes->append_attribute(*attribute);
 
     return {};
 }
 
-// FIXME: Trusted Types integration with DOM is still under review https://github.com/whatwg/dom/pull/1268
-// https://whatpr.org/dom/1268.html#dom-element-setattribute
+// https://dom.spec.whatwg.org/#dom-element-setattribute
 WebIDL::ExceptionOr<void> Element::set_attribute_for_bindings(FlyString qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, String> const& value)
 {
     return set_attribute_for_bindings(move(qualified_name),
@@ -365,8 +365,7 @@ WebIDL::ExceptionOr<QualifiedName> validate_and_extract(JS::Realm& realm, Option
     return QualifiedName { local_name, prefix, namespace_ };
 }
 
-// FIXME: Trusted Types integration with DOM is still under review https://github.com/whatwg/dom/pull/1268
-// https://whatpr.org/dom/1268.html#dom-element-setattributens
+// https://dom.spec.whatwg.org/#dom-element-setattributens
 WebIDL::ExceptionOr<void> Element::set_attribute_ns_for_bindings(Optional<FlyString> const& namespace_, FlyString const& qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> const& value)
 {
     // 1. Let (namespace, prefix, localName) be the result of validating and extracting namespace and qualifiedName given "element".
@@ -378,9 +377,7 @@ WebIDL::ExceptionOr<void> Element::set_attribute_ns_for_bindings(Optional<FlyStr
         extracted_qualified_name.local_name(),
         extracted_qualified_name.namespace_().has_value() ? Utf16String::from_utf8(extracted_qualified_name.namespace_().value()) : Optional<Utf16String>(),
         *this,
-        value.visit(
-            [](auto const& trusted_type) -> Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> { return trusted_type; },
-            [](String const& string) -> Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> { return Utf16String::from_utf8(string); })));
+        value));
 
     // 3. Set an attribute value for this using localName, verifiedValue, and also prefix and namespace.
     set_attribute_value(extracted_qualified_name.local_name(), verified_value.to_utf8_but_should_be_ported_to_utf16(), extracted_qualified_name.prefix(), extracted_qualified_name.namespace_());
@@ -4217,19 +4214,14 @@ void Element::play_or_cancel_animations_after_display_property_change()
 
     auto has_display_none_inclusive_ancestor = this->has_inclusive_ancestor_with_display_none();
 
-    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<Animations::Animation>>& animations, Optional<CSS::PseudoElement> pseudo_element) {
+    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<Animations::Animation>>& animations) {
         for (auto& [_, animation] : animations) {
             if (has_display_none_inclusive_ancestor) {
                 animation->cancel();
             } else {
-                auto play_state { CSS::AnimationPlayState::Running };
-                if (auto play_state_property = cascaded_properties(pseudo_element)->property(CSS::PropertyID::AnimationPlayState);
-                    play_state_property && play_state_property->is_keyword()) {
-                    if (auto play_state_value = keyword_to_animation_play_state(
-                            play_state_property->to_keyword());
-                        play_state_value.has_value())
-                        play_state = *play_state_value;
-                }
+                // NOTE: It is safe to assume this has a value as it is set when creating a CSS defined animation
+                auto play_state = animation->last_css_animation_play_state().value();
+
                 if (play_state == CSS::AnimationPlayState::Running) {
                     HTML::TemporaryExecutionContext context(realm());
                     animation->play().release_value_but_fixme_should_propagate_errors();
@@ -4241,11 +4233,11 @@ void Element::play_or_cancel_animations_after_display_property_change()
         }
     };
 
-    play_or_cancel_depending_on_display(*css_defined_animations({}), {});
+    play_or_cancel_depending_on_display(*css_defined_animations({}));
 
     for (auto i = 0; i < to_underlying(CSS::PseudoElement::KnownPseudoElementCount); i++) {
         auto pseudo_element = static_cast<CSS::PseudoElement>(i);
-        play_or_cancel_depending_on_display(*css_defined_animations(pseudo_element), pseudo_element);
+        play_or_cancel_depending_on_display(*css_defined_animations(pseudo_element));
     }
 }
 
@@ -4318,6 +4310,19 @@ GC::Ref<CSS::StylePropertyMapReadOnly> Element::computed_style_map()
 
     // 2. Return this’s [[computedStyleMapCache]] internal slot.
     return *m_computed_style_map_cache;
+}
+
+double Element::ensure_css_random_base_value(CSS::RandomCachingKey const& random_caching_key)
+{
+    // NB: We cache element-shared random base values on the Document and non-element-shared ones on the Element itself
+    //     so that when an element is removed it takes its non-shared cache with it.
+    if (!random_caching_key.element_id.has_value())
+        return document().ensure_element_shared_css_random_base_value(random_caching_key);
+
+    return m_element_specific_css_random_base_value_cache.ensure(random_caching_key, []() {
+        static XorShift128PlusRNG random_number_generator;
+        return random_number_generator.get();
+    });
 }
 
 // The element to inherit style from.

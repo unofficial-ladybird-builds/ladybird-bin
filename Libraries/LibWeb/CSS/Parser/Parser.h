@@ -40,8 +40,6 @@
 
 namespace Web::CSS::Parser {
 
-class PropertyDependencyNode;
-
 namespace CalcParsing {
 
 struct Operator {
@@ -79,6 +77,7 @@ enum SpecialContext : u8 {
     CubicBezierFunctionXCoordinate,
     DOMMatrixInitString,
     MediaCondition,
+    RandomValueSharingFixedValue,
     ShadowBlurRadius,
     StepsIntervalsJumpNone,
     StepsIntervalsNormal,
@@ -357,10 +356,9 @@ private:
 
     RefPtr<FitContentStyleValue const> parse_fit_content_value(TokenStream<ComponentValue>&);
 
-    template<typename TElement>
-    Optional<Vector<TElement>> parse_color_stop_list(TokenStream<ComponentValue>& tokens, auto parse_position);
-    Optional<Vector<LinearColorStopListElement>> parse_linear_color_stop_list(TokenStream<ComponentValue>&);
-    Optional<Vector<AngularColorStopListElement>> parse_angular_color_stop_list(TokenStream<ComponentValue>&);
+    Optional<Vector<ColorStopListElement>> parse_color_stop_list(TokenStream<ComponentValue>& tokens, auto parse_position);
+    Optional<Vector<ColorStopListElement>> parse_linear_color_stop_list(TokenStream<ComponentValue>&);
+    Optional<Vector<ColorStopListElement>> parse_angular_color_stop_list(TokenStream<ComponentValue>&);
     Optional<InterpolationMethod> parse_interpolation_method(TokenStream<ComponentValue>&);
 
     RefPtr<LinearGradientStyleValue const> parse_linear_gradient_function(TokenStream<ComponentValue>&);
@@ -381,6 +379,7 @@ private:
     RefPtr<CustomIdentStyleValue const> parse_custom_ident_value(TokenStream<ComponentValue>&, ReadonlySpan<StringView> blacklist);
     Optional<FlyString> parse_dashed_ident(TokenStream<ComponentValue>&);
     RefPtr<CustomIdentStyleValue const> parse_dashed_ident_value(TokenStream<ComponentValue>&);
+    RefPtr<RandomValueSharingStyleValue const> parse_random_value_sharing(TokenStream<ComponentValue>&);
     // NOTE: Implemented in generated code. (GenerateCSSMathFunctions.cpp)
     RefPtr<CalculationNode const> parse_math_function(Function const&, CalculationContext const&);
     RefPtr<CalculationNode const> parse_a_calc_function_node(Function const&, CalculationContext const&);
@@ -448,8 +447,8 @@ private:
     RefPtr<ViewFunctionStyleValue const> parse_view_function_value(TokenStream<ComponentValue>&);
 
     using ParseFunction = AK::Function<RefPtr<StyleValue const>(TokenStream<ComponentValue>&)>;
-    RefPtr<StyleValue const> parse_comma_separated_value_list(TokenStream<ComponentValue>&, ParseFunction);
-    RefPtr<StyleValue const> parse_simple_comma_separated_value_list(PropertyID, TokenStream<ComponentValue>&);
+    RefPtr<StyleValueList const> parse_comma_separated_value_list(TokenStream<ComponentValue>&, ParseFunction);
+    RefPtr<StyleValueList const> parse_simple_comma_separated_value_list(PropertyID, TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_coordinating_value_list_shorthand(TokenStream<ComponentValue>&, PropertyID shorthand_id, Vector<PropertyID> const& longhand_ids, Vector<PropertyID> const& reset_only_longhand_ids);
     RefPtr<StyleValue const> parse_all_as_single_keyword_value(TokenStream<ComponentValue>&, Keyword);
 
@@ -540,7 +539,7 @@ private:
     RefPtr<StyleValue const> parse_will_change_value(TokenStream<ComponentValue>&);
 
     RefPtr<CalculationNode const> convert_to_calculation_node(CalcParsing::Node const&, CalculationContext const&);
-    RefPtr<CalculationNode const> parse_a_calculation(Vector<ComponentValue> const&, CalculationContext const&);
+    RefPtr<CalculationNode const> parse_a_calculation(TokenStream<ComponentValue>&, CalculationContext const&);
 
     ParseErrorOr<NonnullRefPtr<Selector>> parse_complex_selector(TokenStream<ComponentValue>&, SelectorType);
     ParseErrorOr<Optional<Selector::CompoundSelector>> parse_compound_selector(TokenStream<ComponentValue>&);
@@ -588,13 +587,22 @@ private:
     TokenStream<Token> m_token_stream;
 
     Vector<ValueParsingContext> m_value_context;
+    size_t m_random_function_index = 0;
     auto push_temporary_value_parsing_context(ValueParsingContext&& context)
     {
         m_value_context.append(context);
-        return ScopeGuard { [&] { m_value_context.take_last(); } };
+        return ScopeGuard { [&] {
+            auto removed_context = m_value_context.take_last();
+
+            // Reset the random function index when we leave the top-level property parsing context
+            if (removed_context.has<PropertyID>() && !m_value_context.find_first_index_if([](ValueParsingContext context) { return context.has<PropertyID>(); }).has_value())
+                m_random_function_index = 0;
+        } };
     }
     bool context_allows_quirky_length() const;
     bool context_allows_tree_counting_functions() const;
+    bool context_allows_random_functions() const;
+    FlyString random_value_sharing_auto_name() const;
 
     Vector<RuleContext> m_rule_context;
     HashTable<FlyString> m_declared_namespaces;

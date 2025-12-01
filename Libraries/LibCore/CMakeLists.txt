@@ -1,12 +1,14 @@
 # These are the minimal set of sources needed to build the code generators. We separate them to allow
 # LibCore to depend on generated sources.
 set(SOURCES
+    AddressInfoVector.cpp
     ArgsParser.cpp
     Directory.cpp
     DirectoryEntry.cpp
     DirIterator.cpp
     Environment.cpp
     File.cpp
+    SocketAddress.cpp
     StandardPaths.cpp
     Version.cpp
 )
@@ -146,7 +148,6 @@ if (ANDROID)
 endif()
 
 if (ENABLE_SWIFT)
-    set(SWIFT_EXCLUDE_HEADERS "SocketAddressWindows.h")
     if(WIN32)
         list(APPEND SWIFT_EXCLUDE_HEADERS "EventLoopImplementationUnix.h")
     else()

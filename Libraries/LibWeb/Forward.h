@@ -350,6 +350,7 @@ class PercentageStyleValue;
 class PositionStyleValue;
 class PropertyNameAndID;
 class RadialGradientStyleValue;
+class RandomValueSharingStyleValue;
 class Ratio;
 class RatioStyleValue;
 class RectStyleValue;
@@ -401,6 +402,7 @@ enum class PropertyID : u16;
 enum class PaintOrder : u8;
 enum class ValueType : u8;
 enum class AnimatedPropertyResultOfTransition : u8;
+enum class AnimationPlayState : u8;
 
 struct BackgroundLayerData;
 struct CalculationContext;
@@ -408,6 +410,7 @@ struct CalculationResolutionContext;
 struct CSSStyleSheetInit;
 struct GridRepeatParams;
 struct LogicalAliasMappingContext;
+struct RandomCachingKey;
 struct StyleSheetIdentifier;
 
 using PaintOrderList = Array<PaintOrder, 3>;
