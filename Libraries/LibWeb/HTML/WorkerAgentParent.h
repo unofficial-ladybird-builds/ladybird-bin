@@ -10,14 +10,13 @@
 #include <LibWeb/Bindings/RequestPrototype.h>
 #include <LibWeb/Bindings/WorkerPrototype.h>
 #include <LibWeb/Forward.h>
-#include <LibWeb/Worker/WebWorkerClient.h>
 
 namespace Web::HTML {
 
 struct WorkerOptions {
+    String name { String {} };
     Bindings::WorkerType type { Bindings::WorkerType::Classic };
     Bindings::RequestCredentials credentials { Bindings::RequestCredentials::SameOrigin };
-    String name { String {} };
 };
 
 // FIXME: Figure out a better naming convention for this type of parent/child process pattern.

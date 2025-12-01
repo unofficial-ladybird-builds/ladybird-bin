@@ -47,7 +47,7 @@ ErrorOr<void> close(int handle)
     return {};
 }
 
-ErrorOr<ssize_t> read(int handle, Bytes buffer)
+ErrorOr<size_t> read(int handle, Bytes buffer)
 {
     DWORD n_read = 0;
     if (!ReadFile(to_handle(handle), buffer.data(), buffer.size(), &n_read, NULL))
@@ -55,7 +55,7 @@ ErrorOr<ssize_t> read(int handle, Bytes buffer)
     return n_read;
 }
 
-ErrorOr<ssize_t> write(int handle, ReadonlyBytes buffer)
+ErrorOr<size_t> write(int handle, ReadonlyBytes buffer)
 {
     DWORD n_written = 0;
     if (!WriteFile(to_handle(handle), buffer.data(), buffer.size(), &n_written, NULL))
@@ -254,17 +254,39 @@ ErrorOr<int> accept(int sockfd, struct sockaddr* addr, socklen_t* addr_size)
     return fd;
 }
 
-ErrorOr<ssize_t> sendto(int sockfd, void const* source, size_t source_length, int flags, struct sockaddr const* destination, socklen_t destination_length)
+ErrorOr<void> connect(int sockfd, struct sockaddr const* address, socklen_t address_length)
 {
-    auto sent = ::sendto(sockfd, static_cast<char const*>(source), source_length, flags, destination, destination_length);
+    if (::connect(sockfd, address, address_length) == SOCKET_ERROR)
+        return Error::from_windows_error();
+    return {};
+}
+
+ErrorOr<size_t> send(int sockfd, ReadonlyBytes data, int flags)
+{
+    auto sent = ::send(sockfd, reinterpret_cast<char const*>(data.data()), static_cast<int>(data.size()), flags);
+
+    if (sent == SOCKET_ERROR) {
+        auto error = WSAGetLastError();
+
+        return error == WSAEWOULDBLOCK
+            ? Error::from_errno(EWOULDBLOCK)
+            : Error::from_windows_error(error);
+    }
+
+    return sent;
+}
+
+ErrorOr<size_t> sendto(int sockfd, ReadonlyBytes data, int flags, struct sockaddr const* destination, socklen_t destination_length)
+{
+    auto sent = ::sendto(sockfd, reinterpret_cast<char const*>(data.data()), static_cast<int>(data.size()), flags, destination, destination_length);
     if (sent == SOCKET_ERROR)
         return Error::from_windows_error();
     return sent;
 }
 
-ErrorOr<ssize_t> recvfrom(int sockfd, void* buffer, size_t buffer_length, int flags, struct sockaddr* address, socklen_t* address_length)
+ErrorOr<size_t> recvfrom(int sockfd, Bytes buffer, int flags, struct sockaddr* address, socklen_t* address_length)
 {
-    auto received = ::recvfrom(sockfd, static_cast<char*>(buffer), buffer_length, flags, address, address_length);
+    auto received = ::recvfrom(sockfd, reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()), flags, address, address_length);
     if (received == SOCKET_ERROR)
         return Error::from_windows_error();
     return received;
@@ -361,13 +383,6 @@ ErrorOr<AddressInfoVector> getaddrinfo(char const* nodename, char const* servnam
     return AddressInfoVector { move(addresses), results };
 }
 
-ErrorOr<void> connect(int socket, struct sockaddr const* address, socklen_t address_length)
-{
-    if (::connect(socket, address, address_length) == SOCKET_ERROR)
-        return Error::from_windows_error();
-    return {};
-}
-
 ErrorOr<void> kill(pid_t pid, int signal)
 {
     if (signal == SIGTERM) {
@@ -389,12 +404,25 @@ ErrorOr<void> kill(pid_t pid, int signal)
 
 ErrorOr<size_t> transfer_file_through_pipe(int source_fd, int target_fd, size_t source_offset, size_t source_length)
 {
-    (void)source_fd;
-    (void)target_fd;
-    (void)source_offset;
-    (void)source_length;
+    // FIXME: We could use TransmitFile (https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-transmitfile)
+    //        here. But in order to transmit a subset of the file, we have to use overlapped IO.
 
-    return Error::from_string_literal("FIXME: Implement System::transfer_file_through_pipe on Windows (for HTTP disk cache)");
+    static auto allocation_granularity = []() {
+        SYSTEM_INFO system_info {};
+        GetSystemInfo(&system_info);
+
+        return system_info.dwAllocationGranularity;
+    }();
+
+    // MapViewOfFile requires the offset to be aligned to the system allocation granularity, so we must handle that here.
+    auto aligned_source_offset = (source_offset / allocation_granularity) * allocation_granularity;
+    auto offset_adjustment = source_offset - aligned_source_offset;
+    auto mapped_source_length = source_length + offset_adjustment;
+
+    auto* mapped = TRY(mmap(nullptr, mapped_source_length, PROT_READ, MAP_SHARED, source_fd, aligned_source_offset));
+    ScopeGuard guard { [&]() { (void)munmap(mapped, mapped_source_length); } };
+
+    return send(target_fd, { static_cast<u8*>(mapped) + offset_adjustment, source_length }, 0);
 }
 
 }

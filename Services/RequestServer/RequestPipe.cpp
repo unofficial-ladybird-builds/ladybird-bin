@@ -56,16 +56,10 @@ ErrorOr<RequestPipe> RequestPipe::create()
 #endif
 }
 
-ErrorOr<ssize_t> RequestPipe::write(ReadonlyBytes bytes)
+ErrorOr<size_t> RequestPipe::write(ReadonlyBytes bytes)
 {
 #if defined(AK_OS_WINDOWS)
-    auto sent = ::send(m_writer_fd, reinterpret_cast<char const*>(bytes.data()), bytes.size(), 0);
-    if (sent == SOCKET_ERROR) {
-        if (WSAGetLastError() == WSAEWOULDBLOCK)
-            return Error::from_errno(EWOULDBLOCK);
-        return Error::from_windows_error();
-    }
-    return sent;
+    return Core::System::send(m_writer_fd, bytes, 0);
 #else
     return Core::System::write(m_writer_fd, bytes);
 #endif
