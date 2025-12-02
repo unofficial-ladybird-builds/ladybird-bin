@@ -117,8 +117,8 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     bool log_all_js_exceptions = false;
     bool disable_site_isolation = false;
     bool enable_idl_tracing = false;
-    bool disable_http_cache = false;
-    bool enable_http_disk_cache = false;
+    bool disable_http_memory_cache = false;
+    bool disable_http_disk_cache = false;
     bool disable_content_filter = false;
     bool enable_autoplay = false;
     bool expose_internals_object = false;
@@ -168,8 +168,8 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     args_parser.add_option(log_all_js_exceptions, "Log all JavaScript exceptions", "log-all-js-exceptions");
     args_parser.add_option(disable_site_isolation, "Disable site isolation", "disable-site-isolation");
     args_parser.add_option(enable_idl_tracing, "Enable IDL tracing", "enable-idl-tracing");
-    args_parser.add_option(disable_http_cache, "Disable HTTP cache", "disable-http-cache");
-    args_parser.add_option(enable_http_disk_cache, "Enable HTTP disk cache", "enable-http-disk-cache");
+    args_parser.add_option(disable_http_memory_cache, "Disable HTTP memory cache", "disable-http-memory-cache");
+    args_parser.add_option(disable_http_disk_cache, "Disable HTTP disk cache", "disable-http-disk-cache");
     args_parser.add_option(disable_content_filter, "Disable content filter", "disable-content-filter");
     args_parser.add_option(enable_autoplay, "Enable multimedia autoplay", "enable-autoplay");
     args_parser.add_option(expose_internals_object, "Expose internals object", "expose-internals-object");
@@ -214,8 +214,10 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
 
     // Our persisted SQL storage assumes it runs in a singleton process. If we have multiple UI processes accessing
     // the same underlying database, one of them is likely to fail.
-    if (force_new_process)
+    if (force_new_process) {
         disable_sql_database = true;
+        disable_http_disk_cache = true;
+    }
 
     if (!dns_server_port.has_value())
         dns_server_port = use_dns_over_tls ? 853 : 53;
@@ -262,7 +264,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
 
     m_request_server_options = {
         .certificates = move(certificates),
-        .http_disk_cache_mode = enable_http_disk_cache ? HTTPDiskCacheMode::Enabled : HTTPDiskCacheMode::Disabled,
+        .http_disk_cache_mode = disable_http_disk_cache ? HTTPDiskCacheMode::Disabled : HTTPDiskCacheMode::Enabled,
     };
 
     m_web_content_options = {
@@ -273,7 +275,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
         .log_all_js_exceptions = log_all_js_exceptions ? LogAllJSExceptions::Yes : LogAllJSExceptions::No,
         .disable_site_isolation = disable_site_isolation ? DisableSiteIsolation::Yes : DisableSiteIsolation::No,
         .enable_idl_tracing = enable_idl_tracing ? EnableIDLTracing::Yes : EnableIDLTracing::No,
-        .enable_http_cache = disable_http_cache ? EnableHTTPCache::No : EnableHTTPCache::Yes,
+        .enable_http_memory_cache = disable_http_memory_cache ? EnableMemoryHTTPCache::No : EnableMemoryHTTPCache::Yes,
         .expose_internals_object = expose_internals_object ? ExposeInternalsObject::Yes : ExposeInternalsObject::No,
         .force_cpu_painting = force_cpu_painting ? ForceCPUPainting::Yes : ForceCPUPainting::No,
         .force_fontconfig = force_fontconfig ? ForceFontconfig::Yes : ForceFontconfig::No,

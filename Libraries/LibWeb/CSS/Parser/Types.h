@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2024-2025, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +8,7 @@
 
 #include <AK/FlyString.h>
 #include <AK/Function.h>
+#include <AK/OwnPtr.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <LibWeb/CSS/Parser/Token.h>
@@ -55,10 +56,8 @@ struct Declaration {
     FlyString name;
     Vector<ComponentValue> value;
     Important important = Important::No;
-    Optional<String> original_text = {};
-
-    // FIXME: Only needed by our janky @supports re-serialization-re-parse code.
-    String to_string() const;
+    Optional<String> original_value_text = {};
+    Optional<String> original_full_text = {};
 };
 
 struct SubstitutionFunctionsPresence {

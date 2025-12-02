@@ -192,14 +192,17 @@ RefPtr<Supports> Parser::parse_as_supports()
 template<typename T>
 RefPtr<Supports> Parser::parse_a_supports(TokenStream<T>& tokens)
 {
+    auto transaction = tokens.begin_transaction();
     auto component_values = parse_a_list_of_component_values(tokens);
     TokenStream<ComponentValue> token_stream { component_values };
     m_rule_context.append(RuleContext::SupportsCondition);
     auto maybe_condition = parse_boolean_expression(token_stream, MatchResult::False, [this](auto& tokens) { return parse_supports_feature(tokens); });
     m_rule_context.take_last();
     token_stream.discard_whitespace();
-    if (maybe_condition && !token_stream.has_next_token())
+    if (maybe_condition && !token_stream.has_next_token()) {
+        transaction.commit();
         return Supports::create(maybe_condition.release_nonnull());
+    }
 
     return {};
 }
@@ -332,14 +335,9 @@ OwnPtr<BooleanExpression> Parser::parse_supports_feature(TokenStream<ComponentVa
     // `<supports-decl> = ( <declaration> )`
     if (first_token.is_block() && first_token.block().is_paren()) {
         TokenStream block_tokens { first_token.block().value };
-        // FIXME: Parsing and then converting back to a string is weird.
-        if (auto declaration = consume_a_declaration(block_tokens); declaration.has_value() && !block_tokens.has_next_token()) {
+        if (auto declaration = parse_supports_declaration(block_tokens)) {
             transaction.commit();
-            auto supports_declaration = Supports::Declaration::create(
-                declaration->to_string(),
-                convert_to_style_property(*declaration).has_value());
-
-            return BooleanExpressionInParens::create(supports_declaration.release_nonnull<BooleanExpression>());
+            return BooleanExpressionInParens::create(declaration.release_nonnull<BooleanExpression>());
         }
     }
 
@@ -390,6 +388,23 @@ OwnPtr<BooleanExpression> Parser::parse_supports_feature(TokenStream<ComponentVa
         return Supports::FontFormat::create(move(format_name), matches);
     }
 
+    return {};
+}
+
+// https://drafts.csswg.org/css-conditional-5/#typedef-supports-decl
+OwnPtr<Supports::Declaration> Parser::parse_supports_declaration(TokenStream<ComponentValue>& tokens)
+{
+    // `<supports-decl> = ( <declaration> )`
+    // NB: Here, we only care about the <declaration> part.
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+    if (auto declaration = consume_a_declaration(tokens, Nested::No, SaveOriginalText::Yes); declaration.has_value()) {
+        tokens.discard_whitespace();
+        if (!tokens.has_next_token()) {
+            transaction.commit();
+            return Supports::Declaration::create(declaration->original_full_text.release_value(), convert_to_style_property(*declaration).has_value());
+        }
+    }
     return {};
 }
 
@@ -1027,7 +1042,7 @@ void Parser::consume_a_function_and_do_nothing(TokenStream<Token>& input)
 
 // https://drafts.csswg.org/css-syntax/#consume-declaration
 template<typename T>
-Optional<Declaration> Parser::consume_a_declaration(TokenStream<T>& input, Nested nested)
+Optional<Declaration> Parser::consume_a_declaration(TokenStream<T>& input, Nested nested, SaveOriginalText save_full_text)
 {
     // To consume a declaration from a token stream input, given an optional bool nested (default false):
 
@@ -1039,6 +1054,7 @@ Optional<Declaration> Parser::consume_a_declaration(TokenStream<T>& input, Neste
         .name {},
         .value {},
     };
+    auto start_token_index = input.current_index();
 
     // 1. If the next token is an <ident-token>, consume a token from input and set decl’s name to the token’s value.
     if (input.next_token().is(Token::Type::Ident)) {
@@ -1146,7 +1162,7 @@ Optional<Declaration> Parser::consume_a_declaration(TokenStream<T>& input, Neste
         for (auto const& value : declaration.value) {
             original_text.append(value.original_source_text());
         }
-        declaration.original_text = original_text.to_string_without_validation();
+        declaration.original_value_text = original_text.to_string_without_validation();
     }
     //    Otherwise, if decl’s value contains a top-level simple block with an associated token of <{-token>,
     //    and also contains any other non-<whitespace-token> value, return nothing.
@@ -1162,8 +1178,17 @@ Optional<Declaration> Parser::consume_a_declaration(TokenStream<T>& input, Neste
     }
 
     // 9. If decl is valid in the current context, return it; otherwise return nothing.
-    if (is_valid_in_the_current_context(declaration))
+    if (is_valid_in_the_current_context(declaration)) {
+        // AD-HOC: Assemble source tokens.
+        if (save_full_text == SaveOriginalText::Yes) {
+            StringBuilder original_full_text;
+            for (auto& token : input.tokens_since(start_token_index))
+                original_full_text.append(token.to_string());
+
+            declaration.original_full_text = original_full_text.to_string_without_validation();
+        }
         return declaration;
+    }
     return {};
 }
 
@@ -1632,7 +1657,7 @@ Optional<StylePropertyAndName> Parser::convert_to_style_property(Declaration con
     }
 
     auto value_token_stream = TokenStream(declaration.value);
-    auto value = parse_css_value(property->id(), value_token_stream, declaration.original_text);
+    auto value = parse_css_value(property->id(), value_token_stream, declaration.original_value_text);
     if (value.is_error()) {
         if (value.error() == ParseError::SyntaxError) {
             ErrorReporter::the().report(InvalidPropertyError {
@@ -1914,8 +1939,8 @@ template Vector<RuleOrListOfDeclarations> Parser::consume_a_blocks_contents(Toke
 template Vector<ComponentValue> Parser::consume_a_list_of_component_values(TokenStream<ComponentValue>&, Optional<Token::Type>, Nested);
 template Vector<ComponentValue> Parser::consume_a_list_of_component_values(TokenStream<Token>&, Optional<Token::Type>, Nested);
 
-template Optional<Declaration> Parser::consume_a_declaration(TokenStream<Token>&, Nested);
-template Optional<Declaration> Parser::consume_a_declaration(TokenStream<ComponentValue>&, Nested);
+template Optional<Declaration> Parser::consume_a_declaration(TokenStream<Token>&, Nested, SaveOriginalText);
+template Optional<Declaration> Parser::consume_a_declaration(TokenStream<ComponentValue>&, Nested, SaveOriginalText);
 
 template void Parser::consume_the_remnants_of_a_bad_declaration(TokenStream<Token>&, Nested);
 template void Parser::consume_the_remnants_of_a_bad_declaration(TokenStream<ComponentValue>&, Nested);
