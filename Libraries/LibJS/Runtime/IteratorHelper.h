@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2023-2025, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -19,27 +19,23 @@ class IteratorHelper final : public GeneratorObject {
     GC_DECLARE_ALLOCATOR(IteratorHelper);
 
 public:
-    using Closure = GC::Function<ThrowCompletionOr<Value>(VM&, IteratorHelper&)>;
-    using AbruptClosure = GC::Function<ThrowCompletionOr<Value>(VM&, IteratorHelper&, Completion const&)>;
+    using Closure = GC::Function<ThrowCompletionOr<IterationResult>(VM&, IteratorHelper&)>;
+    using AbruptClosure = GC::Function<ThrowCompletionOr<Value>(VM&, Completion const&)>;
 
-    static ThrowCompletionOr<GC::Ref<IteratorHelper>> create(Realm&, GC::Ref<IteratorRecord>, GC::Ref<Closure>, GC::Ptr<AbruptClosure> = {});
+    static GC::Ref<IteratorHelper> create(Realm&, ReadonlySpan<GC::Ref<IteratorRecord>>, GC::Ref<Closure>, GC::Ptr<AbruptClosure> = {});
 
-    IteratorRecord& underlying_iterator() { return m_underlying_iterator; }
-    IteratorRecord const& underlying_iterator() const { return m_underlying_iterator; }
+    ReadonlySpan<GC::Ref<IteratorRecord>> underlying_iterators() const { return m_underlying_iterators; }
 
     size_t counter() const { return m_counter; }
     void increment_counter() { ++m_counter; }
 
-    Value result(Value);
-    ThrowCompletionOr<Value> close_result(VM&, Completion);
-
 private:
-    IteratorHelper(Realm&, Object& prototype, GC::Ref<IteratorRecord>, GC::Ref<Closure>, GC::Ptr<AbruptClosure>);
+    IteratorHelper(Realm&, Object& prototype, ReadonlySpan<GC::Ref<IteratorRecord>>, GC::Ref<Closure>, GC::Ptr<AbruptClosure>);
 
     virtual void visit_edges(Visitor&) override;
     virtual ThrowCompletionOr<IterationResult> execute(VM&, JS::Completion const& completion) override;
 
-    GC::Ref<IteratorRecord> m_underlying_iterator; // [[UnderlyingIterator]]
+    Vector<GC::Ref<IteratorRecord>> m_underlying_iterators; // [[UnderlyingIterators]]
     GC::Ref<Closure> m_closure;
     GC::Ptr<AbruptClosure> m_abrupt_closure;
 

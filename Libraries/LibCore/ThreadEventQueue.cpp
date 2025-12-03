@@ -21,22 +21,28 @@ struct ThreadEventQueue::Private {
         AK_MAKE_DEFAULT_MOVABLE(QueuedEvent);
 
     public:
-        QueuedEvent(RefPtr<EventReceiver> const& receiver, NonnullOwnPtr<Event> event)
+        QueuedEvent(RefPtr<EventReceiver> const& receiver, Event::Type event_type)
             : receiver(receiver)
-            , event(move(event))
+            , event_type(event_type)
+        {
+        }
+
+        QueuedEvent(Function<void()>&& invokee)
+            : m_invokee(move(invokee))
+            , event_type(Event::Type::DeferredInvoke)
         {
         }
 
         ~QueuedEvent() = default;
 
         WeakPtr<EventReceiver> receiver;
-        NonnullOwnPtr<Event> event;
+        Function<void()> m_invokee;
+        u8 event_type { Event::Type::Invalid };
     };
 
     Threading::Mutex mutex;
     Vector<QueuedEvent> queued_events;
     Vector<NonnullRefPtr<Promise<NonnullRefPtr<EventReceiver>>>, 16> pending_promises;
-    bool warned_promise_count { false };
 };
 
 static pthread_key_t s_current_thread_event_queue_key;
@@ -66,11 +72,20 @@ ThreadEventQueue::ThreadEventQueue()
 
 ThreadEventQueue::~ThreadEventQueue() = default;
 
-void ThreadEventQueue::post_event(Core::EventReceiver* receiver, NonnullOwnPtr<Core::Event> event)
+void ThreadEventQueue::post_event(Core::EventReceiver* receiver, Core::Event::Type event_type)
 {
     {
         Threading::MutexLocker lock(m_private->mutex);
-        m_private->queued_events.empend(receiver, move(event));
+        m_private->queued_events.empend(receiver, event_type);
+    }
+    Core::EventLoopManager::the().did_post_event();
+}
+
+void ThreadEventQueue::deferred_invoke(Function<void()>&& invokee)
+{
+    {
+        Threading::MutexLocker lock(m_private->mutex);
+        m_private->queued_events.empend(move(invokee));
     }
     Core::EventLoopManager::the().did_post_event();
 }
@@ -99,37 +114,32 @@ size_t ThreadEventQueue::process()
         m_private->pending_promises.remove_all_matching([](auto& job) { return job->is_resolved() || job->is_rejected(); });
     }
 
-    size_t processed_events = 0;
-    for (size_t i = 0; i < events.size(); ++i) {
-        auto& queued_event = events.at(i);
-        auto receiver = queued_event.receiver.strong_ref();
-        auto& event = *queued_event.event;
-
-        if (event.type() == Event::Type::DeferredInvoke) {
-            static_cast<DeferredInvocationEvent&>(event).m_invokee();
-        } else if (!receiver) {
-            switch (event.type()) {
-            case Event::Quit:
-                VERIFY_NOT_REACHED();
-            default:
-                // Receiver disappeared, drop the event on the floor.
+    for (auto& queued_event : events) {
+        if (auto receiver = queued_event.receiver.strong_ref()) {
+            switch (queued_event.event_type) {
+            case Event::Type::Timer: {
+                TimerEvent timer_event;
+                receiver->dispatch_event(timer_event);
                 break;
             }
+            case Event::Type::NotifierActivation: {
+                NotifierActivationEvent notifier_activation_event;
+                receiver->dispatch_event(notifier_activation_event);
+                break;
+            }
+            default:
+                VERIFY_NOT_REACHED();
+            }
         } else {
-            NonnullRefPtr<EventReceiver> protector(*receiver);
-            receiver->dispatch_event(event);
+            if (queued_event.event_type == Event::Type::DeferredInvoke) {
+                queued_event.m_invokee();
+            } else {
+                // Receiver gone, drop the event.
+            }
         }
-        ++processed_events;
     }
 
-    {
-        Threading::MutexLocker locker(m_private->mutex);
-        if (m_private->pending_promises.size() > 30 && !m_private->warned_promise_count) {
-            m_private->warned_promise_count = true;
-            dbgln("ThreadEventQueue::process: Job queue wasn't designed for this load ({} promises)", m_private->pending_promises.size());
-        }
-    }
-    return processed_events;
+    return events.size();
 }
 
 bool ThreadEventQueue::has_pending_events() const

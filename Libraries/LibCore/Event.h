@@ -19,7 +19,6 @@ class Event {
 public:
     enum Type : u8 {
         Invalid = 0,
-        Quit,
         Timer,
         NotifierActivation,
         DeferredInvoke,
@@ -41,21 +40,6 @@ public:
 private:
     unsigned m_type { Type::Invalid };
     bool m_accepted { true };
-};
-
-class DeferredInvocationEvent : public Event {
-    friend class EventLoop;
-    friend class ThreadEventQueue;
-
-public:
-    DeferredInvocationEvent(Function<void()>&& invokee)
-        : Event(Event::Type::DeferredInvoke)
-        , m_invokee(move(invokee))
-    {
-    }
-
-private:
-    Function<void()> m_invokee;
 };
 
 class TimerEvent final : public Event {
