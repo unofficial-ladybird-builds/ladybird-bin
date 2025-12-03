@@ -2672,7 +2672,7 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
     auto dispatch_event = [&](FlyString const& type, Interval interval) {
         // The target for a transition event is the transition’s owning element. If there is no owning element,
         // no transition events are dispatched.
-        if (!transition->effect() || !transition->owning_element())
+        if (!transition->effect() || !transition->owning_element().has_value())
             return;
 
         auto effect = transition->effect();
@@ -2692,17 +2692,19 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
 
         append_pending_animation_event({
             .event = CSS::TransitionEvent::create(
-                transition->owning_element()->realm(),
+                transition->owning_element()->element().realm(),
                 type,
                 CSS::TransitionEventInit {
                     { .bubbles = true },
-                    // FIXME: Correctly set pseudo_element
                     MUST(String::from_utf8(transition->transition_property())),
                     elapsed_time,
-                    String {},
+                    transition->owning_element()->pseudo_element().map([](auto it) {
+                                                                      return MUST(String::formatted("::{}", CSS::pseudo_element_name(it)));
+                                                                  })
+                        .value_or({}),
                 }),
             .animation = transition,
-            .target = *transition->owning_element(),
+            .target = transition->owning_element()->element(),
             .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
         });
     };
@@ -2785,12 +2787,16 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
 
         append_pending_animation_event({
             .event = CSS::AnimationEvent::create(
-                owning_element->realm(),
+                owning_element->element().realm(),
                 name,
                 {
                     { .bubbles = true },
                     css_animation.animation_name(),
                     elapsed_time_seconds,
+                    owning_element->pseudo_element().map([](auto it) {
+                                                        return MUST(String::formatted("::{}", CSS::pseudo_element_name(it)));
+                                                    })
+                        .value_or({}),
                 }),
             .animation = css_animation,
             .target = *target,
