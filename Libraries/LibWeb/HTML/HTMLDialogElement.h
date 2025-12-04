@@ -56,8 +56,13 @@ private:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
 
+    virtual void inserted() override;
+    virtual void attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override;
+
     void queue_a_dialog_toggle_event_task(String old_state, String new_state, GC::Ptr<DOM::Element> source);
 
+    void run_dialog_setup_steps();
+    void run_dialog_cleanup_steps();
     void run_dialog_focusing_steps();
 
     void set_close_watcher();
@@ -69,6 +74,9 @@ private:
     Optional<String> m_request_close_return_value;
     GC::Ptr<DOM::Element> m_request_close_source_element;
     GC::Ptr<CloseWatcher> m_close_watcher;
+
+    // https://html.spec.whatwg.org/multipage/interactive-elements.html#enable-close-watcher-for-requestclose()
+    bool m_enable_close_watcher_for_request_close { false };
 
     // https://html.spec.whatwg.org/multipage/interactive-elements.html#dialog-toggle-task-tracker
     Optional<ToggleTaskTracker> m_dialog_toggle_task_tracker;
