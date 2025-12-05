@@ -12,6 +12,7 @@
 #include <AK/JsonObject.h>
 #include <AK/QuickSort.h>
 #include <LibCore/EventLoop.h>
+#include <LibCore/System.h>
 #include <LibGC/Heap.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font/FontDatabase.h>
@@ -540,7 +541,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, WebView::DOMNodePropert
     auto serialize_used_fonts = [&]() {
         JsonArray serialized;
 
-        properties->computed_font_list().for_each_font_entry([&](Gfx::FontCascadeList::Entry const& entry) {
+        properties->computed_font_list(node->document().font_computer())->for_each_font_entry([&](Gfx::FontCascadeList::Entry const& entry) {
             auto const& font = *entry.font;
 
             JsonObject font_object;

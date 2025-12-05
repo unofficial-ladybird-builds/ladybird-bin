@@ -806,7 +806,8 @@ void Navigation::abort_a_navigate_event(GC::Ref<NavigateEvent> event, GC::Ref<We
     if (!m_transition)
         return;
 
-    // FIXME: 8. Reject navigation's transition's committed promise with error.
+    // 8. Reject navigation's transition's committed promise with error.
+    WebIDL::reject_promise(realm(), m_transition->committed(), reason);
 
     // 9. Reject navigation's transition's finished promise with reason.
     WebIDL::reject_promise(realm(), m_transition->finished(), reason);
@@ -1123,13 +1124,20 @@ bool Navigation::inner_navigate_event_firing_algorithm(
         // 3. Assert: fromNHE is not null.
         VERIFY(from_nhe != nullptr);
 
-        // 4. Set navigation's transition to a new NavigationTransition created in navigation's relevant realm,
-        //    whose navigation type is navigationType, whose from entry is fromNHE, and whose finished promise is a new promise
-        //    created in navigation's relevant realm.
-        m_transition = NavigationTransition::create(realm, navigation_type, *from_nhe, WebIDL::create_promise(realm));
+        // 4. Set navigation's transition to a new NavigationTransition created in navigation's relevant realm, with
+        //    navigation type: navigationType
+        //    from entry: fromNHE
+        //    destination: event's destination
+        //    committed promise: a new promise created in navigation's relevant realm
+        //    finished promise: a new promise created in navigation's relevant realm
+        m_transition = NavigationTransition::create(realm, navigation_type, *from_nhe, event->destination(), WebIDL::create_promise(realm), WebIDL::create_promise(realm));
 
         // 5. Mark as handled navigation's transition's finished promise.
         WebIDL::mark_promise_as_handled(*m_transition->finished());
+
+        // AD-HOC: The current spec has changed significantly from what we implement here, but marks the committed
+        //         promise as handled at the equivalent place.
+        WebIDL::mark_promise_as_handled(*m_transition->committed());
 
         // 6. If navigationType is "traverse", then set navigation's suppress normal scroll restoration during ongoing navigation to true.
         // NOTE: If event's scroll behavior was set to "after-transition", then scroll restoration will happen as part of finishing
