@@ -49,7 +49,7 @@ describe("correct behavior", () => {
             "1 J, 2 Mon., 3 Wo., 3 Tg., 4 Std., 5 Min., 6 Sek., 7 ms, 8 μs und 9 ns"
         );
         expect(new Intl.DurationFormat("de", { style: "narrow" }).format(duration)).toBe(
-            "1 J, 2 M, 3 W, 3 T, 4 Std., 5 Min., 6 Sek., 7 ms, 8 μs und 9 ns"
+            "1 J, 2 M, 3 W, 3 T, 4h, 5 Min., 6 Sek., 7 ms, 8 μs und 9 ns"
         );
         expect(new Intl.DurationFormat("de", { style: "digital" }).format(duration)).toBe(
             "1 J, 2 Mon., 3 Wo., 3 Tg. und 4:05:06,007008009"
@@ -60,7 +60,7 @@ describe("correct behavior", () => {
                 nanoseconds: "numeric",
                 fractionalDigits: 3,
             }).format(duration)
-        ).toBe("1 J, 2 M, 3 W, 3 T, 4 Std., 5 Min., 6 Sek., 7 ms und 8,009 μs");
+        ).toBe("1 J, 2 M, 3 W, 3 T, 4h, 5 Min., 6 Sek., 7 ms und 8,009 μs");
     });
 
     test("always show time fields for digital style", () => {
@@ -173,12 +173,14 @@ describe("correct behavior", () => {
 });
 
 describe("errors", () => {
-    test("non-object duration records", () => {
+    test("format invalid string", () => {
         expect(() => {
             new Intl.DurationFormat().format("hello");
         }).toThrowWithMessage(RangeError, "Invalid duration string 'hello");
+    });
 
-        [-100, Infinity, NaN, 152n, Symbol("foo"), true, null, undefined].forEach(value => {
+    [-100, Infinity, NaN, 152n, Symbol("foo"), true, null, undefined].forEach(value => {
+        test(`format non-object ${String(value)}`, () => {
             expect(() => {
                 new Intl.DurationFormat().format(value);
             }).toThrowWithMessage(TypeError, "is not a string");
@@ -195,19 +197,19 @@ describe("errors", () => {
         }).toThrowWithMessage(TypeError, "Invalid duration");
     });
 
-    test("non-integral duration fields", () => {
-        [
-            "years",
-            "months",
-            "weeks",
-            "days",
-            "hours",
-            "minutes",
-            "seconds",
-            "milliseconds",
-            "microseconds",
-            "nanoseconds",
-        ].forEach(field => {
+    [
+        "years",
+        "months",
+        "weeks",
+        "days",
+        "hours",
+        "minutes",
+        "seconds",
+        "milliseconds",
+        "microseconds",
+        "nanoseconds",
+    ].forEach(field => {
+        test(`non-integral ${field}`, () => {
             expect(() => {
                 new Intl.DurationFormat().format({ [field]: 1.5 });
             }).toThrowWithMessage(
