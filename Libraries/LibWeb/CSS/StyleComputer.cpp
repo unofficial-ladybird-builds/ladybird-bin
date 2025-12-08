@@ -399,35 +399,6 @@ void StyleComputer::for_each_property_expanding_shorthands(PropertyID property_i
         return;
     }
 
-    // FIXME: We should parse BackgroundPosition as a ShorthandStyleValue instead
-    if (property_id == CSS::PropertyID::BackgroundPosition) {
-        if (value.is_value_list()) {
-            // Expand background-position layer list into separate lists for x and y positions:
-            auto const& values_list = value.as_value_list();
-            StyleValueVector x_positions {};
-            StyleValueVector y_positions {};
-            x_positions.ensure_capacity(values_list.size());
-            y_positions.ensure_capacity(values_list.size());
-            for (auto& layer : values_list.values()) {
-                if (layer->is_position()) {
-                    auto const& position = layer->as_position();
-                    x_positions.unchecked_append(position.edge_x());
-                    y_positions.unchecked_append(position.edge_y());
-                } else {
-                    x_positions.unchecked_append(layer);
-                    y_positions.unchecked_append(layer);
-                }
-            }
-            set_longhand_property(CSS::PropertyID::BackgroundPositionX, StyleValueList::create(move(x_positions), values_list.separator()));
-            set_longhand_property(CSS::PropertyID::BackgroundPositionY, StyleValueList::create(move(y_positions), values_list.separator()));
-        } else {
-            set_longhand_property(CSS::PropertyID::BackgroundPositionX, value);
-            set_longhand_property(CSS::PropertyID::BackgroundPositionY, value);
-        }
-
-        return;
-    }
-
     if (property_is_shorthand(property_id)) {
         // ShorthandStyleValue was handled already, as were unresolved shorthands.
         // That means the only values we should see are the CSS-wide keywords, or the guaranteed-invalid value.
@@ -2273,6 +2244,22 @@ static NonnullRefPtr<StyleValue const> compute_style_value_list(NonnullRefPtr<St
     return StyleValueList::create(move(computed_entries), StyleValueList::Separator::Comma);
 }
 
+static NonnullRefPtr<StyleValue const> repeat_style_value_list_to_n_elements(NonnullRefPtr<StyleValue const> const& style_value, size_t n)
+{
+    auto const& value_list = style_value->as_value_list();
+
+    if (value_list.size() == n)
+        return style_value;
+
+    StyleValueVector repeated_values;
+    repeated_values.ensure_capacity(n);
+
+    for (size_t i = 0; i < n; ++i)
+        repeated_values.unchecked_append(value_list.value_at(i, true));
+
+    return StyleValueList::create(move(repeated_values), value_list.separator());
+}
+
 NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(
     PropertyID property_id,
     NonnullRefPtr<StyleValue const> const& specified_value,
@@ -2285,6 +2272,16 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_property(
     switch (property_id) {
     case PropertyID::AnimationName:
         return compute_animation_name(absolutized_value);
+    // NB: The background properties are coordinated at compute time rather than use time, unlike other coordinating list property groups
+    case PropertyID::BackgroundAttachment:
+    case PropertyID::BackgroundClip:
+    case PropertyID::BackgroundImage:
+    case PropertyID::BackgroundOrigin:
+    case PropertyID::BackgroundPositionX:
+    case PropertyID::BackgroundPositionY:
+    case PropertyID::BackgroundRepeat:
+    case PropertyID::BackgroundSize:
+        return repeat_style_value_list_to_n_elements(absolutized_value, get_property_specified_value(PropertyID::BackgroundImage)->as_value_list().size());
     case PropertyID::BorderBottomWidth:
         return compute_border_or_outline_width(absolutized_value, get_property_specified_value(PropertyID::BorderBottomStyle), device_pixels_per_css_pixel);
     case PropertyID::BorderLeftWidth:
