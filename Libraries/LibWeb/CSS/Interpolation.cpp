@@ -1465,33 +1465,6 @@ static RefPtr<StyleValue const> interpolate_mixed_value(CalculationContext const
     auto to_value_type = get_value_type_of_numeric_style_value(to);
 
     if (from_value_type.has_value() && from_value_type == to_value_type) {
-        auto to_calculation_node = [&calculation_context](StyleValue const& value) -> NonnullRefPtr<CalculationNode const> {
-            switch (value.type()) {
-            case StyleValue::Type::Angle:
-                return NumericCalculationNode::create(value.as_angle().angle(), calculation_context);
-            case StyleValue::Type::Frequency:
-                return NumericCalculationNode::create(value.as_frequency().frequency(), calculation_context);
-            case StyleValue::Type::Integer:
-                // https://drafts.csswg.org/css-values-4/#combine-integers
-                // Interpolation of <integer> is defined as Vresult = round((1 - p) × VA + p × VB); that is,
-                // interpolation happens in the real number space as for <number>s, and the result is converted to an
-                // <integer> by rounding to the nearest integer.
-                return NumericCalculationNode::create(Number { Number::Type::Number, static_cast<double>(value.as_integer().integer()) }, calculation_context);
-            case StyleValue::Type::Length:
-                return NumericCalculationNode::create(value.as_length().length(), calculation_context);
-            case StyleValue::Type::Number:
-                return NumericCalculationNode::create(Number { Number::Type::Number, value.as_number().number() }, calculation_context);
-            case StyleValue::Type::Percentage:
-                return NumericCalculationNode::create(value.as_percentage().percentage(), calculation_context);
-            case StyleValue::Type::Time:
-                return NumericCalculationNode::create(value.as_time().time(), calculation_context);
-            case StyleValue::Type::Calculated:
-                return value.as_calculated().calculation();
-            default:
-                VERIFY_NOT_REACHED();
-            }
-        };
-
         // https://drafts.csswg.org/css-values-4/#combine-mixed
         // The computed value of a percentage-dimension mix is defined as
         // FIXME: a computed dimension if the percentage component is zero or is defined specifically to compute to a dimension value
@@ -1509,8 +1482,8 @@ static RefPtr<StyleValue const> interpolate_mixed_value(CalculationContext const
                 return PercentageStyleValue::create(Percentage { percentage_component });
         }
 
-        auto from_node = to_calculation_node(from);
-        auto to_node = to_calculation_node(to);
+        auto from_node = CalculationNode::from_style_value(from, calculation_context);
+        auto to_node = CalculationNode::from_style_value(to, calculation_context);
 
         // https://drafts.csswg.org/css-values-4/#combine-math
         // Interpolation of math functions, with each other or with numeric values and other numeric-valued functions, is defined as Vresult = calc((1 - p) * VA + p * VB).
@@ -1626,74 +1599,46 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
         if (from_shape.index() != to_shape.index())
             return {};
 
-        auto interpolate_length_box = [](CalculationContext const& calculation_context, LengthBox const& from, LengthBox const& to, float delta) -> Optional<LengthBox> {
-            auto interpolated_top = interpolate_length_percentage_or_auto(calculation_context, from.top(), to.top(), delta);
-            auto interpolated_right = interpolate_length_percentage_or_auto(calculation_context, from.right(), to.right(), delta);
-            auto interpolated_bottom = interpolate_length_percentage_or_auto(calculation_context, from.bottom(), to.bottom(), delta);
-            auto interpolated_left = interpolate_length_percentage_or_auto(calculation_context, from.left(), to.left(), delta);
-            if (!interpolated_top.has_value() || !interpolated_right.has_value() || !interpolated_bottom.has_value() || !interpolated_left.has_value())
-                return {};
-            return LengthBox { *interpolated_top, *interpolated_right, *interpolated_bottom, *interpolated_left };
+        CalculationContext basic_shape_calculation_context {
+            .percentages_resolve_as = ValueType::Length
         };
 
         auto interpolated_shape = from_shape.visit(
             [&](Inset const& from_inset) -> Optional<BasicShape> {
                 // If both shapes are of type inset(), interpolate between each value in the shape functions.
                 auto& to_inset = to_shape.get<Inset>();
-                auto interpolated_inset_box = interpolate_length_box(calculation_context, from_inset.inset_box, to_inset.inset_box, delta);
-                if (!interpolated_inset_box.has_value())
+                auto interpolated_top = interpolate_value(element, basic_shape_calculation_context, from_inset.top, to_inset.top, delta, allow_discrete);
+                auto interpolated_right = interpolate_value(element, basic_shape_calculation_context, from_inset.right, to_inset.right, delta, allow_discrete);
+                auto interpolated_bottom = interpolate_value(element, basic_shape_calculation_context, from_inset.bottom, to_inset.bottom, delta, allow_discrete);
+                auto interpolated_left = interpolate_value(element, basic_shape_calculation_context, from_inset.left, to_inset.left, delta, allow_discrete);
+                if (!interpolated_top || !interpolated_right || !interpolated_bottom || !interpolated_left)
                     return {};
-                return Inset { *interpolated_inset_box };
-            },
-            [&](Xywh const& from_xywh) -> Optional<BasicShape> {
-                auto& to_xywh = to_shape.get<Xywh>();
-                auto interpolated_x = interpolate_length_percentage(calculation_context, from_xywh.x, to_xywh.x, delta);
-                auto interpolated_y = interpolate_length_percentage(calculation_context, from_xywh.x, to_xywh.x, delta);
-                auto interpolated_width = interpolate_length_percentage(calculation_context, from_xywh.width, to_xywh.width, delta);
-                auto interpolated_height = interpolate_length_percentage(calculation_context, from_xywh.height, to_xywh.height, delta);
-                if (!interpolated_x.has_value() || !interpolated_y.has_value() || !interpolated_width.has_value() || !interpolated_height.has_value())
-                    return {};
-                return Xywh { *interpolated_x, *interpolated_y, *interpolated_width, *interpolated_height };
-            },
-            [&](Rect const& from_rect) -> Optional<BasicShape> {
-                auto const& to_rect = to_shape.get<Rect>();
-                auto from_rect_box = from_rect.box;
-                auto to_rect_box = to_rect.box;
-                auto interpolated_rect_box = interpolate_length_box(calculation_context, from_rect_box, to_rect_box, delta);
-                if (!interpolated_rect_box.has_value())
-                    return {};
-                return Rect { *interpolated_rect_box };
+                return Inset { interpolated_top.release_nonnull(), interpolated_right.release_nonnull(), interpolated_bottom.release_nonnull(), interpolated_left.release_nonnull() };
             },
             [&](Circle const& from_circle) -> Optional<BasicShape> {
                 // If both shapes are the same type, that type is ellipse() or circle(), and the radiuses are specified
                 // as <length-percentage> (rather than keywords), interpolate between each value in the shape functions.
                 auto const& to_circle = to_shape.get<Circle>();
-                if (!from_circle.radius.has<LengthPercentage>() || !to_circle.radius.has<LengthPercentage>())
+                if (from_circle.radius->is_keyword() || to_circle.radius->is_keyword())
                     return {};
-                auto interpolated_radius = interpolate_length_percentage(calculation_context, from_circle.radius.get<LengthPercentage>(), to_circle.radius.get<LengthPercentage>(), delta);
-                if (!interpolated_radius.has_value())
+                auto interpolated_radius = interpolate_value(element, basic_shape_calculation_context, from_circle.radius, to_circle.radius, delta, allow_discrete);
+                auto interpolated_position = interpolate_value(element, basic_shape_calculation_context, from_circle.position, to_circle.position, delta, allow_discrete);
+                if (!interpolated_radius || !interpolated_position)
                     return {};
-                auto interpolated_position = interpolate_value(element, calculation_context, from_circle.position, to_circle.position, delta, allow_discrete);
-                if (!interpolated_position)
-                    return {};
-                return Circle { *interpolated_radius, interpolated_position->as_position() };
+                return Circle { interpolated_radius.release_nonnull(), interpolated_position->as_position() };
             },
             [&](Ellipse const& from_ellipse) -> Optional<BasicShape> {
                 auto const& to_ellipse = to_shape.get<Ellipse>();
-                if (!from_ellipse.radius_x.has<LengthPercentage>() || !to_ellipse.radius_x.has<LengthPercentage>())
+                if (from_ellipse.radius_x->is_keyword() || to_ellipse.radius_x->is_keyword())
                     return {};
-                if (!from_ellipse.radius_y.has<LengthPercentage>() || !to_ellipse.radius_y.has<LengthPercentage>())
+                if (from_ellipse.radius_y->is_keyword() || to_ellipse.radius_y->is_keyword())
                     return {};
-                auto interpolated_radius_x = interpolate_length_percentage(calculation_context, from_ellipse.radius_x.get<LengthPercentage>(), to_ellipse.radius_x.get<LengthPercentage>(), delta);
-                if (!interpolated_radius_x.has_value())
+                auto interpolated_radius_x = interpolate_value(element, basic_shape_calculation_context, from_ellipse.radius_x, to_ellipse.radius_x, delta, allow_discrete);
+                auto interpolated_radius_y = interpolate_value(element, basic_shape_calculation_context, from_ellipse.radius_y, to_ellipse.radius_y, delta, allow_discrete);
+                auto interpolated_position = interpolate_value(element, basic_shape_calculation_context, from_ellipse.position, to_ellipse.position, delta, allow_discrete);
+                if (!interpolated_radius_x || !interpolated_radius_y || !interpolated_position)
                     return {};
-                auto interpolated_radius_y = interpolate_length_percentage(calculation_context, from_ellipse.radius_y.get<LengthPercentage>(), to_ellipse.radius_y.get<LengthPercentage>(), delta);
-                if (!interpolated_radius_y.has_value())
-                    return {};
-                auto interpolated_position = interpolate_value(element, calculation_context, from_ellipse.position, to_ellipse.position, delta, allow_discrete);
-                if (!interpolated_position)
-                    return {};
-                return Ellipse { *interpolated_radius_x, *interpolated_radius_y, interpolated_position->as_position() };
+                return Ellipse { interpolated_radius_x.release_nonnull(), interpolated_radius_y.release_nonnull(), interpolated_position->as_position() };
             },
             [&](Polygon const& from_polygon) -> Optional<BasicShape> {
                 // If both shapes are of type polygon(), both polygons have the same number of vertices, and use the
@@ -1708,9 +1653,9 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
                 for (size_t i = 0; i < from_polygon.points.size(); i++) {
                     auto const& from_point = from_polygon.points[i];
                     auto const& to_point = to_polygon.points[i];
-                    auto interpolated_point_x = interpolate_length_percentage(calculation_context, from_point.x, to_point.x, delta);
-                    auto interpolated_point_y = interpolate_length_percentage(calculation_context, from_point.y, to_point.y, delta);
-                    if (!interpolated_point_x.has_value() || !interpolated_point_y.has_value())
+                    auto interpolated_point_x = interpolate_value(element, basic_shape_calculation_context, from_point.x, to_point.x, delta, allow_discrete);
+                    auto interpolated_point_y = interpolate_value(element, basic_shape_calculation_context, from_point.y, to_point.y, delta, allow_discrete);
+                    if (!interpolated_point_x || !interpolated_point_y)
                         return {};
                     interpolated_points.unchecked_append(Polygon::Point { *interpolated_point_x, *interpolated_point_y });
                 }

@@ -13,6 +13,7 @@
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
+#include <LibWeb/CSS/StyleValues/StyleValueList.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/HTMLCollection.h>
@@ -95,7 +96,7 @@ void HTMLTableElement::apply_presentational_hints(GC::Ref<CSS::CascadedPropertie
         if (name == HTML::AttributeNames::background) {
             // https://html.spec.whatwg.org/multipage/rendering.html#tables-2:encoding-parsing-and-serializing-a-url
             if (auto parsed_value = document().encoding_parse_url(value); parsed_value.has_value())
-                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundImage, CSS::ImageStyleValue::create(*parsed_value));
+                cascaded_properties->set_property_from_presentational_hint(CSS::PropertyID::BackgroundImage, CSS::StyleValueList::create({ CSS::ImageStyleValue::create(*parsed_value) }, CSS::StyleValueList::Separator::Comma));
             return;
         }
         if (name == HTML::AttributeNames::bgcolor) {
@@ -398,14 +399,14 @@ GC::Ref<HTMLTableSectionElement> HTMLTableElement::create_t_body()
 GC::Ref<DOM::HTMLCollection> HTMLTableElement::rows()
 {
     HTMLTableElement* table_node = this;
-    // FIXME:  The elements in the collection must be ordered such that those elements whose parent is a thead are
-    //         included first, in tree order, followed by those elements whose parent is either a table or tbody
-    //         element, again in tree order, followed finally by those elements whose parent is a tfoot element,
-    //         still in tree order.
-    // How do you sort HTMLCollection?
-
+    // The elements in the collection must be ordered such that those elements whose parent is a thead are included
+    // first, in tree order, followed by those elements whose parent is either a table or tbody element, again in tree
+    // order, followed finally by those elements whose parent is a tfoot element, still in tree order.
     if (!m_rows) {
-        m_rows = DOM::HTMLCollection::create(*this, DOM::HTMLCollection::Scope::Descendants, [table_node](DOM::Element const& element) {
+        m_rows = DOM::HTMLCollection::create(
+            *this,
+            DOM::HTMLCollection::Scope::Descendants,
+            [table_node](DOM::Element const& element) {
             // Only match TR elements which are:
             // * children of the table element
             // * children of the thead, tbody, or tfoot elements that are themselves children of the table element
@@ -415,13 +416,29 @@ GC::Ref<DOM::HTMLCollection> HTMLTableElement::rows()
             if (element.parent_element() == table_node)
                 return true;
 
-            if (element.parent_element() && (element.parent_element()->local_name() == TagNames::thead || element.parent_element()->local_name() == TagNames::tbody || element.parent_element()->local_name() == TagNames::tfoot)
-                && element.parent()->parent() == table_node) {
+            if (element.parent_element() && element.parent_element()->local_name().is_one_of(TagNames::thead, TagNames::tbody, TagNames::tfoot) && element.parent()->parent() == table_node)
                 return true;
-            }
 
-            return false;
-        });
+            return false; },
+            [](Element const& a, Element const& b) -> bool {
+                auto static sort_priority = [](Element const& element) {
+                    auto const& parent_tag = element.parent_element()->local_name();
+                    if (parent_tag == TagNames::thead)
+                        return 1;
+                    if (parent_tag == TagNames::table || parent_tag == TagNames::tbody)
+                        return 2;
+                    if (parent_tag == TagNames::tfoot)
+                        return 3;
+                    VERIFY_NOT_REACHED();
+                };
+
+                auto prio_a = sort_priority(a);
+                auto prio_b = sort_priority(b);
+
+                if (prio_a != prio_b)
+                    return prio_a < prio_b;
+
+                return false; });
     }
     return *m_rows;
 }
