@@ -107,15 +107,16 @@ void Range::update_associated_selection()
 
     auto& document = m_start_container->document();
     document.reset_cursor_blink_cycle();
+
     if (auto* viewport = document.paintable()) {
         viewport->recompute_selection_states(*this);
         viewport->set_needs_display();
     }
 
     // https://w3c.github.io/selection-api/#selectionchange-event
-    // When the selection is dissociated with its range, associated with a new range, or the
-    // associated range's boundary point is mutated either by the user or the content script, the
-    // user agent must schedule a selectionchange event on document.
+    // When the selection is dissociated with its range, associated with a new range, or the associated range's boundary
+    // point is mutated either by the user or the content script, the user agent must schedule a selectionchange event
+    // on document.
     schedule_a_selectionchange_event(document, document);
 }
 
@@ -1162,7 +1163,10 @@ GC::Ref<Geometry::DOMRectList> Range::get_client_rects()
     for (GC::Ptr<Node> node = start_node; node && node != end_node->next_in_pre_order(); node = node->next_in_pre_order()) {
         auto selection_state = Painting::Paintable::SelectionState::Full;
         if (node == start_node && node == end_node) {
-            selection_state = Painting::Paintable::SelectionState::StartAndEnd;
+            if (m_start_offset == m_end_offset)
+                selection_state = Painting::Paintable::SelectionState::None;
+            else
+                selection_state = Painting::Paintable::SelectionState::StartAndEnd;
         } else if (node == start_node) {
             selection_state = Painting::Paintable::SelectionState::Start;
         } else if (node == end_node) {
@@ -1185,17 +1189,12 @@ GC::Ref<Geometry::DOMRectList> Range::get_client_rects()
             // are identical), include scaled DOMRect object (for the part that is selected, not the whole line box).
             auto const& text = static_cast<DOM::Text const&>(*node);
             auto const* paintable = text.paintable();
-            if (paintable) {
-                auto const* containing_block = paintable->containing_block();
-                if (is<Painting::PaintableWithLines>(*containing_block)) {
-                    auto const& paintable_lines = static_cast<Painting::PaintableWithLines const&>(*containing_block);
-                    auto fragments = paintable_lines.fragments();
+            if (paintable && selection_state != Painting::Paintable::SelectionState::None) {
+                if (auto const* paintable_lines = as_if<Painting::PaintableWithLines>(paintable->containing_block())) {
+                    auto fragments = paintable_lines->fragments();
                     for (auto frag = fragments.begin(); frag != fragments.end(); frag++) {
                         auto rect = frag->range_rect(selection_state, start_offset(), end_offset());
-                        if (rect.is_empty())
-                            continue;
-                        rects.append(Geometry::DOMRect::create(realm(),
-                            Gfx::FloatRect(rect)));
+                        rects.append(Geometry::DOMRect::create(realm(), rect.to_type<float>()));
                     }
                 } else {
                     dbgln("FIXME: Failed to get client rects for node {}", node->debug_description());

@@ -709,8 +709,8 @@ void PaintableBox::clear_clip_overflow_rect(DisplayListRecordingContext& context
 
 void paint_cursor_if_needed(DisplayListRecordingContext& context, TextPaintable const& paintable, PaintableFragment const& fragment)
 {
-    auto const& navigable = *paintable.navigable();
     auto const& document = paintable.document();
+    auto const& navigable = *document.navigable();
 
     if (!navigable.is_focused())
         return;
@@ -731,8 +731,8 @@ void paint_cursor_if_needed(DisplayListRecordingContext& context, TextPaintable 
 
     auto active_element = document.active_element();
     auto active_element_is_editable = false;
-    if (auto* text_control = as_if<HTML::FormAssociatedTextControlElement>(active_element); text_control && text_control->is_mutable())
-        active_element_is_editable = true;
+    if (auto* text_control = as_if<HTML::FormAssociatedTextControlElement>(active_element))
+        active_element_is_editable = text_control->is_mutable();
 
     auto dom_node = fragment.layout_node().dom_node();
     if (!dom_node || (!dom_node->is_editable() && !active_element_is_editable))
@@ -742,22 +742,9 @@ void paint_cursor_if_needed(DisplayListRecordingContext& context, TextPaintable 
     if (caret_color.alpha() == 0)
         return;
 
-    auto fragment_rect = fragment.absolute_rect();
-    auto text = fragment.text();
+    auto cursor_rect = fragment.range_rect(paintable.selection_state(), cursor_position->offset(), cursor_position->offset());
+    VERIFY(cursor_rect.width() == 1);
 
-    auto const& font = fragment.glyph_run() ? fragment.glyph_run()->font() : fragment.layout_node().first_available_font();
-    auto cursor_offset = font.width(text.substring_view(0, cursor_position->offset() - fragment.start_offset()));
-
-    auto font_metrics = font.pixel_metrics();
-
-    auto cursor_height = font_metrics.ascent + font_metrics.descent;
-
-    CSSPixelRect cursor_rect {
-        fragment_rect.x() + CSSPixels::nearest_value_for(cursor_offset),
-        fragment_rect.top() + fragment.baseline() - CSSPixels::nearest_value_for(font_metrics.ascent),
-        1,
-        CSSPixels::nearest_value_for(cursor_height)
-    };
     auto cursor_device_rect = context.rounded_device_rect(cursor_rect).to_type<int>();
 
     context.display_list_recorder().fill_rect(cursor_device_rect, caret_color);
