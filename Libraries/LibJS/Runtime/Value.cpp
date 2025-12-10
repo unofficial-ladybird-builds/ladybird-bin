@@ -665,7 +665,7 @@ ThrowCompletionOr<GC::Ref<Object>> Value::to_object_slow(VM& vm) const
 }
 
 // 7.1.3 ToNumeric ( value ), https://tc39.es/ecma262/#sec-tonumeric
-FLATTEN ThrowCompletionOr<Value> Value::to_numeric_slow_case(VM& vm) const
+ThrowCompletionOr<Value> Value::to_numeric_slow_case(VM& vm) const
 {
     // OPTIMIZATION: Fast paths for some trivial common cases.
     if (is_boolean()) {
@@ -1332,7 +1332,7 @@ ThrowCompletionOr<GC::Ptr<FunctionObject>> Value::get_method(VM& vm, PropertyKey
 
     // 3. If IsCallable(func) is false, throw a TypeError exception.
     if (!function.is_function())
-        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function.to_string_without_side_effects());
+        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function);
 
     // 4. Return func.
     return function.as_function();
@@ -1350,7 +1350,7 @@ ThrowCompletionOr<GC::Ptr<FunctionObject>> Value::get_method(VM& vm, PropertyKey
 
     // 3. If IsCallable(func) is false, throw a TypeError exception.
     if (!function.is_function())
-        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function.to_string_without_side_effects());
+        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function);
 
     // 4. Return func.
     return function.as_function();
@@ -1365,10 +1365,6 @@ ThrowCompletionOr<bool> greater_than(VM& vm, Value lhs, Value rhs)
     // 3. Let rref be ? Evaluation of ShiftExpression.
     // 4. Let rval be ? GetValue(rref).
     // NOTE: This is handled in the AST or Bytecode interpreter.
-
-    // OPTIMIZATION: If both values are i32, we can do a direct comparison without calling into IsLessThan.
-    if (lhs.is_int32() && rhs.is_int32())
-        return lhs.as_i32() > rhs.as_i32();
 
     // 5. Let r be ? IsLessThan(rval, lval, false).
     auto relation = TRY(is_less_than(vm, lhs, rhs, false));
@@ -1389,10 +1385,6 @@ ThrowCompletionOr<bool> greater_than_equals(VM& vm, Value lhs, Value rhs)
     // 4. Let rval be ? GetValue(rref).
     // NOTE: This is handled in the AST or Bytecode interpreter.
 
-    // OPTIMIZATION: If both values are i32, we can do a direct comparison without calling into IsLessThan.
-    if (lhs.is_int32() && rhs.is_int32())
-        return lhs.as_i32() >= rhs.as_i32();
-
     // 5. Let r be ? IsLessThan(lval, rval, true).
     auto relation = TRY(is_less_than(vm, lhs, rhs, true));
 
@@ -1411,10 +1403,6 @@ ThrowCompletionOr<bool> less_than(VM& vm, Value lhs, Value rhs)
     // 3. Let rref be ? Evaluation of ShiftExpression.
     // 4. Let rval be ? GetValue(rref).
     // NOTE: This is handled in the AST or Bytecode interpreter.
-
-    // OPTIMIZATION: If both values are i32, we can do a direct comparison without calling into IsLessThan.
-    if (lhs.is_int32() && rhs.is_int32())
-        return lhs.as_i32() < rhs.as_i32();
 
     // 5. Let r be ? IsLessThan(lval, rval, true).
     auto relation = TRY(is_less_than(vm, lhs, rhs, true));
@@ -1435,10 +1423,6 @@ ThrowCompletionOr<bool> less_than_equals(VM& vm, Value lhs, Value rhs)
     // 4. Let rval be ? GetValue(rref).
     // NOTE: This is handled in the AST or Bytecode interpreter.
 
-    // OPTIMIZATION: If both values are i32, we can do a direct comparison without calling into IsLessThan.
-    if (lhs.is_int32() && rhs.is_int32())
-        return lhs.as_i32() <= rhs.as_i32();
-
     // 5. Let r be ? IsLessThan(rval, lval, false).
     auto relation = TRY(is_less_than(vm, lhs, rhs, false));
 
@@ -1452,10 +1436,6 @@ ThrowCompletionOr<bool> less_than_equals(VM& vm, Value lhs, Value rhs)
 // BitwiseANDExpression : BitwiseANDExpression & EqualityExpression
 ThrowCompletionOr<Value> bitwise_and(VM& vm, Value lhs, Value rhs)
 {
-    // OPTIMIZATION: Fast path when both values are Int32.
-    if (lhs.is_int32() && rhs.is_int32())
-        return Value(lhs.as_i32() & rhs.as_i32());
-
     // 13.15.3 ApplyStringOrNumericBinaryOperator ( lval, opText, rval ), https://tc39.es/ecma262/#sec-applystringornumericbinaryoperator
     // 1-2, 6. N/A.
 
@@ -1489,10 +1469,6 @@ ThrowCompletionOr<Value> bitwise_and(VM& vm, Value lhs, Value rhs)
 // BitwiseORExpression : BitwiseORExpression | BitwiseXORExpression
 ThrowCompletionOr<Value> bitwise_or(VM& vm, Value lhs, Value rhs)
 {
-    // OPTIMIZATION: Fast path when both values are Int32.
-    if (lhs.is_int32() && rhs.is_int32())
-        return Value(lhs.as_i32() | rhs.as_i32());
-
     // 13.15.3 ApplyStringOrNumericBinaryOperator ( lval, opText, rval ), https://tc39.es/ecma262/#sec-applystringornumericbinaryoperator
     // 1-2, 6. N/A.
 
@@ -1530,10 +1506,6 @@ ThrowCompletionOr<Value> bitwise_or(VM& vm, Value lhs, Value rhs)
 // BitwiseXORExpression : BitwiseXORExpression ^ BitwiseANDExpression
 ThrowCompletionOr<Value> bitwise_xor(VM& vm, Value lhs, Value rhs)
 {
-    // OPTIMIZATION: Fast path when both values are Int32.
-    if (lhs.is_int32() && rhs.is_int32())
-        return Value(lhs.as_i32() ^ rhs.as_i32());
-
     // 13.15.3 ApplyStringOrNumericBinaryOperator ( lval, opText, rval ), https://tc39.es/ecma262/#sec-applystringornumericbinaryoperator
     // 1-2, 6. N/A.
 
@@ -1826,18 +1798,6 @@ ThrowCompletionOr<Value> add(VM& vm, Value lhs, Value rhs)
 
     // 1. If opText is +, then
 
-    // OPTIMIZATION: If both values are i32 or double, we can do a direct addition without the type conversions below.
-    if (both_number(lhs, rhs)) {
-        if (lhs.is_int32() && rhs.is_int32()) {
-            Checked<i32> result;
-            result = MUST(lhs.to_i32(vm));
-            result += MUST(rhs.to_i32(vm));
-            if (!result.has_overflow())
-                return Value(result.value());
-        }
-        return Value(lhs.as_double() + rhs.as_double());
-    }
-
     // a. Let lprim be ? ToPrimitive(lval).
     auto lhs_primitive = TRY(lhs.to_primitive(vm));
 
@@ -1928,14 +1888,6 @@ ThrowCompletionOr<Value> sub(VM& vm, Value lhs, Value rhs)
 // MultiplicativeExpression : MultiplicativeExpression MultiplicativeOperator ExponentiationExpression
 ThrowCompletionOr<Value> mul(VM& vm, Value lhs, Value rhs)
 {
-    // OPTIMIZATION: Fast path for multiplication of two Int32 values.
-    if (lhs.is_int32() && rhs.is_int32()) {
-        Checked<i32> result = lhs.as_i32();
-        result *= rhs.as_i32();
-        if (!result.has_overflow())
-            return result.value();
-    }
-
     // 13.15.3 ApplyStringOrNumericBinaryOperator ( lval, opText, rval ), https://tc39.es/ecma262/#sec-applystringornumericbinaryoperator
     // 1-2, 6. N/A.
 
@@ -2197,7 +2149,7 @@ ThrowCompletionOr<Value> instance_of(VM& vm, Value value, Value target)
 {
     // 1. If target is not an Object, throw a TypeError exception.
     if (!target.is_object())
-        return vm.throw_completion<TypeError>(ErrorType::NotAnObject, target.to_string_without_side_effects());
+        return vm.throw_completion<TypeError>(ErrorType::NotAnObject, target);
 
     // 2. Let instOfHandler be ? GetMethod(target, @@hasInstance).
     static Bytecode::PropertyLookupCache cache;
@@ -2217,7 +2169,7 @@ ThrowCompletionOr<Value> instance_of(VM& vm, Value value, Value target)
 
     // 4. If IsCallable(target) is false, throw a TypeError exception.
     if (!target.is_function())
-        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, target.to_string_without_side_effects());
+        return vm.throw_completion<TypeError>(ErrorType::NotAFunction, target);
 
     // 5. Return ? OrdinaryHasInstance(target, V).
     return ordinary_has_instance(vm, target, value);
@@ -2253,7 +2205,7 @@ ThrowCompletionOr<Value> ordinary_has_instance(VM& vm, Value lhs, Value rhs)
 
     // 5. If P is not an Object, throw a TypeError exception.
     if (!rhs_prototype.is_object())
-        return vm.throw_completion<TypeError>(ErrorType::InstanceOfOperatorBadPrototype, rhs.to_string_without_side_effects());
+        return vm.throw_completion<TypeError>(ErrorType::InstanceOfOperatorBadPrototype, rhs);
 
     // 6. Repeat,
     while (true) {

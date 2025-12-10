@@ -1801,7 +1801,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> CallExpression::generat
             auto argument_value = TRY(argument.value->generate_bytecode(generator)).value();
             argument_operands.append(generator.copy_if_needed_to_preserve_evaluation_order(argument_value));
         }
-        if (builtin.has_value()) {
+        if (builtin.has_value() && builtin_argument_count(builtin.value()) == argument_operands.size()) {
             VERIFY(call_type == Op::CallType::Call);
             generator.emit_with_extra_operand_slots<Bytecode::Op::CallBuiltin>(
                 argument_operands.size(),
@@ -2462,7 +2462,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TemplateLiteral::genera
         if (i == 0) {
             generator.emit_mov(dst, value);
         } else {
-            generator.emit<Bytecode::Op::ConcatString>(dst, value);
+            generator.emit<Op::Add>(dst, dst, value);
         }
     }
 
