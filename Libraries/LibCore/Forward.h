@@ -47,6 +47,7 @@ class TimerEvent;
 class TimeZoneWatcher;
 class UDPServer;
 class UDPSocket;
+class WeakEventLoopReference;
 
 struct ProxyData;
 
