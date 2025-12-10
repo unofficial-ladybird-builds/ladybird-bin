@@ -479,6 +479,7 @@ void Interpreter::run_bytecode(size_t entry_point)
             HANDLE_INSTRUCTION(CallDirectEvalWithArgumentArray);
             HANDLE_INSTRUCTION(CallWithArgumentArray);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(Catch);
+            HANDLE_INSTRUCTION(ConcatString);
             HANDLE_INSTRUCTION(CopyObjectExcludingProperties);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(CreateAsyncFromSyncIterator);
             HANDLE_INSTRUCTION(CreateDataPropertyOrThrow);
@@ -797,7 +798,7 @@ inline void fast_typed_array_set_element(TypedArrayBase& typed_array, u32 index,
     *slot = value;
 }
 
-static COLD Completion throw_null_or_undefined_property_get(VM& vm, Value base_value, Optional<IdentifierTableIndex> base_identifier, IdentifierTableIndex property_identifier, Executable const& executable)
+static Completion throw_null_or_undefined_property_get(VM& vm, Value base_value, Optional<IdentifierTableIndex> base_identifier, IdentifierTableIndex property_identifier, Executable const& executable)
 {
     VERIFY(base_value.is_nullish());
 
@@ -806,7 +807,7 @@ static COLD Completion throw_null_or_undefined_property_get(VM& vm, Value base_v
     return vm.throw_completion<TypeError>(ErrorType::ToObjectNullOrUndefinedWithProperty, executable.get_identifier(property_identifier), base_value);
 }
 
-static COLD Completion throw_null_or_undefined_property_get(VM& vm, Value base_value, Optional<IdentifierTableIndex> base_identifier, Value property, Executable const& executable)
+static Completion throw_null_or_undefined_property_get(VM& vm, Value base_value, Optional<IdentifierTableIndex> base_identifier, Value property, Executable const& executable)
 {
     VERIFY(base_value.is_nullish());
 
@@ -816,7 +817,7 @@ static COLD Completion throw_null_or_undefined_property_get(VM& vm, Value base_v
 }
 
 template<typename BaseType, typename PropertyType>
-COLD Completion throw_null_or_undefined_property_access(VM& vm, Value base_value, BaseType const& base_identifier, PropertyType const& property_identifier)
+ALWAYS_INLINE Completion throw_null_or_undefined_property_access(VM& vm, Value base_value, BaseType const& base_identifier, PropertyType const& property_identifier)
 {
     VERIFY(base_value.is_nullish());
 
@@ -2101,6 +2102,14 @@ ThrowCompletionOr<void> CopyObjectExcludingProperties::execute_impl(Bytecode::In
     return {};
 }
 
+ThrowCompletionOr<void> ConcatString::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    auto& vm = interpreter.vm();
+    auto string = TRY(interpreter.get(src()).to_primitive_string(vm));
+    interpreter.set(dst(), PrimitiveString::create(vm, interpreter.get(dst()).as_string(), string));
+    return {};
+}
+
 enum class BindingIsKnownToBeInitialized {
     No,
     Yes,
@@ -2260,7 +2269,7 @@ ThrowCompletionOr<void> SetGlobal::execute_impl(Bytecode::Interpreter& interpret
     return {};
 }
 
-ThrowCompletionOr<void> DeleteVariable::execute_impl(Bytecode::Interpreter& interpreter) const
+COLD ThrowCompletionOr<void> DeleteVariable::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& vm = interpreter.vm();
     auto const& string = interpreter.get_identifier(m_identifier);
@@ -2565,7 +2574,7 @@ ThrowCompletionOr<void> PutPrivateById::execute_impl(Bytecode::Interpreter& inte
     return {};
 }
 
-ThrowCompletionOr<void> DeleteById::execute_impl(Bytecode::Interpreter& interpreter) const
+COLD ThrowCompletionOr<void> DeleteById::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& vm = interpreter.vm();
     auto const& identifier = interpreter.get_identifier(m_property);
@@ -2574,7 +2583,7 @@ ThrowCompletionOr<void> DeleteById::execute_impl(Bytecode::Interpreter& interpre
     return {};
 }
 
-ThrowCompletionOr<void> DeleteByIdWithThis::execute_impl(Bytecode::Interpreter& interpreter) const
+COLD ThrowCompletionOr<void> DeleteByIdWithThis::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& vm = interpreter.vm();
     auto base_value = interpreter.get(m_base);
@@ -3087,7 +3096,7 @@ JS_ENUMERATE_PUT_KINDS(DEFINE_PUT_KIND_BY_VALUE)
 
 JS_ENUMERATE_PUT_KINDS(DEFINE_PUT_KIND_BY_VALUE_WITH_THIS)
 
-ThrowCompletionOr<void> DeleteByValue::execute_impl(Bytecode::Interpreter& interpreter) const
+COLD ThrowCompletionOr<void> DeleteByValue::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& vm = interpreter.vm();
     auto property_key = TRY(interpreter.get(m_property).to_property_key(vm));
@@ -3096,7 +3105,7 @@ ThrowCompletionOr<void> DeleteByValue::execute_impl(Bytecode::Interpreter& inter
     return {};
 }
 
-ThrowCompletionOr<void> DeleteByValueWithThis::execute_impl(Bytecode::Interpreter& interpreter) const
+COLD ThrowCompletionOr<void> DeleteByValueWithThis::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto& vm = interpreter.vm();
     auto property_key_value = interpreter.get(m_property);
@@ -3125,7 +3134,7 @@ ThrowCompletionOr<void> GetMethod::execute_impl(Bytecode::Interpreter& interpret
     return {};
 }
 
-ThrowCompletionOr<void> GetObjectPropertyIterator::execute_impl(Bytecode::Interpreter& interpreter) const
+NEVER_INLINE ThrowCompletionOr<void> GetObjectPropertyIterator::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto iterator_record = TRY(get_object_property_iterator(interpreter, interpreter.get(m_object)));
     interpreter.set(m_dst_iterator_object, iterator_record.iterator);
@@ -3193,7 +3202,7 @@ ThrowCompletionOr<void> IteratorNextUnpack::execute_impl(Bytecode::Interpreter& 
     return {};
 }
 
-ThrowCompletionOr<void> NewClass::execute_impl(Bytecode::Interpreter& interpreter) const
+NEVER_INLINE ThrowCompletionOr<void> NewClass::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     Value super_class;
     if (m_super_class.has_value())
