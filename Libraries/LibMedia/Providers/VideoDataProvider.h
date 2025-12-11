@@ -33,14 +33,16 @@ public:
     using ImageQueue = Queue<TimedImage, QUEUE_CAPACITY>;
 
     using ErrorHandler = Function<void(DecoderError&&)>;
+    using FrameEndTimeHandler = Function<void(AK::Duration)>;
     using SeekCompletionHandler = Function<void(AK::Duration)>;
 
-    static DecoderErrorOr<NonnullRefPtr<VideoDataProvider>> try_create(Core::EventLoop& main_thread_event_loop, NonnullRefPtr<MutexedDemuxer> const&, Track const&, RefPtr<MediaTimeProvider> const& = nullptr);
+    static DecoderErrorOr<NonnullRefPtr<VideoDataProvider>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<MutexedDemuxer> const&, Track const&, RefPtr<MediaTimeProvider> const& = nullptr);
 
     VideoDataProvider(NonnullRefPtr<ThreadData> const&);
     ~VideoDataProvider();
 
     void set_error_handler(ErrorHandler&&);
+    void set_frame_end_time_handler(FrameEndTimeHandler&&);
 
     void start();
 
@@ -51,10 +53,11 @@ public:
 private:
     class ThreadData final : public AtomicRefCounted<ThreadData> {
     public:
-        ThreadData(Core::EventLoop& main_thread_event_loop, NonnullRefPtr<MutexedDemuxer> const&, Track const&, NonnullOwnPtr<VideoDecoder>&&, RefPtr<MediaTimeProvider> const&);
+        ThreadData(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<MutexedDemuxer> const&, Track const&, NonnullOwnPtr<VideoDecoder>&&, RefPtr<MediaTimeProvider> const&);
         ~ThreadData();
 
         void set_error_handler(ErrorHandler&&);
+        void set_frame_end_time_handler(FrameEndTimeHandler&&);
 
         void start();
         void exit();
@@ -66,11 +69,16 @@ private:
 
         void wait_for_start();
         bool should_thread_exit() const;
+        template<typename Invokee>
+        void invoke_on_main_thread_while_locked(Invokee);
+        template<typename Invokee>
+        void invoke_on_main_thread(Invokee);
+        void dispatch_frame_end_time(CodedFrame const&);
         void set_cicp_values(VideoFrame&);
         void queue_frame(TimedImage&&);
         bool handle_seek();
-        template<typename T>
-        void process_seek_on_main_thread(u32 seek_id, T&&);
+        template<typename Callback>
+        void process_seek_on_main_thread(u32 seek_id, Callback);
         void resolve_seek(u32 seek_id, AK::Duration const& timestamp);
         void push_data_and_decode_some_frames();
 
@@ -84,7 +92,7 @@ private:
             Exit,
         };
 
-        Core::EventLoop& m_main_thread_event_loop;
+        NonnullRefPtr<Core::WeakEventLoopReference> m_main_thread_event_loop;
 
         mutable Threading::Mutex m_mutex;
         mutable Threading::ConditionVariable m_wait_condition { m_mutex };
@@ -98,6 +106,7 @@ private:
 
         size_t m_queue_max_size { 4 };
         ImageQueue m_queue;
+        FrameEndTimeHandler m_frame_end_time_handler;
         ErrorHandler m_error_handler;
         bool m_is_in_error_state { false };
 

@@ -47,7 +47,7 @@ static inline void decode_video(StringView path, size_t expected_frame_count, T 
 
         auto block = block_result.release_value();
         for (auto const& frame : block.frames()) {
-            MUST(decoder->receive_coded_data(block.timestamp(), frame));
+            MUST(decoder->receive_coded_data(block.timestamp(), block.duration().value_or(AK::Duration::zero()), frame));
             while (true) {
                 auto frame_result = decoder->get_decoded_frame();
                 if (frame_result.is_error()) {
@@ -79,7 +79,7 @@ static inline void decode_audio(StringView path, u32 sample_rate, u8 channel_cou
     auto mutexed_demuxer = make_ref_counted<Media::MutexedDemuxer>(demuxer);
     auto track = TRY_OR_FAIL(demuxer->get_preferred_track_for_type(Media::TrackType::Audio));
     VERIFY(track.has_value());
-    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current(), mutexed_demuxer, track.release_value()));
+    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current_weak(), mutexed_demuxer, track.release_value()));
 
     auto reached_end = false;
     provider->set_error_handler([&](Media::DecoderError&& error) {
