@@ -34,28 +34,22 @@ void RequestClient::die()
 
 void RequestClient::ensure_connection(URL::URL const& url, ::RequestServer::CacheLevel cache_level)
 {
-    async_ensure_connection(url, cache_level);
+    auto request_id = m_next_request_id++;
+    async_ensure_connection(request_id, url, cache_level);
 }
 
 RefPtr<Request> RequestClient::start_request(ByteString const& method, URL::URL const& url, Optional<HTTP::HeaderList const&> request_headers, ReadonlyBytes request_body, Core::ProxyData const& proxy_data)
 {
-    auto body_result_or_error = ByteBuffer::copy(request_body);
-    if (body_result_or_error.is_error())
-        return nullptr;
-
-    static i32 s_next_request_id = 0;
-    auto request_id = s_next_request_id++;
-
+    auto request_id = m_next_request_id++;
     auto headers = request_headers.map([](auto const& headers) { return headers.headers().span(); }).value_or({});
 
-    auto body_result = body_result_or_error.release_value();
-    IPCProxy::async_start_request(request_id, method, url, headers, body_result, proxy_data);
+    IPCProxy::async_start_request(request_id, method, url, headers, request_body, proxy_data);
     auto request = Request::create_from_id({}, *this, request_id);
     m_requests.set(request_id, request);
     return request;
 }
 
-void RequestClient::request_started(i32 request_id, IPC::File response_file)
+void RequestClient::request_started(u64 request_id, IPC::File response_file)
 {
     auto request = m_requests.get(request_id);
     if (!request.has_value()) {
@@ -99,7 +93,7 @@ void RequestClient::estimated_cache_size(u64 cache_size_estimation_id, CacheSize
         (*promise)->resolve(sizes);
 }
 
-void RequestClient::request_finished(i32 request_id, u64 total_size, RequestTimingInfo timing_info, Optional<NetworkError> network_error)
+void RequestClient::request_finished(u64 request_id, u64 total_size, RequestTimingInfo timing_info, Optional<NetworkError> network_error)
 {
     RefPtr<Request> request;
     if ((request = m_requests.get(request_id).value_or(nullptr))) {
@@ -108,7 +102,7 @@ void RequestClient::request_finished(i32 request_id, u64 total_size, RequestTimi
     m_requests.remove(request_id);
 }
 
-void RequestClient::headers_became_available(i32 request_id, Vector<HTTP::Header> response_headers, Optional<u32> status_code, Optional<String> reason_phrase)
+void RequestClient::headers_became_available(u64 request_id, Vector<HTTP::Header> response_headers, Optional<u32> status_code, Optional<String> reason_phrase)
 {
     auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr));
     if (!request) {
@@ -118,7 +112,7 @@ void RequestClient::headers_became_available(i32 request_id, Vector<HTTP::Header
     request->did_receive_headers({}, HTTP::HeaderList::create(move(response_headers)), status_code, reason_phrase);
 }
 
-void RequestClient::certificate_requested(i32 request_id)
+void RequestClient::certificate_requested(u64 request_id)
 {
     if (auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr))) {
         request->did_request_certificates({});
@@ -134,35 +128,35 @@ RefPtr<WebSocket> RequestClient::websocket_connect(URL::URL const& url, ByteStri
     return connection;
 }
 
-void RequestClient::websocket_connected(i64 websocket_id)
+void RequestClient::websocket_connected(u64 websocket_id)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value())
         maybe_connection.value()->did_open({});
 }
 
-void RequestClient::websocket_received(i64 websocket_id, bool is_text, ByteBuffer data)
+void RequestClient::websocket_received(u64 websocket_id, bool is_text, ByteBuffer data)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value())
         maybe_connection.value()->did_receive({}, move(data), is_text);
 }
 
-void RequestClient::websocket_errored(i64 websocket_id, i32 message)
+void RequestClient::websocket_errored(u64 websocket_id, i32 message)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value())
         maybe_connection.value()->did_error({}, message);
 }
 
-void RequestClient::websocket_closed(i64 websocket_id, u16 code, ByteString reason, bool clean)
+void RequestClient::websocket_closed(u64 websocket_id, u16 code, ByteString reason, bool clean)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value())
         maybe_connection.value()->did_close({}, code, move(reason), clean);
 }
 
-void RequestClient::websocket_ready_state_changed(i64 websocket_id, u32 ready_state)
+void RequestClient::websocket_ready_state_changed(u64 websocket_id, u32 ready_state)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value()) {
@@ -171,7 +165,7 @@ void RequestClient::websocket_ready_state_changed(i64 websocket_id, u32 ready_st
     }
 }
 
-void RequestClient::websocket_subprotocol(i64 websocket_id, ByteString subprotocol)
+void RequestClient::websocket_subprotocol(u64 websocket_id, ByteString subprotocol)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value()) {
@@ -179,7 +173,7 @@ void RequestClient::websocket_subprotocol(i64 websocket_id, ByteString subprotoc
     }
 }
 
-void RequestClient::websocket_certificate_requested(i64 websocket_id)
+void RequestClient::websocket_certificate_requested(u64 websocket_id)
 {
     auto maybe_connection = m_websockets.get(websocket_id);
     if (maybe_connection.has_value())

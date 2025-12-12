@@ -20,7 +20,7 @@ namespace RequestServer {
 static long s_connect_timeout_seconds = 90L;
 
 NonnullOwnPtr<Request> Request::fetch(
-    i32 request_id,
+    u64 request_id,
     Optional<HTTP::DiskCache&> disk_cache,
     ConnectionFromClient& client,
     void* curl_multi,
@@ -39,7 +39,7 @@ NonnullOwnPtr<Request> Request::fetch(
 }
 
 NonnullOwnPtr<Request> Request::connect(
-    i32 request_id,
+    u64 request_id,
     ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
@@ -61,7 +61,7 @@ NonnullOwnPtr<Request> Request::connect(
 }
 
 Request::Request(
-    i32 request_id,
+    u64 request_id,
     Optional<HTTP::DiskCache&> disk_cache,
     ConnectionFromClient& client,
     void* curl_multi,
@@ -89,7 +89,7 @@ Request::Request(
 }
 
 Request::Request(
-    i32 request_id,
+    u64 request_id,
     ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
@@ -154,6 +154,7 @@ void Request::notify_fetch_complete(Badge<ConnectionFromClient>, int result_code
 
 void Request::transition_to_state(State state)
 {
+    dbgln_if(REQUESTSERVER_DEBUG, "Request::Transition[{}]: {} -> {} ({} {})", m_request_id, state_name(m_state), state_name(state), m_method, m_url);
     m_state = state;
     process();
 }

@@ -69,7 +69,8 @@ static ThrowCompletionOr<void> increment_last_index(VM& vm, Object& regexp_objec
     last_index = advance_string_index(string, last_index, unicode);
 
     // Perform ? Set(rx, "lastIndex", 𝔽(nextIndex), true).
-    TRY(regexp_object.set(vm.names.lastIndex, Value(last_index), Object::ShouldThrowExceptions::Yes));
+    static Bytecode::PropertyLookupCache cache2;
+    TRY(regexp_object.set(vm.names.lastIndex, Value(last_index), cache2));
     return {};
 }
 
@@ -149,7 +150,7 @@ static Value make_match_indices_index_pair_array(VM& vm, Utf16View const& string
             match_indices_array = get_match_index_pair(vm, string, *match_indices);
 
         // d. Perform ! CreateDataPropertyOrThrow(A, ! ToString(i), matchIndicesArray).
-        MUST(array->create_data_property_or_throw(i, match_indices_array));
+        array->indexed_properties().put(i, match_indices_array);
     }
 
     for (auto const& entry : group_names) {
@@ -232,8 +233,10 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
     // 13.d and 13.a
     if (!result.success || last_index > string->length_in_utf16_code_units()) {
         // 13.d.i, 13.a.i
-        if (sticky || global)
-            TRY(regexp_object.set(vm.names.lastIndex, Value(0), Object::ShouldThrowExceptions::Yes));
+        if (sticky || global) {
+            static Bytecode::PropertyLookupCache cache2;
+            TRY(regexp_object.set(vm.names.lastIndex, Value(0), cache2));
+        }
 
         // 13.a.ii, 13.d.i.2
         return js_null();
@@ -255,7 +258,8 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
     // 16. If global is true or sticky is true, then
     if (global || sticky) {
         // a. Perform ? Set(R, "lastIndex", 𝔽(e), true).
-        TRY(regexp_object.set(vm.names.lastIndex, Value(end_index), Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache3;
+        TRY(regexp_object.set(vm.names.lastIndex, Value(end_index), cache3));
     }
 
     // 17. Let n be the number of elements in r's captures List. (This is the same value as 22.2.2.1's NcapturingParens.)
@@ -265,14 +269,15 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
 
     // 20. Let A be ! ArrayCreate(n + 1).
     auto array = MUST(Array::create(realm, result.n_named_capture_groups + 1));
+    array->unsafe_set_shape(realm.intrinsics().regexp_builtin_exec_array_shape());
 
     // 21. Assert: The mathematical value of A's "length" property is n + 1.
 
     // 22. Perform ! CreateDataPropertyOrThrow(A, "index", 𝔽(lastIndex)).
-    MUST(array->create_data_property_or_throw(vm.names.index, Value(match_index)));
+    array->put_direct(realm.intrinsics().regexp_builtin_exec_array_index_offset(), Value(match_index));
 
     // 23. Perform ! CreateDataPropertyOrThrow(A, "input", S).
-    MUST(array->create_data_property_or_throw(vm.names.input, string));
+    array->put_direct(realm.intrinsics().regexp_builtin_exec_array_input_offset(), string);
 
     // 24. Let match be the Match Record { [[StartIndex]]: lastIndex, [[EndIndex]]: e }.
     auto match_indices = Match::create(match);
@@ -288,7 +293,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
 
     // 28. Let matchedSubstr be GetMatchString(S, match).
     // 29. Perform ! CreateDataPropertyOrThrow(A, "0", matchedSubstr).
-    MUST(array->create_data_property_or_throw(0, PrimitiveString::create(vm, match.view.u16_view())));
+    array->indexed_properties().put(0, PrimitiveString::create(vm, match.view.u16_view()));
 
     // 30. If R contains any GroupName, then
     //     a. Let groups be OrdinaryObjectCreate(null).
@@ -300,7 +305,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
     auto groups = has_groups ? Object::create(realm, nullptr) : js_undefined();
 
     // 32. Perform ! CreateDataPropertyOrThrow(A, "groups", groups).
-    MUST(array->create_data_property_or_throw(vm.names.groups, groups));
+    array->put_direct(realm.intrinsics().regexp_builtin_exec_array_groups_offset(), groups);
 
     // 33. Let matchedGroupNames be a new empty List.
     Vector<Utf16FlyString> matched_group_names;
@@ -339,7 +344,7 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
         }
 
         // d. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(i)), capturedValue).
-        MUST(array->create_data_property_or_throw(i, captured_value));
+        array->indexed_properties().put(i, captured_value);
 
         // e. If the ith capture of R was defined with a GroupName, then
         if (capture.capture_group_name >= 0) {
@@ -385,7 +390,8 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
             MUST(groups.as_object().create_data_property_or_throw(group_name, value));
         }
 
-        MUST(array->set(vm.names.groups, groups, Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache4;
+        MUST(array->set(vm.names.groups, groups, cache4));
     }
 
     // https://github.com/tc39/proposal-regexp-legacy-features#regexpbuiltinexec--r-s-
@@ -432,7 +438,8 @@ static ThrowCompletionOr<Value> regexp_builtin_exec(VM& vm, RegExpObject& regexp
                 MUST(ordered_indices_groups_object->create_data_property_or_throw(group_name, value));
             }
 
-            MUST(indices_array.as_object().set(vm.names.groups, ordered_indices_groups_object, Object::ShouldThrowExceptions::Yes));
+            static Bytecode::PropertyLookupCache cache4;
+            MUST(indices_array.as_object().set(vm.names.groups, ordered_indices_groups_object, cache4));
         }
 
         // b. Perform ! CreateDataPropertyOrThrow(A, "indices", indicesArray).
@@ -605,7 +612,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_match)
     bool full_unicode = flags.contains('u') || flags.contains('v');
 
     // b. Perform ? Set(rx, "lastIndex", +0𝔽, true).
-    TRY(regexp_object->set(vm.names.lastIndex, Value(0), Object::ShouldThrowExceptions::Yes));
+    static Bytecode::PropertyLookupCache cache2;
+    TRY(regexp_object->set(vm.names.lastIndex, Value(0), cache2));
 
     // c. Let A be ! ArrayCreate(0).
     auto array = MUST(Array::create(realm, 0));
@@ -638,7 +646,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_match)
         auto match_str = TRY(match_value.to_string(vm));
 
         // 2. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(n)), matchStr).
-        MUST(array->create_data_property_or_throw(n, PrimitiveString::create(vm, match_str)));
+        array->indexed_properties().put(n, PrimitiveString::create(vm, match_str));
 
         // 3. If matchStr is the empty String, then
         if (match_str.is_empty()) {
@@ -690,7 +698,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_match_all)
     auto last_index = TRY(last_index_value.to_length(vm));
 
     // 8. Perform ? Set(matcher, "lastIndex", lastIndex, true).
-    TRY(matcher->set(vm.names.lastIndex, Value(last_index), Object::ShouldThrowExceptions::Yes));
+    static Bytecode::PropertyLookupCache cache3;
+    TRY(matcher->set(vm.names.lastIndex, Value(last_index), cache3));
 
     // 13. Return CreateRegExpStringIterator(matcher, S, global, fullUnicode).
     return RegExpStringIterator::create(realm, matcher, string, global, full_unicode);
@@ -730,7 +739,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_replace)
     // 9. If global is true, then
     if (global) {
         // a. Perform ? Set(rx, "lastIndex", +0𝔽, true).
-        TRY(regexp_object->set(vm.names.lastIndex, Value(0), Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache2;
+        TRY(regexp_object->set(vm.names.lastIndex, Value(0), cache2));
     }
 
     // 10. Let results be a new empty List.
@@ -903,7 +913,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_search)
     // 5. If SameValue(previousLastIndex, +0𝔽) is false, then
     if (!same_value(previous_last_index, Value(0))) {
         // a. Perform ? Set(rx, "lastIndex", +0𝔽, true).
-        TRY(regexp_object->set(vm.names.lastIndex, Value(0), Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache2;
+        TRY(regexp_object->set(vm.names.lastIndex, Value(0), cache2));
     }
 
     // 6. Let result be ? RegExpExec(rx, S).
@@ -916,7 +927,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_search)
     // 8. If SameValue(currentLastIndex, previousLastIndex) is false, then
     if (!same_value(current_last_index, previous_last_index)) {
         // a. Perform ? Set(rx, "lastIndex", previousLastIndex, true).
-        TRY(regexp_object->set(vm.names.lastIndex, previous_last_index, Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache3;
+        TRY(regexp_object->set(vm.names.lastIndex, previous_last_index, cache3));
     }
 
     // 9. If result is null, return -1𝔽.
@@ -1010,7 +1022,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
             return array;
 
         // c. Perform ! CreateDataPropertyOrThrow(A, "0", S).
-        MUST(array->create_data_property_or_throw(0, string));
+        array->indexed_properties().put(0, string);
 
         // d. Return A.
         return array;
@@ -1027,7 +1039,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
     // 19. Repeat, while q < size,
     while (next_search_from < string->length_in_utf16_code_units()) {
         // a. Perform ? Set(splitter, "lastIndex", 𝔽(q), SplitBehavior::KeepEmpty).
-        TRY(splitter->set(vm.names.lastIndex, Value(next_search_from), Object::ShouldThrowExceptions::Yes));
+        static Bytecode::PropertyLookupCache cache2;
+        TRY(splitter->set(vm.names.lastIndex, Value(next_search_from), cache2));
 
         // b. Let z be ? RegExpExec(splitter, S).
         auto result = TRY(regexp_exec(vm, splitter, string));
@@ -1041,8 +1054,8 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
         // d. Else,
 
         // i. Let e be ℝ(? ToLength(? Get(splitter, "lastIndex"))).
-        static Bytecode::PropertyLookupCache cache2;
-        auto last_index_value = TRY(splitter->get(vm.names.lastIndex, cache2));
+        static Bytecode::PropertyLookupCache cache3;
+        auto last_index_value = TRY(splitter->get(vm.names.lastIndex, cache3));
         auto last_index = TRY(last_index_value.to_length(vm));
 
         // ii. Set e to min(e, size).
@@ -1060,7 +1073,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
         auto substring = string->utf16_string_view().substring_view(last_match_end, next_search_from - last_match_end);
 
         // 2. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
-        MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, substring)));
+        array->indexed_properties().put(array_length, PrimitiveString::create(vm, substring));
 
         // 3. Set lengthA to lengthA + 1.
         ++array_length;
@@ -1086,7 +1099,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
             auto next_capture = TRY(result.get(vm, i));
 
             // b. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), nextCapture).
-            MUST(array->create_data_property_or_throw(array_length, next_capture));
+            array->indexed_properties().put(array_length, next_capture);
 
             // c. Set i to i + 1.
 
@@ -1106,7 +1119,7 @@ JS_DEFINE_NATIVE_FUNCTION(RegExpPrototype::symbol_split)
     auto substring = string->utf16_string_view().substring_view(last_match_end);
 
     // 21. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
-    MUST(array->create_data_property_or_throw(array_length, PrimitiveString::create(vm, substring)));
+    array->indexed_properties().put(array_length, PrimitiveString::create(vm, substring));
 
     // 22. Return A.
     return array;

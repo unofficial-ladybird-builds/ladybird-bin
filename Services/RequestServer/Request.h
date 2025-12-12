@@ -29,7 +29,7 @@ namespace RequestServer {
 class Request : public HTTP::CacheRequest {
 public:
     static NonnullOwnPtr<Request> fetch(
-        i32 request_id,
+        u64 request_id,
         Optional<HTTP::DiskCache&> disk_cache,
         ConnectionFromClient& client,
         void* curl_multi,
@@ -42,7 +42,7 @@ public:
         Core::ProxyData proxy_data);
 
     static NonnullOwnPtr<Request> connect(
-        i32 request_id,
+        u64 request_id,
         ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
@@ -76,8 +76,31 @@ private:
         Error,        // Any error occured during the request's lifetime.
     };
 
+    static constexpr StringView state_name(State state)
+    {
+        switch (state) {
+        case State::Init:
+            return "Init"sv;
+        case State::ReadCache:
+            return "ReadCache"sv;
+        case State::WaitForCache:
+            return "WaitForCache"sv;
+        case State::DNSLookup:
+            return "DNSLookup"sv;
+        case State::Connect:
+            return "Connect"sv;
+        case State::Fetch:
+            return "Fetch"sv;
+        case State::Complete:
+            return "Complete"sv;
+        case State::Error:
+            return "Error"sv;
+        }
+        VERIFY_NOT_REACHED();
+    }
+
     Request(
-        i32 request_id,
+        u64 request_id,
         Optional<HTTP::DiskCache&> disk_cache,
         ConnectionFromClient& client,
         void* curl_multi,
@@ -90,7 +113,7 @@ private:
         Core::ProxyData proxy_data);
 
     Request(
-        i32 request_id,
+        u64 request_id,
         ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
@@ -120,7 +143,7 @@ private:
 
     ConnectionFromClient& client();
 
-    i32 m_request_id { 0 };
+    u64 m_request_id { 0 };
     Type m_type { Type::Fetch };
     State m_state { State::Init };
 
