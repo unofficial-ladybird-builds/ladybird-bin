@@ -18,6 +18,7 @@ set(SOURCES
     Animations/AnimationEffect.cpp
     Animations/AnimationPlaybackEvent.cpp
     Animations/AnimationTimeline.cpp
+    Animations/TimeValue.cpp
     Animations/DocumentTimeline.cpp
     Animations/KeyframeEffect.cpp
     Animations/PseudoElementParsing.cpp
@@ -266,6 +267,7 @@ set(SOURCES
     CSS/StyleValues/PositionStyleValue.cpp
     CSS/StyleValues/RGBColorStyleValue.cpp
     CSS/StyleValues/RadialGradientStyleValue.cpp
+    CSS/StyleValues/RadialSizeStyleValue.cpp
     CSS/StyleValues/RandomValueSharingStyleValue.cpp
     CSS/StyleValues/RectStyleValue.cpp
     CSS/StyleValues/RepeatStyleStyleValue.cpp
@@ -549,6 +551,7 @@ set(SOURCES
     HTML/HTMLProgressElement.cpp
     HTML/HTMLQuoteElement.cpp
     HTML/HTMLScriptElement.cpp
+    HTML/HTMLSelectedContentElement.cpp
     HTML/HTMLSelectElement.cpp
     HTML/HTMLSlotElement.cpp
     HTML/HTMLSourceElement.cpp

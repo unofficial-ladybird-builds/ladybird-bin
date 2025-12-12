@@ -307,10 +307,6 @@
     "nonzero",
     "evenodd"
   ],
-  "fit-side": [
-    "closest-side",
-    "farthest-side"
-  ],
   "flex-direction": [
     "row",
     "row-reverse",
@@ -688,6 +684,12 @@
     "relative",
     "static",
     "sticky"
+  ],
+  "radial-extent": [
+    "closest-corner",
+    "closest-side",
+    "farthest-corner",
+    "farthest-side"
   ],
   "referrer-policy-modifier-value": [
     "no-referrer",

@@ -9,6 +9,7 @@
 #include <LibGfx/Path.h>
 #include <LibWeb/CSS/Serialize.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
+#include <LibWeb/CSS/StyleValues/RadialSizeStyleValue.h>
 #include <LibWeb/CSS/ValueType.h>
 #include <LibWeb/SVG/Path.h>
 
@@ -74,30 +75,17 @@ String Rect::to_string(SerializationMode mode) const
 Gfx::Path Circle::to_path(CSSPixelRect reference_box, Layout::Node const& node) const
 {
     // Translating the reference box because PositionStyleValues are resolved to an absolute position.
-    auto center = position->resolved(node, reference_box.translated(-reference_box.x(), -reference_box.y()));
+    auto translated_reference_box = reference_box.translated(-reference_box.x(), -reference_box.y());
 
-    auto radius_px = [&]() {
-        if (radius->is_keyword()) {
-            switch (*keyword_to_fit_side(radius->to_keyword())) {
-            case FitSide::ClosestSide:
-                float closest;
-                closest = min(abs(center.x()), abs(center.y())).to_float();
-                closest = min(closest, abs(reference_box.width() - center.x()).to_float());
-                closest = min(closest, abs(reference_box.height() - center.y()).to_float());
-                return closest;
-            case FitSide::FarthestSide:
-                float farthest;
-                farthest = max(abs(center.x()), abs(center.y())).to_float();
-                farthest = max(farthest, abs(reference_box.width() - center.x()).to_float());
-                farthest = max(farthest, abs(reference_box.height() - center.y()).to_float());
-                return farthest;
-            }
-            VERIFY_NOT_REACHED();
-        }
+    // https://www.w3.org/TR/css-shapes/#funcdef-basic-shape-circle
+    // The <position> argument defines the center of the circle. Unless otherwise specified, this defaults to center if omitted.
+    RefPtr<PositionStyleValue const> resolved_position = PositionStyleValue::create_computed_center();
+    if (position)
+        resolved_position = position->as_position();
 
-        auto radius_ref = sqrt(pow(reference_box.width().to_float(), 2) + pow(reference_box.height().to_float(), 2)) / AK::Sqrt2<float>;
-        return max(0.0f, LengthPercentage::from_style_value(radius).to_px(node, CSSPixels(radius_ref)).to_float());
-    }();
+    auto center = resolved_position->resolved(node, translated_reference_box);
+
+    auto radius_px = radius->as_radial_size().resolve_circle_size(center, translated_reference_box, node).to_float();
 
     Gfx::Path path;
     path.move_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() + radius_px });
@@ -108,50 +96,57 @@ Gfx::Path Circle::to_path(CSSPixelRect reference_box, Layout::Node const& node) 
 
 String Circle::to_string(SerializationMode mode) const
 {
-    return MUST(String::formatted("circle({} at {})", radius->to_string(mode), position->to_string(mode)));
+    StringBuilder arguments_builder;
+    auto serialized_radius = radius->to_string(mode);
+
+    if (serialized_radius != "closest-side"sv)
+        arguments_builder.append(serialized_radius);
+
+    if (position) {
+        if (!arguments_builder.is_empty())
+            arguments_builder.append(' ');
+        arguments_builder.appendff("at {}", position->to_string(mode));
+    }
+
+    return MUST(String::formatted("circle({})", arguments_builder.to_string_without_validation()));
 }
 
 Gfx::Path Ellipse::to_path(CSSPixelRect reference_box, Layout::Node const& node) const
 {
     // Translating the reference box because PositionStyleValues are resolved to an absolute position.
-    auto center = position->resolved(node, reference_box.translated(-reference_box.x(), -reference_box.y()));
+    auto translated_reference_box = reference_box.translated(-reference_box.x(), -reference_box.y());
 
-    auto radius_x_px = [&]() {
-        if (radius_x->is_keyword()) {
-            switch (*keyword_to_fit_side(radius_x->to_keyword())) {
-            case FitSide::ClosestSide:
-                return min(abs(center.x()), abs(reference_box.width() - center.x())).to_float();
-            case FitSide::FarthestSide:
-                return max(abs(center.x()), abs(reference_box.width() - center.x())).to_float();
-            }
-            VERIFY_NOT_REACHED();
-        }
-        return max(0.0f, LengthPercentage::from_style_value(radius_x).to_px(node, reference_box.width()).to_float());
-    }();
+    // https://www.w3.org/TR/css-shapes/#funcdef-basic-shape-circle
+    // The <position> argument defines the center of the ellipse. Unless otherwise specified, this defaults to center if omitted.
+    RefPtr<PositionStyleValue const> resolved_position = PositionStyleValue::create_computed_center();
+    if (position)
+        resolved_position = position->as_position();
 
-    auto radius_y_px = [&]() {
-        if (radius_y->is_keyword()) {
-            switch (*keyword_to_fit_side(radius_y->to_keyword())) {
-            case FitSide::ClosestSide:
-                return min(abs(center.y()), abs(reference_box.height() - center.y())).to_float();
-            case FitSide::FarthestSide:
-                return max(abs(center.y()), abs(reference_box.height() - center.y())).to_float();
-            }
-            VERIFY_NOT_REACHED();
-        }
-        return max(0.0f, LengthPercentage::from_style_value(radius_y).to_px(node, reference_box.height()).to_float());
-    }();
+    auto center = resolved_position->resolved(node, translated_reference_box);
+    auto size = radius->as_radial_size().resolve_ellipse_size(center, translated_reference_box, node);
 
     Gfx::Path path;
-    path.move_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() + radius_y_px });
-    path.elliptical_arc_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() - radius_y_px }, Gfx::FloatSize { radius_x_px, radius_y_px }, 0, true, true);
-    path.elliptical_arc_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() + radius_y_px }, Gfx::FloatSize { radius_x_px, radius_y_px }, 0, true, true);
+    path.move_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() + size.height().to_float() });
+    path.elliptical_arc_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() - size.height().to_float() }, Gfx::FloatSize { size.width().to_float(), size.height().to_float() }, 0, true, true);
+    path.elliptical_arc_to(Gfx::FloatPoint { center.x().to_float(), center.y().to_float() + size.height().to_float() }, Gfx::FloatSize { size.width().to_float(), size.height().to_float() }, 0, true, true);
     return path;
 }
 
 String Ellipse::to_string(SerializationMode mode) const
 {
-    return MUST(String::formatted("ellipse({} {} at {})", radius_x->to_string(mode), radius_y->to_string(mode), position->to_string(mode)));
+    StringBuilder arguments_builder;
+    auto serialized_radius = radius->to_string(mode);
+
+    if (serialized_radius != "closest-side closest-side"sv)
+        arguments_builder.append(serialized_radius);
+
+    if (position) {
+        if (!arguments_builder.is_empty())
+            arguments_builder.append(' ');
+        arguments_builder.appendff("at {}", position->to_string(mode));
+    }
+
+    return MUST(String::formatted("ellipse({})", arguments_builder.to_string_without_validation()));
 }
 
 Gfx::Path Polygon::to_path(CSSPixelRect reference_box, Layout::Node const& node) const
@@ -266,6 +261,12 @@ ValueComparingNonnullRefPtr<StyleValue const> BasicShapeStyleValue::absolutized(
         return CalculatedStyleValue::create(SumCalculationNode::create(sum_components), NumericType { NumericType::BaseType::Length, 1 }, calculation_context);
     };
 
+    auto const absolutize_if_nonnull = [&](RefPtr<StyleValue const> const& value) -> ValueComparingRefPtr<StyleValue const> {
+        if (!value)
+            return nullptr;
+        return value->absolutized(computation_context);
+    };
+
     auto absolutized_shape = m_basic_shape.visit(
         [&](Inset const& shape) -> BasicShape {
             auto absolutized_top = shape.top->absolutized(computation_context);
@@ -311,22 +312,21 @@ ValueComparingNonnullRefPtr<StyleValue const> BasicShapeStyleValue::absolutized(
         },
         [&](Circle const& shape) -> BasicShape {
             auto absolutized_radius = shape.radius->absolutized(computation_context);
-            auto absolutized_position = shape.position->absolutized(computation_context);
+            auto absolutized_position = absolutize_if_nonnull(shape.position);
 
-            if (absolutized_radius == shape.radius && absolutized_position->as_position() == *shape.position)
+            if (absolutized_radius == shape.radius && absolutized_position == shape.position)
                 return shape;
 
-            return Circle { absolutized_radius, absolutized_position->as_position() };
+            return Circle { absolutized_radius, absolutized_position };
         },
         [&](Ellipse const& shape) -> BasicShape {
-            auto absolutized_radius_x = shape.radius_x->absolutized(computation_context);
-            auto absolutized_radius_y = shape.radius_y->absolutized(computation_context);
-            auto absolutized_position = shape.position->absolutized(computation_context);
+            auto absolutized_radius = shape.radius->absolutized(computation_context);
+            auto absolutized_position = absolutize_if_nonnull(shape.position);
 
-            if (absolutized_radius_x == shape.radius_x && absolutized_radius_y == shape.radius_y && absolutized_position->as_position() == *shape.position)
+            if (absolutized_radius == shape.radius && absolutized_position == shape.position)
                 return shape;
 
-            return Ellipse { absolutized_radius_x, absolutized_radius_y, absolutized_position->as_position() };
+            return Ellipse { absolutized_radius, absolutized_position };
         },
         [&](Polygon const& shape) -> BasicShape {
             Vector<Polygon::Point> absolutized_points;
