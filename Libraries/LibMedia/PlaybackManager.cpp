@@ -218,10 +218,12 @@ NonnullRefPtr<DisplayingVideoSink> PlaybackManager::get_or_create_the_displaying
 {
     auto& track_data = get_video_data_for_track(track);
     if (track_data.display == nullptr) {
-        track_data.display = MUST(Media::DisplayingVideoSink::try_create(*m_time_provider));
+        track_data.display = MUST(Media::DisplayingVideoSink::try_create(m_time_provider));
+        track_data.display->pause_updates();
         track_data.display->set_provider(track, track_data.provider);
-        track_data.provider->start();
-        track_data.provider->seek(m_time_provider->current_time(), SeekMode::Accurate);
+        track_data.provider->seek(m_time_provider->current_time(), SeekMode::Accurate, [display = track_data.display](AK::Duration) {
+            display->resume_updates();
+        });
     }
 
     VERIFY(track_data.display->provider(track) == track_data.provider);
@@ -251,8 +253,9 @@ void PlaybackManager::enable_an_audio_track(Track const& track)
     auto had_provider = m_audio_sink->provider(track) != nullptr;
     m_audio_sink->set_provider(track, track_data.provider);
     if (!had_provider) {
-        track_data.provider->start();
-        track_data.provider->seek(current_time());
+        track_data.provider->seek(current_time(), [sink = NonnullRefPtr(*m_audio_sink), track] {
+            sink->clear_track_data(track);
+        });
     }
 }
 

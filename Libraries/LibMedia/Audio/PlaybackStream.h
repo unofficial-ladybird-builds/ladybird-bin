@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Gregory Bertilson <zaggy1024@gmail.com>
+ * Copyright (c) 2023-2025, Gregory Bertilson <gregory@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,6 +12,7 @@
 #include <AK/Time.h>
 #include <LibCore/Forward.h>
 #include <LibCore/ThreadedPromise.h>
+#include <LibMedia/Audio/SampleSpecification.h>
 #include <LibMedia/Export.h>
 
 namespace Audio {
@@ -28,16 +29,20 @@ enum class OutputState {
 // Timing information provided by the class should allow audio timestamps to be tracked with the best accuracy possible.
 class MEDIA_API PlaybackStream : public AtomicRefCounted<PlaybackStream> {
 public:
-    using AudioDataRequestCallback = Function<ReadonlyBytes(Bytes buffer, PcmSampleFormat format, size_t sample_count)>;
+    using SampleSpecificationCallback = Function<void(SampleSpecification)>;
+    using AudioDataRequestCallback = Function<ReadonlySpan<float>(Span<float> buffer)>;
 
     // Creates a new audio Output class.
     //
     // The initial_output_state parameter determines whether it will begin playback immediately.
     //
+    // The SampleSpecificationCallback will be called when a SampleSpecification has been selected based on the
+    // default output device. It will always be called before the first data request.
+    //
     // The AudioDataRequestCallback will be called when the Output needs more audio data to fill its buffers and
     // continue playback. This callback will only be allowed to run on one thread at a time, to prevent any data
     // race on the resource used by the callback.
-    static ErrorOr<NonnullRefPtr<PlaybackStream>> create(OutputState initial_output_state, u32 sample_rate, u8 channels, u32 target_latency_ms, AudioDataRequestCallback&&);
+    static ErrorOr<NonnullRefPtr<PlaybackStream>> create(OutputState initial_output_state, u32 target_latency_ms, SampleSpecificationCallback&&, AudioDataRequestCallback&&);
 
     virtual ~PlaybackStream() = default;
 
