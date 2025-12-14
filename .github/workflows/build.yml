@@ -84,6 +84,15 @@ jobs:
         run: |
           cmake --version
           clang-20 --version
+
+      - name: Update ICU (vcpkg)
+        run: |
+            ./vcpkg remove icu:x64-linux-dynamic || true
+            git -C vcpkg pull
+            ./vcpkg update
+            ./vcpkg install icu:x64-linux-dynamic
+            cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+
           
       - name: Build Ladybird with portable flags
         run: |
