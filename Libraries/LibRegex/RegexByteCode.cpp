@@ -476,7 +476,7 @@ ALWAYS_INLINE ExecutionResult OpCode_SaveRightNamedCaptureGroup::execute(MatchIn
 
 ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, MatchState& state) const
 {
-    auto argument_count = arguments_count();
+    auto const argument_count = arguments_count();
     auto has_single_argument = argument_count == 1;
 
     bool inverse { false };
@@ -517,6 +517,8 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
     size_t offset { state.instruction_position + 3 };
     CharacterCompareType last_compare_type = CharacterCompareType::Undefined;
 
+    auto const* bytecode_data = m_bytecode->flat_data().data();
+
     for (size_t i = 0; i < argument_count; ++i) {
         if (state.string_position > string_position)
             break;
@@ -526,7 +528,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             state.string_position_in_code_units = current_disjunction_state().initial_code_unit_position;
         }
 
-        auto compare_type = (CharacterCompareType)m_bytecode->at(offset++);
+        auto compare_type = (CharacterCompareType)bytecode_data[offset++];
 
         if (reset_temp_inverse) {
             reset_temp_inverse = false;
@@ -546,13 +548,13 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
         case CharacterCompareType::TemporaryInverse:
             // If "TemporaryInverse" is given, negate the current inversion state only for the next opcode.
             // it follows that this cannot be the last compare element.
-            VERIFY(i != arguments_count() - 1);
+            VERIFY(i != argument_count - 1);
 
             temporary_inverse = true;
             reset_temp_inverse = false;
             continue;
         case CharacterCompareType::Char: {
-            u32 ch = m_bytecode->at(offset++);
+            u32 ch = bytecode_data[offset++];
 
             // We want to compare a string that is longer or equal in length to the available string
             if (input.view.length() <= state.string_position)
@@ -583,7 +585,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
         case CharacterCompareType::String: {
             VERIFY(!current_inversion_state());
 
-            auto const& length = m_bytecode->at(offset++);
+            auto const& length = bytecode_data[offset++];
 
             // We want to compare a string that is definitely longer than the available string
             if (input.view.length() < state.string_position + length)
@@ -594,7 +596,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             Vector<u32> data;
             data.ensure_capacity(length);
             for (size_t i = offset; i < offset + length; ++i)
-                data.unchecked_append(m_bytecode->at(i));
+                data.unchecked_append(bytecode_data[i]);
 
             auto view = input.view.construct_as_same(data, str, utf16);
             offset += length;
@@ -608,7 +610,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             if (input.view.length_in_code_units() <= state.string_position_in_code_units)
                 return ExecutionResult::Failed_ExecuteLowPrioForks;
 
-            auto character_class = (CharClass)m_bytecode->at(offset++);
+            auto character_class = (CharClass)bytecode_data[offset++];
             auto ch = input.view.unicode_aware_code_point_at(state.string_position_in_code_units);
 
             compare_character_class(input, state, character_class, ch, current_inversion_state(), inverse_matched);
@@ -618,8 +620,8 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             if (input.view.length() <= state.string_position)
                 return ExecutionResult::Failed_ExecuteLowPrioForks;
 
-            auto count_sensitive = m_bytecode->at(offset++);
-            auto count_insensitive = m_bytecode->at(offset++);
+            auto count_sensitive = bytecode_data[offset++];
+            auto count_insensitive = bytecode_data[offset++];
             auto sensitive_range_data = m_bytecode->flat_data().slice(offset, count_sensitive);
             offset += count_sensitive;
             auto insensitive_range_data = m_bytecode->flat_data().slice(offset, count_insensitive);
@@ -652,7 +654,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             if (input.view.length() <= state.string_position)
                 return ExecutionResult::Failed_ExecuteLowPrioForks;
 
-            auto value = (CharRange)m_bytecode->at(offset++);
+            auto value = (CharRange)bytecode_data[offset++];
 
             auto from = value.from;
             auto to = value.to;
@@ -662,7 +664,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             break;
         }
         case CharacterCompareType::Reference: {
-            auto reference_number = ((size_t)m_bytecode->at(offset++)) - 1;
+            auto reference_number = ((size_t)bytecode_data[offset++]) - 1;
             if (input.match_index >= state.capture_group_matches_size()) {
                 had_zero_length_match = true;
                 if (current_inversion_state())
@@ -692,7 +694,7 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             break;
         }
         case CharacterCompareType::NamedReference: {
-            auto reference_number = ((size_t)m_bytecode->at(offset++)) - 1;
+            auto reference_number = ((size_t)bytecode_data[offset++]) - 1;
 
             if (input.match_index >= state.capture_group_matches_size()) {
                 had_zero_length_match = true;
@@ -745,28 +747,28 @@ ALWAYS_INLINE ExecutionResult OpCode_Compare::execute(MatchInput const& input, M
             break;
         }
         case CharacterCompareType::Property: {
-            auto property = static_cast<Unicode::Property>(m_bytecode->at(offset++));
+            auto property = static_cast<Unicode::Property>(bytecode_data[offset++]);
             compare_property(input, state, property, current_inversion_state(), inverse_matched);
             break;
         }
         case CharacterCompareType::GeneralCategory: {
-            auto general_category = static_cast<Unicode::GeneralCategory>(m_bytecode->at(offset++));
+            auto general_category = static_cast<Unicode::GeneralCategory>(bytecode_data[offset++]);
             compare_general_category(input, state, general_category, current_inversion_state(), inverse_matched);
             break;
         }
         case CharacterCompareType::Script: {
-            auto script = static_cast<Unicode::Script>(m_bytecode->at(offset++));
+            auto script = static_cast<Unicode::Script>(bytecode_data[offset++]);
             compare_script(input, state, script, current_inversion_state(), inverse_matched);
             break;
         }
         case CharacterCompareType::ScriptExtension: {
-            auto script = static_cast<Unicode::Script>(m_bytecode->at(offset++));
+            auto script = static_cast<Unicode::Script>(bytecode_data[offset++]);
             compare_script_extension(input, state, script, current_inversion_state(), inverse_matched);
             break;
         }
         case CharacterCompareType::StringSet: {
             has_string_set = true;
-            auto string_set_index = m_bytecode->at(offset++);
+            auto string_set_index = bytecode_data[offset++];
 
             bool matched = false;
             size_t longest_match_length = 0;
@@ -1206,42 +1208,44 @@ Vector<CompareTypeAndValuePair> OpCode_Compare::flat_compares() const
     Vector<CompareTypeAndValuePair> result;
 
     size_t offset { state().instruction_position + 3 };
+    auto argument_count = arguments_count();
+    auto const* bytecode_data = m_bytecode->flat_data().data();
 
-    for (size_t i = 0; i < arguments_count(); ++i) {
-        auto compare_type = (CharacterCompareType)m_bytecode->at(offset++);
+    for (size_t i = 0; i < argument_count; ++i) {
+        auto compare_type = (CharacterCompareType)bytecode_data[offset++];
 
         if (compare_type == CharacterCompareType::Char) {
-            auto ch = m_bytecode->at(offset++);
+            auto ch = bytecode_data[offset++];
             result.append({ compare_type, ch });
         } else if (compare_type == CharacterCompareType::Reference) {
-            auto ref = m_bytecode->at(offset++);
+            auto ref = bytecode_data[offset++];
             result.append({ compare_type, ref });
         } else if (compare_type == CharacterCompareType::NamedReference) {
-            auto ref = m_bytecode->at(offset++);
+            auto ref = bytecode_data[offset++];
             result.append({ compare_type, ref });
         } else if (compare_type == CharacterCompareType::String) {
-            auto& length = m_bytecode->at(offset++);
+            auto& length = bytecode_data[offset++];
             for (size_t k = 0; k < length; ++k)
-                result.append({ CharacterCompareType::Char, m_bytecode->at(offset + k) });
+                result.append({ CharacterCompareType::Char, bytecode_data[offset + k] });
             offset += length;
         } else if (compare_type == CharacterCompareType::CharClass) {
-            auto character_class = m_bytecode->at(offset++);
+            auto character_class = bytecode_data[offset++];
             result.append({ compare_type, character_class });
         } else if (compare_type == CharacterCompareType::CharRange) {
-            auto value = m_bytecode->at(offset++);
+            auto value = bytecode_data[offset++];
             result.append({ compare_type, value });
         } else if (compare_type == CharacterCompareType::LookupTable) {
-            auto count_sensitive = m_bytecode->at(offset++);
-            auto count_insensitive = m_bytecode->at(offset++);
+            auto count_sensitive = bytecode_data[offset++];
+            auto count_insensitive = bytecode_data[offset++];
             for (size_t i = 0; i < count_sensitive; ++i)
-                result.append({ CharacterCompareType::CharRange, m_bytecode->at(offset++) });
+                result.append({ CharacterCompareType::CharRange, bytecode_data[offset++] });
             offset += count_insensitive; // Skip insensitive ranges
         } else if (compare_type == CharacterCompareType::GeneralCategory
             || compare_type == CharacterCompareType::Property
             || compare_type == CharacterCompareType::Script
             || compare_type == CharacterCompareType::ScriptExtension
             || compare_type == CharacterCompareType::StringSet) {
-            auto value = m_bytecode->at(offset++);
+            auto value = bytecode_data[offset++];
             result.append({ compare_type, value });
         } else {
             result.append({ compare_type, 0 });
@@ -1257,7 +1261,9 @@ Vector<ByteString> OpCode_Compare::variable_arguments_to_byte_string(Optional<Ma
     size_t offset { state().instruction_position + 3 };
     RegexStringView const& view = input.has_value() ? input.value().view : StringView {};
 
-    for (size_t i = 0; i < arguments_count(); ++i) {
+    auto argument_count = arguments_count();
+
+    for (size_t i = 0; i < argument_count; ++i) {
         auto compare_type = (CharacterCompareType)m_bytecode->at(offset++);
         result.empend(ByteString::formatted("type={} [{}]", (size_t)compare_type, character_compare_type_name(compare_type)));
 

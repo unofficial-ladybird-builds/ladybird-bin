@@ -83,7 +83,7 @@ protected:
     bool m_marked_for_deletion { false };
 };
 
-class CacheEntryWriter : public CacheEntry {
+class CacheEntryWriter final : public CacheEntry {
 public:
     static ErrorOr<NonnullOwnPtr<CacheEntryWriter>> create(DiskCache&, CacheIndex&, u64 cache_key, String url, UnixDateTime request_time, AK::Duration current_time_offset_for_testing);
     virtual ~CacheEntryWriter() override = default;
@@ -103,13 +103,18 @@ private:
     AK::Duration m_current_time_offset_for_testing;
 };
 
-class CacheEntryReader : public CacheEntry {
+class CacheEntryReader final : public CacheEntry {
 public:
     static ErrorOr<NonnullOwnPtr<CacheEntryReader>> create(DiskCache&, CacheIndex&, u64 cache_key, NonnullRefPtr<HeaderList>, u64 data_size);
     virtual ~CacheEntryReader() override = default;
 
-    bool must_revalidate() const { return m_must_revalidate; }
-    void set_must_revalidate() { m_must_revalidate = true; }
+    enum class RevalidationType {
+        None,
+        MustRevalidate,
+        StaleWhileRevalidate,
+    };
+    RevalidationType revalidation_type() const { return m_revalidation_type; }
+    void set_revalidation_type(RevalidationType revalidation_type) { m_revalidation_type = revalidation_type; }
 
     void revalidation_succeeded(HeaderList const&);
     void revalidation_failed();
@@ -143,7 +148,7 @@ private:
     Optional<String> m_reason_phrase;
     NonnullRefPtr<HeaderList> m_response_headers;
 
-    bool m_must_revalidate { false };
+    RevalidationType m_revalidation_type { RevalidationType::None };
 
     u64 const m_data_offset { 0 };
     u64 const m_data_size { 0 };
