@@ -93,9 +93,6 @@ jobs:
           export CMAKE_CXX_FLAGS="-O2 -march=x86-64 -mtune=generic -fcf-protection=none -mno-shstk"
           ./Meta/ladybird.py build
 
-
-
-
       - name: Ensure Resources exist or add dummy
         run: |
           mkdir -p Resources
