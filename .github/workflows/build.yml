@@ -14,9 +14,7 @@ permissions:
 
 jobs:
   build:
-    #runs-on: blacksmith-4vcpu-ubuntu-2404
-    runs-on: ubuntu-latest # Pretend I wasn't shipping broken builds for months due to Blacksmith applying intel-only instructions that would crash Ladybird at startup. Builds are a log longer. 
-
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -32,15 +30,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
           git fetch upstream master
-
-          # Bring in everything from upstream
           git checkout upstream/master -- .
-
-          # Keep .github folder and README
           git restore --source=HEAD --staged --worktree .github
           git restore --staged --worktree -- README.md
-
-          # Commit sync if needed
           git add -A
           git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
           git push origin master || echo "No changes pushed"
@@ -85,15 +77,25 @@ jobs:
           cmake --version
           clang-20 --version
 
+      - name: Bootstrap vcpkg
+        run: |
+          if [ ! -d vcpkg ]; then
+            git clone https://github.com/microsoft/vcpkg.git
+          fi
+          cd vcpkg
+          ./bootstrap-vcpkg.sh
+          cd ..
+
       - name: Update ICU (vcpkg)
         run: |
-            ./vcpkg remove icu:x64-linux-dynamic || true
-            git -C vcpkg pull
-            ./vcpkg update
-            ./vcpkg install icu:x64-linux-dynamic
-            cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+          cd vcpkg
+          ./vcpkg remove icu:x64-linux-dynamic || true
+          git pull
+          ./vcpkg update
+          ./vcpkg install icu:x64-linux-dynamic
+          cd ..
+          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
 
-          
       - name: Build Ladybird with portable flags
         run: |
           chmod +x ./Meta/ladybird.py
