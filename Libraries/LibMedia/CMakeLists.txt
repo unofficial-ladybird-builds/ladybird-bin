@@ -8,13 +8,16 @@ set(SOURCES
     Color/TransferCharacteristics.cpp
     Containers/Matroska/MatroskaDemuxer.cpp
     Containers/Matroska/Reader.cpp
+    IncrementallyPopulatedStream.cpp
     PlaybackManager.cpp
     PlaybackStates/PlaybackStateHandler.cpp
+    PlaybackStates/ResumingStateHandler.cpp
     Providers/AudioDataProvider.cpp
     Providers/GenericTimeProvider.cpp
     Providers/VideoDataProvider.cpp
     Sinks/AudioMixingSink.cpp
     Sinks/DisplayingVideoSink.cpp
+    Sniffing.cpp
     VideoFrame.cpp
 )
 
