@@ -11,7 +11,7 @@
 
 namespace Media {
 
-enum class CodecID : u32 {
+enum class CodecID : u8 {
     Unknown,
     // On2 / Google
     VP8,
@@ -32,6 +32,16 @@ enum class CodecID : u32 {
     Vorbis,
     Opus,
     FLAC,
+    // PCM
+    U8,
+    S16LE,
+    S24LE,
+    S32LE,
+    S64LE,
+    F32LE,
+    F64LE,
+    ALaw,
+    MuLaw,
 };
 
 inline TrackType track_type_from_codec_id(CodecID codec)
@@ -53,11 +63,77 @@ inline TrackType track_type_from_codec_id(CodecID codec)
     case CodecID::Vorbis:
     case CodecID::Opus:
     case CodecID::FLAC:
+    case CodecID::U8:
+    case CodecID::S16LE:
+    case CodecID::S24LE:
+    case CodecID::S32LE:
+    case CodecID::S64LE:
+    case CodecID::F32LE:
+    case CodecID::F64LE:
+    case CodecID::ALaw:
+    case CodecID::MuLaw:
         return TrackType::Audio;
     case CodecID::Unknown:
         break;
     }
     return TrackType::Unknown;
+}
+
+constexpr StringView codec_id_to_string(CodecID codec)
+{
+    switch (codec) {
+    case Media::CodecID::Unknown:
+        return "Unknown"sv;
+    case Media::CodecID::VP8:
+        return "VP8"sv;
+    case Media::CodecID::VP9:
+        return "VP9"sv;
+    case Media::CodecID::H261:
+        return "H.261"sv;
+    case Media::CodecID::H262:
+        return "H.262"sv;
+    case Media::CodecID::H263:
+        return "H.263"sv;
+    case Media::CodecID::H264:
+        return "H.264"sv;
+    case Media::CodecID::H265:
+        return "H.265"sv;
+    case Media::CodecID::MP3:
+        return "MP3"sv;
+    case Media::CodecID::AAC:
+        return "AAC"sv;
+    case Media::CodecID::MPEG1:
+        return "MPEG1"sv;
+    case Media::CodecID::AV1:
+        return "AV1"sv;
+    case Media::CodecID::Theora:
+        return "Theora"sv;
+    case Media::CodecID::Vorbis:
+        return "Vorbis"sv;
+    case Media::CodecID::Opus:
+        return "Opus"sv;
+    case Media::CodecID::FLAC:
+        return "FLAC"sv;
+    case CodecID::U8:
+        return "unsigned 8-bit PCM"sv;
+    case CodecID::S16LE:
+        return "signed 16-bit PCM"sv;
+    case CodecID::S24LE:
+        return "signed 24-bit PCM"sv;
+    case CodecID::S32LE:
+        return "signed 32-bit PCM"sv;
+    case CodecID::S64LE:
+        return "signed 64-bit PCM"sv;
+    case CodecID::F32LE:
+        return "32-bit float PCM"sv;
+    case CodecID::F64LE:
+        return "64-bit float PCM"sv;
+    case CodecID::ALaw:
+        return "A-law PCM"sv;
+    case CodecID::MuLaw:
+        return "μ-law PCM"sv;
+    }
+    return "Unknown"sv;
 }
 
 }
@@ -68,58 +144,7 @@ template<>
 struct Formatter<Media::CodecID> : Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Media::CodecID value)
     {
-        StringView codec;
-        switch (value) {
-        case Media::CodecID::Unknown:
-            codec = "Unknown"sv;
-            break;
-        case Media::CodecID::VP8:
-            codec = "VP8"sv;
-            break;
-        case Media::CodecID::VP9:
-            codec = "VP9"sv;
-            break;
-        case Media::CodecID::H261:
-            codec = "H.261"sv;
-            break;
-        case Media::CodecID::H262:
-            codec = "H.262"sv;
-            break;
-        case Media::CodecID::H263:
-            codec = "H.263"sv;
-            break;
-        case Media::CodecID::H264:
-            codec = "H.264"sv;
-            break;
-        case Media::CodecID::H265:
-            codec = "H.265"sv;
-            break;
-        case Media::CodecID::MP3:
-            codec = "MP3"sv;
-            break;
-        case Media::CodecID::AAC:
-            codec = "AAC"sv;
-            break;
-        case Media::CodecID::MPEG1:
-            codec = "MPEG1"sv;
-            break;
-        case Media::CodecID::AV1:
-            codec = "AV1"sv;
-            break;
-        case Media::CodecID::Theora:
-            codec = "Theora"sv;
-            break;
-        case Media::CodecID::Vorbis:
-            codec = "Vorbis"sv;
-            break;
-        case Media::CodecID::Opus:
-            codec = "Opus"sv;
-            break;
-        case Media::CodecID::FLAC:
-            codec = "FLAC"sv;
-            break;
-        }
-        return builder.put_string(codec);
+        return Formatter<StringView>::format(builder, Media::codec_id_to_string(value));
     }
 };
 
