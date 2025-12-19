@@ -28,7 +28,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/LadybirdBrowser/ladybird.git
+          git remote add upstream https://github.com/LadybirdBrowser/ladybird.git || true
           git fetch upstream master
           git checkout upstream/master -- .
           git restore --source=HEAD --staged --worktree .github
@@ -83,18 +83,24 @@ jobs:
             git clone https://github.com/microsoft/vcpkg.git
           fi
           cd vcpkg
+          git pull
           ./bootstrap-vcpkg.sh
           cd ..
 
-      - name: Update ICU (vcpkg)
+      # --- FIX: clean state to avoid ICU ABI mismatch ---
+      - name: Clean previous build and vcpkg artifacts
         run: |
-          cd vcpkg
-          ./vcpkg remove icu:x64-linux-dynamic || true
-          git pull
-          ./vcpkg update
-          ./vcpkg install icu:x64-linux-dynamic
-          cd ..
-          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+          rm -rf build
+          rm -rf vcpkg_installed
+
+      # --- FIX: manifest-mode install (ICU handled here) ---
+      - name: Configure CMake (vcpkg manifest mode)
+        run: |
+          cmake -B build -S . \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic
 
       - name: Build Ladybird with portable flags
         run: |
