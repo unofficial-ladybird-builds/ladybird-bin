@@ -87,13 +87,13 @@ jobs:
           ./bootstrap-vcpkg.sh
           cd ..
 
-      # --- FIX: clean state to avoid ICU ABI mismatch ---
+      # --- FIX: clean state to avoid ICU / ABI mismatch ---
       - name: Clean previous build and vcpkg artifacts
         run: |
           rm -rf build
           rm -rf vcpkg_installed
 
-      # --- FIX: manifest-mode install (ICU handled here) ---
+      # --- FIX: manifest-mode install (ICU handled via vcpkg.json) ---
       - name: Configure CMake (vcpkg manifest mode)
         run: |
           cmake -B build -S . \
