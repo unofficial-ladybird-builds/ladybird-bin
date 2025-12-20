@@ -89,11 +89,11 @@ jobs:
           pacman -Qi icu | sed -n '1,5p'
 
       # --- CONFIGURE ---
-      - name: Configure Ladybird
-        run: |
-          cmake -B build -S . \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+      #- name: Configure Ladybird
+        #run: |
+          #cmake -B build -S . \
+            #-G Ninja \
+            #-DCMAKE_BUILD_TYPE=Release
 
       # --- BUILD ---
       - name: Build Ladybird
