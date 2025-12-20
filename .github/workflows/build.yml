@@ -50,14 +50,19 @@ jobs:
             lld \
             icu
 
-      # --- CHECKOUT (manual inside container) ---
+      # --- TRUST WORKSPACE FOR GIT ---
+      - name: Trust workspace for Git
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      # --- CHECKOUT REPOSITORY ---
       - name: Clone repository
         run: |
-          git clone https://github.com/${{ github.repository }} .
+          git clone https://github.com/unofficial-ladybird-builds/ladybird-bin .
           git fetch --all --tags
           git checkout ${{ github.ref_name }}
 
-      # --- SYNC WITH UPSTREAM (preserve .github) ---
+      # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
       - name: Sync with upstream (preserve .github)
         run: |
           git config user.name "github-actions[bot]"
