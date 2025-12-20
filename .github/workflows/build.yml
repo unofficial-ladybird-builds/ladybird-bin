@@ -50,16 +50,15 @@ jobs:
             lld \
             icu
 
-      # --- CHECKOUT ---
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: master
+      # --- CHECKOUT (manual inside container) ---
+      - name: Clone repository
+        run: |
+          git clone https://github.com/${{ github.repository }} .
+          git fetch --all --tags
+          git checkout ${{ github.ref_name }}
 
-      # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
+      # --- SYNC WITH UPSTREAM (preserve .github) ---
       - name: Sync with upstream (preserve .github)
-        working-directory: ${{ github.workspace }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
