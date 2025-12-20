@@ -95,12 +95,13 @@ jobs:
             #-G Ninja \
             #-DCMAKE_BUILD_TYPE=Release
 
-      # --- BUILD ---
+      # --- BUILD - Run without root ---
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
           export BUILD_PRESET=Release
-          ./Meta/ladybird.py build
+          sudo -u $USER ./Meta/ladybird.py build 
+          
 
       # --- RESOURCES ---
       - name: Ensure resources exist
