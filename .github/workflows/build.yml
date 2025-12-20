@@ -59,6 +59,7 @@ jobs:
 
       # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
       - name: Sync with upstream (preserve .github)
+        working-directory: ${{ github.workspace }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
