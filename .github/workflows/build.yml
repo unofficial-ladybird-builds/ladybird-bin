@@ -1,4 +1,4 @@
-name: Build Ladybird (Arch Linux)
+name: Build Ladybird
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "*" ]
   schedule:
-    - cron: '0 */48 * * *'
+    - cron: '0 */48 * * *'   # Every 48 hours
   workflow_dispatch:
 
 permissions:
@@ -14,90 +14,112 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-
-    container:
-      image: archlinux:latest
+    runs-on: ubuntu-24.04  # or change to a container later for Arch
 
     steps:
-      # --- BASE SYSTEM ---
-      - name: Initialize Arch Linux
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed \
-            base-devel \
-            git \
-            autoconf \
-            autoconf-archive \
-            automake \
-            ccache \
-            cmake \
-            curl \
-            libgl \
-            nasm \
-            ninja \
-            qt6-base \
-            qt6-tools \
-            qt6-wayland \
-            qt6-multimedia \
-            libpulse \
-            ttf-liberation \
-            tar \
-            unzip \
-            zip \
-            clang \
-            llvm \
-            lld \
-            icu
-
-      # --- CHECKOUT ---
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: master
 
-      # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
+      # --- SYNC STEP: Git commands consolidated into one step ---
       - name: Sync with upstream (preserve .github)
         working-directory: ${{ github.workspace }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      
+
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git || true
           git fetch upstream master
-      
+
           git checkout upstream/master -- .
           git restore --source=HEAD --staged --worktree .github
           git restore --staged --worktree -- README.md
-      
+
           git add -A
           git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
-      # --- TOOLCHAIN ---
-      - name: Set Clang toolchain
+
+      # --- APT REPOS ---
+      - name: Add Kitware APT repo (new CMake)
         run: |
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
+          sudo apt update
+          sudo apt install -y gnupg software-properties-common
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+            gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -sc) main" | \
+            sudo tee /etc/apt/sources.list.d/kitware.list
+
+      - name: Add LLVM APT repo (clang-20)
+        run: |
+          sudo wget -O /usr/share/keyrings/llvm-snapshot.gpg.key https://apt.llvm.org/llvm-snapshot.gpg.key
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] https://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc)-20 main" | \
+            sudo tee /etc/apt/sources.list.d/llvm.list
+
+      - name: Add Ubuntu Toolchain PPA (gcc-14)
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      # --- DEPENDENCIES ---
+      - name: Install dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            autoconf autoconf-archive automake build-essential ccache \
+            cmake curl fonts-liberation2 git libgl1-mesa-dev nasm ninja-build \
+            pkg-config qt6-base-dev qt6-tools-dev-tools qt6-wayland qt6-multimedia-dev \
+            libpulse-dev tar unzip zip \
+            clang-20 clangd-20 clang-tools-20 clang-format-20 clang-tidy-20 lld-20 \
+            g++-14 libstdc++-14-dev libdrm-dev
+
+      # --- TOOLCHAIN ENV ---
+      - name: Set compiler, Ninja, and vcpkg triplet
+        run: |
+          echo "CC=clang-20" >> $GITHUB_ENV
+          echo "CXX=clang++-20" >> $GITHUB_ENV
+          echo "VCPKG_TARGET_TRIPLET=x64-linux-dynamic" >> $GITHUB_ENV
+          echo "CMAKE_MAKE_PROGRAM=$(which ninja)" >> $GITHUB_ENV
 
       - name: Show tool versions
         run: |
-          clang --version
           cmake --version
+          clang-20 --version
           ninja --version
-          pacman -Qi icu | sed -n '1,5p'
+
+      # --- VCPKG ---
+      - name: Bootstrap vcpkg
+        run: |
+          if [ ! -d vcpkg ]; then
+            git clone https://github.com/microsoft/vcpkg.git
+          fi
+          cd vcpkg
+          git pull
+          ./bootstrap-vcpkg.sh
+          cd ..
+
+      # --- CLEAN STATE ---
+      - name: Clean previous build artifacts
+        run: |
+          rm -rf build
+          rm -rf vcpkg_installed
 
       # --- CONFIGURE ---
-      - name: Configure Ladybird
+      - name: Configure CMake (vcpkg manifest mode)
         run: |
           cmake -B build -S . \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+            -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_MANIFEST_MODE=ON \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic
 
       # --- BUILD ---
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
           export BUILD_PRESET=Release
+          export CMAKE_C_FLAGS="-O2 -march=x86-64 -mtune=generic -fcf-protection=none -mno-shstk"
+          export CMAKE_CXX_FLAGS="-O2 -march=x86-64 -mtune=generic -fcf-protection=none -mno-shstk"
           ./Meta/ladybird.py build
 
       # --- RESOURCES ---
@@ -110,24 +132,23 @@ jobs:
           mkdir -p Build/release/bin/resources
           cp Resources/* Build/release/bin/resources/
 
-      # --- COLLECT LIBS ---
-      - name: Copy shared libraries
+      - name: Copy shared libraries to bin
         run: |
           find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
 
       # --- ARTIFACT ---
-      - name: Package build
+      - name: Zip full repo (source + build)
         run: |
-          zip -r ladybird-arch-linux.zip Build
+          zip -r ladybird-full-repo.zip .
 
-      - name: Upload artifact
+      - name: Upload full repo artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-arch-linux
-          path: ladybird-arch-linux.zip
+          name: ladybird-full-repo
+          path: ladybird-full-repo.zip
 
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ladybird-arch-linux.zip
+          files: ladybird-full-repo.zip
