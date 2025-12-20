@@ -99,7 +99,7 @@ void Heap::find_min_and_max_block_addresses(FlatPtr& min_address, FlatPtr& max_a
     max_address = 0;
     for (auto& allocator : m_all_cell_allocators) {
         min_address = min(min_address, allocator.min_block_address());
-        max_address = max(max_address, allocator.max_block_address() + HeapBlockBase::block_size);
+        max_address = max(max_address, allocator.max_block_address() + HeapBlock::BLOCK_SIZE);
     }
 }
 
@@ -274,6 +274,77 @@ void Heap::collect_garbage(CollectionType collection_type, bool print_report)
     auto tasks = move(m_post_gc_tasks);
     for (auto& task : tasks)
         task();
+
+    if (print_report)
+        dump_allocators();
+}
+
+void Heap::dump_allocators()
+{
+    size_t total_in_committed_blocks = 0;
+    size_t total_waste = 0;
+    for (auto& allocator : m_all_cell_allocators) {
+        struct BlockStats {
+            HeapBlock& block;
+            size_t live_cells { 0 };
+            size_t dead_cells { 0 };
+            size_t total_cells { 0 };
+        };
+        Vector<BlockStats> blocks;
+
+        size_t total_live_cells = 0;
+        size_t total_dead_cells = 0;
+        size_t cell_count = (HeapBlock::BLOCK_SIZE - sizeof(HeapBlock)) / allocator.cell_size();
+
+        allocator.for_each_block([&](HeapBlock& heap_block) {
+            BlockStats block { heap_block };
+
+            heap_block.for_each_cell([&](Cell* cell) {
+                if (cell->state() == Cell::State::Live)
+                    ++block.live_cells;
+                else if (cell->state() == Cell::State::Dead)
+                    ++block.dead_cells;
+                else
+                    VERIFY_NOT_REACHED();
+            });
+            total_live_cells += block.live_cells;
+            total_dead_cells += block.dead_cells;
+
+            blocks.append({ block });
+            return IterationDecision::Continue;
+        });
+
+        if (blocks.is_empty())
+            continue;
+
+        total_in_committed_blocks += blocks.size() * HeapBlock::BLOCK_SIZE;
+
+        StringBuilder builder;
+        if (allocator.class_name().is_null())
+            builder.appendff("generic ({}b)", allocator.cell_size());
+        else
+            builder.appendff("{} ({}b)", allocator.class_name(), allocator.cell_size());
+
+        builder.appendff(" x {}", total_live_cells);
+
+        size_t cost = blocks.size() * HeapBlock::BLOCK_SIZE / KiB;
+        size_t reserved = allocator.block_allocator().blocks().size() / KiB;
+        builder.appendff(", cost: {} KiB, reserved: {} KiB", cost, reserved);
+
+        size_t total_dead_bytes = ((blocks.size() * cell_count) - total_live_cells) * allocator.cell_size();
+        if (total_dead_bytes) {
+            builder.appendff(", waste: {} KiB", total_dead_bytes / KiB);
+            total_waste += total_dead_bytes;
+        }
+
+        dbgln("{}", builder.string_view());
+
+        for (auto& block : blocks) {
+            dbgln("  block at {:p}: live {} / dead {} / total {} cells", &block.block, block.live_cells, block.dead_cells, block.block.cell_count());
+        }
+    }
+    dbgln("Total allocated: {} KiB", total_in_committed_blocks / KiB);
+    dbgln("Total wasted on fragmentation: {} KiB", total_waste / KiB);
 }
 
 void Heap::enqueue_post_gc_task(AK::Function<void()> task)
@@ -557,8 +628,8 @@ void Heap::sweep_dead_cells(bool print_report, Core::ElapsedTimer const& measure
         dbgln("     Time spent: {} ms", time_spent.to_milliseconds());
         dbgln("     Live cells: {} ({} bytes)", live_cells, live_cell_bytes);
         dbgln("Collected cells: {} ({} bytes)", collected_cells, collected_cell_bytes);
-        dbgln("    Live blocks: {} ({} bytes)", live_block_count, live_block_count * HeapBlock::block_size);
-        dbgln("   Freed blocks: {} ({} bytes)", empty_blocks.size(), empty_blocks.size() * HeapBlock::block_size);
+        dbgln("    Live blocks: {} ({} bytes)", live_block_count, live_block_count * HeapBlock::BLOCK_SIZE);
+        dbgln("   Freed blocks: {} ({} bytes)", empty_blocks.size(), empty_blocks.size() * HeapBlock::BLOCK_SIZE);
         dbgln("=============================================");
     }
 }
