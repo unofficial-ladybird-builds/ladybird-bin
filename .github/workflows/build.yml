@@ -60,16 +60,20 @@ jobs:
       # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
       - name: Sync with upstream (preserve .github)
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/LadybirdBrowser/ladybird.git || true
-          git fetch upstream master
-          git checkout upstream/master -- .
-          git restore --source=HEAD --staged --worktree .github
-          git restore --staged --worktree -- README.md
-          git add -A
-          git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
+                cd "$GITHUB_WORKSPACE"
+            
+                git config user.name "github-actions[bot]"
+                git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+                git remote add upstream https://github.com/LadybirdBrowser/ladybird.git || true
+                git fetch upstream master
+            
+                git checkout upstream/master -- .
+                git restore --source=HEAD --staged --worktree .github
+                git restore --staged --worktree -- README.md
 
+                git add -A
+                git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
       # --- TOOLCHAIN ---
       - name: Set Clang toolchain
         run: |
