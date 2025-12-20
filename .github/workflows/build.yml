@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -104,9 +104,11 @@ jobs:
       - name: Configure CMake (vcpkg manifest mode)
         run: |
           cmake -B build -S . \
-            -G Ninja \
+            -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_MANIFEST_MODE=ON \
+            -DVCPKG_TARGET_TRIPLET=x64-linux-dynamic
 
       # --- BUILD ---
       - name: Build Ladybird
