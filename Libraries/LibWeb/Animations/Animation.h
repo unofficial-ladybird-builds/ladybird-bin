@@ -109,7 +109,7 @@ public:
     Optional<double> convert_a_timeline_time_to_an_origin_relative_time(Optional<TimeValue>) const;
 
     GC::Ptr<DOM::Document> document_for_timing() const;
-    void notify_timeline_time_did_change();
+    void update();
 
     void effect_timing_changed(Badge<AnimationEffect>);
 
@@ -136,6 +136,7 @@ protected:
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
+    virtual void finalize() override;
 
 private:
     enum class TaskState {
@@ -162,7 +163,10 @@ private:
     void update_finished_state(DidSeek, SynchronouslyNotify);
     void reset_an_animations_pending_tasks();
 
+    bool is_ready() const;
     void run_pending_play_task();
+
+    bool is_ready_to_run_pending_pause_task() const;
     void run_pending_pause_task();
 
     GC::Ref<WebIDL::Promise> current_ready_promise() const;
@@ -219,8 +223,6 @@ private:
 
     Optional<HTML::TaskID> m_pending_finish_microtask_id;
 
-    Optional<TimeValue> m_saved_play_time;
-    Optional<TimeValue> m_saved_pause_time;
     Optional<TimeValue> m_saved_cancel_time;
 
     Optional<CSS::AnimationPlayState> m_last_css_animation_play_state;
