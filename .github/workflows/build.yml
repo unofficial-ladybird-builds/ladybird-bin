@@ -53,25 +53,28 @@ jobs:
       # --- TRUST WORKSPACE FOR GIT ---
       - name: Trust workspace for Git
         run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # --- CHECKOUT REPOSITORY ---
       - name: Clone repository
         run: |
           git clone https://github.com/unofficial-ladybird-builds/ladybird-bin .
           git fetch --all --tags
-          git checkout ${{ github.ref_name }}
+          git checkout "${{ github.ref_name }}"
 
       # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
       - name: Sync with upstream (preserve .github)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git remote add upstream https://github.com/LadybirdBrowser/ladybird.git || true
           git fetch upstream master
+
           git checkout upstream/master -- .
           git restore --source=HEAD --staged --worktree .github
           git restore --staged --worktree -- README.md
+
           git add -A
           git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
 
@@ -88,20 +91,12 @@ jobs:
           ninja --version
           pacman -Qi icu | sed -n '1,5p'
 
-      # --- CONFIGURE ---
-      #- name: Configure Ladybird
-        #run: |
-          #cmake -B build -S . \
-            #-G Ninja \
-            #-DCMAKE_BUILD_TYPE=Release
-
-      # --- BUILD - Run without root ---
+      # --- BUILD ---
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
           export BUILD_PRESET=Release
-          sudo -u $USER ./Meta/ladybird.py build 
-          
+          ./Meta/ladybird.py build
 
       # --- RESOURCES ---
       - name: Ensure resources exist
@@ -110,25 +105,28 @@ jobs:
           if [ ! -f Resources/home-page.html ]; then
             echo "<html><body><h1>Hello, Ladybird</h1></body></html>" > Resources/home-page.html
           fi
+
           mkdir -p Build/release/bin/resources
           cp Resources/* Build/release/bin/resources/
 
       # --- COLLECT LIBS ---
       - name: Copy shared libraries
         run: |
-          find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \;
+          find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \; || true
 
-      # --- ARTIFACT ---
+      # --- PACKAGE ---
       - name: Package build
         run: |
           zip -r ladybird-arch-linux.zip Build
 
+      # --- ARTIFACT ---
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ladybird-arch-linux
           path: ladybird-arch-linux.zip
 
+      # --- RELEASE (TAGS ONLY) ---
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
