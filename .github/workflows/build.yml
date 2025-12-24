@@ -27,6 +27,7 @@ jobs:
           pacman -S --noconfirm --needed \
             base-devel \
             git \
+            sudo \
             autoconf \
             autoconf-archive \
             automake \
@@ -50,6 +51,13 @@ jobs:
             lld \
             icu
 
+      # --- CREATE NON-ROOT BUILDER USER ---
+      - name: Create builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
       # --- TRUST WORKSPACE FOR GIT ---
       - name: Trust workspace for Git
         run: |
@@ -61,6 +69,7 @@ jobs:
           git clone https://github.com/unofficial-ladybird-builds/ladybird-bin .
           git fetch --all --tags
           git checkout "${{ github.ref_name }}"
+          chown -R builder:builder .
 
       # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
       - name: Sync with upstream (preserve .github)
@@ -77,12 +86,13 @@ jobs:
 
           git add -A
           git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
+          chown -R builder:builder .
 
       # --- TOOLCHAIN ---
       - name: Set Clang toolchain
         run: |
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "CC=clang" >> /etc/environment
+          echo "CXX=clang++" >> /etc/environment
 
       - name: Show tool versions
         run: |
@@ -91,33 +101,32 @@ jobs:
           ninja --version
           pacman -Qi icu | sed -n '1,5p'
 
-      # --- BUILD ---
+      # --- BUILD (NON-ROOT, REQUIRED) ---
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
-          export BUILD_PRESET=Release
-          ./Meta/ladybird.py build
+          sudo -u builder env BUILD_PRESET=Release ./Meta/ladybird.py build
 
       # --- RESOURCES ---
       - name: Ensure resources exist
         run: |
-          mkdir -p Resources
+          sudo -u builder mkdir -p Resources
           if [ ! -f Resources/home-page.html ]; then
-            echo "<html><body><h1>Hello, Ladybird</h1></body></html>" > Resources/home-page.html
+            echo "<html><body><h1>Hello, Ladybird</h1></body></html>" | sudo -u builder tee Resources/home-page.html
           fi
 
-          mkdir -p Build/release/bin/resources
-          cp Resources/* Build/release/bin/resources/
+          sudo -u builder mkdir -p Build/release/bin/resources
+          sudo -u builder cp Resources/* Build/release/bin/resources/
 
       # --- COLLECT LIBS ---
       - name: Copy shared libraries
         run: |
-          find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \; || true
+          sudo -u builder bash -c 'find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \; || true'
 
       # --- PACKAGE ---
       - name: Package build
         run: |
-          zip -r ladybird-arch-linux.zip Build
+          sudo -u builder zip -r ladybird-arch-linux.zip Build
 
       # --- ARTIFACT ---
       - name: Upload artifact
