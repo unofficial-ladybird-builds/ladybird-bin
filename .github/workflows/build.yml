@@ -102,12 +102,13 @@ jobs:
           pacman -Qi icu | sed -n '1,5p'
 
       # --- VCPKG DEPENDENCIES ---
-      - name: Bootstrap vcpkg and install ICU
+      - name: Bootstrap vcpkg and install dependencies
         run: |
           sudo -u builder git clone https://github.com/microsoft/vcpkg.git Build/vcpkg
           cd Build/vcpkg
           sudo -u builder ./bootstrap-vcpkg.sh
-          sudo -u builder ./vcpkg install icu:x64-linux
+          export VCPKG_DISABLE_METRICS=1
+          sudo -u builder ./vcpkg install
           cd ../..
 
       # --- BUILD (NON-ROOT, REQUIRED) ---
