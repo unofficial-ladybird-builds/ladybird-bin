@@ -20,7 +20,9 @@ jobs:
       image: archlinux:latest
 
     steps:
-      # --- BASE SYSTEM ---
+      # ----------------------------
+      # BASE SYSTEM
+      # ----------------------------
       - name: Initialize Arch Linux
         run: |
           pacman -Syu --noconfirm
@@ -49,20 +51,26 @@ jobs:
             clang \
             llvm \
             lld
-            
-      # --- CREATE NON-ROOT BUILDER USER ---
+
+      # ----------------------------
+      # BUILDER USER
+      # ----------------------------
       - name: Create builder user
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
-      # --- TRUST WORKSPACE FOR GIT ---
+      # ----------------------------
+      # GIT TRUST
+      # ----------------------------
       - name: Trust workspace for Git
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      # --- CHECKOUT REPOSITORY ---
+      # ----------------------------
+      # CHECKOUT
+      # ----------------------------
       - name: Clone repository
         run: |
           git clone https://github.com/unofficial-ladybird-builds/ladybird-bin .
@@ -70,7 +78,9 @@ jobs:
           git checkout "${{ github.ref_name }}"
           chown -R builder:builder .
 
-      # --- SYNC WITH UPSTREAM (PRESERVE .github) ---
+      # ----------------------------
+      # SYNC WITH UPSTREAM
+      # ----------------------------
       - name: Sync with upstream (preserve .github)
         run: |
           git config user.name "github-actions[bot]"
@@ -81,13 +91,15 @@ jobs:
 
           git checkout upstream/master -- .
           git restore --source=HEAD --staged --worktree .github
-          git restore --staged --worktree -- README.md
+          git restore --staged --worktree README.md
 
           git add -A
-          git commit -m "Sync with upstream (before build)" || echo "No changes to commit"
+          git commit -m "Sync with upstream (before build)" || true
           chown -R builder:builder .
 
-      # --- TOOLCHAIN ---
+      # ----------------------------
+      # TOOLCHAIN
+      # ----------------------------
       - name: Set Clang toolchain
         run: |
           echo "CC=clang" >> /etc/environment
@@ -98,33 +110,56 @@ jobs:
           clang --version
           cmake --version
           ninja --version
-          pacman -Qi icu | sed -n '1,5p'
 
-      # --- VCPKG DEPENDENCIES ---
+      # ----------------------------
+      # CACHE VCPKG
+      # ----------------------------
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            Build/vcpkg
+            ~/.cache/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'Build/vcpkg/versions/**') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      # ----------------------------
+      # VCPKG BOOTSTRAP + INSTALL
+      # ----------------------------
       - name: Bootstrap vcpkg and install dependencies
         run: |
-          sudo -u builder git clone https://github.com/microsoft/vcpkg.git Build/vcpkg
+          sudo -u builder git clone https://github.com/microsoft/vcpkg.git Build/vcpkg || true
           cd Build/vcpkg
           sudo -u builder ./bootstrap-vcpkg.sh
           export VCPKG_DISABLE_METRICS=1
           sudo -u builder ./vcpkg install
           cd ../..
 
-      # --- BUILD (NON-ROOT, REQUIRED) ---
+      # ----------------------------
+      # CONFIGURE + BUILD
+      # ----------------------------
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
-          sudo -u builder env BUILD_PRESET=Release \
-          cmake -B build -S . \
-           -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
-           -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON          sudo -u builder ./Meta/ladybird.py build
 
+          sudo -u builder env BUILD_PRESET=Release \
+            cmake -B build -S . \
+              -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
+              -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON
+
+          sudo -u builder ./Meta/ladybird.py build
+
+      # ----------------------------
+      # VERIFY ICU (DEBUG)
+      # ----------------------------
       - name: Verify ICU version
         run: |
-         grep -R "ICU_VERSION" build/CMakeCache.txt || true
+          grep -R "ICU_VERSION" build/CMakeCache.txt || true
 
-
-      # --- RESOURCES ---
+      # ----------------------------
+      # RESOURCES
+      # ----------------------------
       - name: Ensure resources exist
         run: |
           sudo -u builder mkdir -p Resources
@@ -135,24 +170,32 @@ jobs:
           sudo -u builder mkdir -p Build/release/bin/resources
           sudo -u builder cp Resources/* Build/release/bin/resources/
 
-      # --- COLLECT LIBS ---
+      # ----------------------------
+      # COLLECT LIBS
+      # ----------------------------
       - name: Copy shared libraries
         run: |
           sudo -u builder bash -c 'find Build/release -name "*.so*" -exec cp {} Build/release/bin/ \; || true'
 
-      # --- PACKAGE ---
+      # ----------------------------
+      # PACKAGE
+      # ----------------------------
       - name: Package build
         run: |
           sudo -u builder zip -r ladybird-arch-linux.zip Build
 
-      # --- ARTIFACT ---
+      # ----------------------------
+      # ARTIFACT
+      # ----------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ladybird-arch-linux
           path: ladybird-arch-linux.zip
 
-      # --- RELEASE (TAGS ONLY) ---
+      # ----------------------------
+      # RELEASE (TAGS ONLY)
+      # ----------------------------
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
