@@ -48,9 +48,8 @@ jobs:
             zip \
             clang \
             llvm \
-            lld \
-            icu
-
+            lld
+            
       # --- CREATE NON-ROOT BUILDER USER ---
       - name: Create builder user
         run: |
@@ -116,8 +115,14 @@ jobs:
         run: |
           chmod +x ./Meta/ladybird.py
           sudo -u builder env BUILD_PRESET=Release \
-            cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake
-          sudo -u builder ./Meta/ladybird.py build
+          cmake -B build -S . \
+           -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
+           -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON          sudo -u builder ./Meta/ladybird.py build
+
+      - name: Verify ICU version
+        run: |
+         grep -R "ICU_VERSION" build/CMakeCache.txt || true
+
 
       # --- RESOURCES ---
       - name: Ensure resources exist
