@@ -269,14 +269,19 @@ void Heap::collect_garbage(CollectionType collection_type, bool print_report)
         finalize_unmarked_cells();
         sweep_weak_blocks();
         sweep_dead_cells(print_report, collection_measurement_timer);
+
+        if (print_report)
+            dump_allocators();
     }
 
+    run_post_gc_tasks();
+}
+
+void Heap::run_post_gc_tasks()
+{
     auto tasks = move(m_post_gc_tasks);
     for (auto& task : tasks)
         task();
-
-    if (print_report)
-        dump_allocators();
 }
 
 void Heap::dump_allocators()
@@ -509,18 +514,20 @@ void Heap::mark_live_cells(HashMap<Cell*, HeapRoot> const& roots)
 
     MarkingVisitor visitor(*this, roots);
 
+    for_each_block([&](auto& block) {
+        block.template for_each_cell_in_state<Cell::State::Live>([&](Cell* cell) {
+            if (cell_must_survive_garbage_collection(*cell)) {
+                cell->set_marked(true);
+                cell->visit_edges(visitor);
+            }
+        });
+        return IterationDecision::Continue;
+    });
+
     visitor.mark_all_live_cells();
 
     for (auto& inverse_root : m_uprooted_cells)
         inverse_root->set_marked(false);
-
-    for_each_block([&](auto& block) {
-        block.template for_each_cell_in_state<Cell::State::Live>([&](Cell* cell) {
-            if (!cell->is_marked() && cell_must_survive_garbage_collection(*cell))
-                cell->visit_edges(visitor);
-        });
-        return IterationDecision::Continue;
-    });
 
     m_uprooted_cells.clear();
 }
