@@ -665,15 +665,15 @@ Vector<GC::Ref<SessionHistoryEntry>>& Navigable::get_session_history_entries() c
         return traversable->session_history_entries();
 
     // 4. Let docStates be an empty ordered set of document states.
-    Vector<GC::Ptr<DocumentState>> doc_states;
+    GC::ConservativeVector<GC::Ptr<DocumentState>> doc_states { heap() };
 
     // 5. For each entry of traversable's session history entries, append entry's document state to docStates.
     for (auto& entry : traversable->session_history_entries())
         doc_states.append(entry->document_state());
 
     // 6. For each docState of docStates:
-    while (!doc_states.is_empty()) {
-        auto doc_state = doc_states.take_first();
+    for (size_t i = 0; i < doc_states.size(); ++i) {
+        auto doc_state = doc_states[i];
 
         // 1. For each nestedHistory of docState's nested histories:
         for (auto& nested_history : doc_state->nested_histories()) {
