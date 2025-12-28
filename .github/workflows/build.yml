@@ -98,13 +98,8 @@ jobs:
           chown -R builder:builder .
 
       # ----------------------------
-      # TOOLCHAIN
+      # TOOLCHAIN INFO
       # ----------------------------
-      - name: Set Clang toolchain
-        run: |
-          echo "CC=clang" >> /etc/environment
-          echo "CXX=clang++" >> /etc/environment
-
       - name: Show tool versions
         run: |
           clang --version
@@ -142,16 +137,19 @@ jobs:
       - name: Build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
-          
-          sudo -u builder env BUILD_PRESET=Release \
-            cmake -B build -S . \
+
+          sudo -u builder env \
+            CC=clang \
+            CXX=clang++ \
+            BUILD_PRESET=Release \
+            cmake -S . -B build \
+              -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
               -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
               -DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF \
               -DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF \
               -DICU_ROOT="$PWD/build/vcpkg_installed/x64-linux" \
               -DICU_NO_SYSTEM_PATHS=ON
-
 
           sudo -u builder ./Meta/ladybird.py build
 
