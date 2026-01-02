@@ -65,8 +65,7 @@ jobs:
       # GIT TRUST
       # ----------------------------
       - name: Trust workspace for Git
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # ----------------------------
       # CHECKOUT
@@ -107,7 +106,7 @@ jobs:
           ninja --version
 
       # ----------------------------
-      # CACHE VCPKG
+      # CACHE vcpkg
       # ----------------------------
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -118,6 +117,17 @@ jobs:
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'Build/vcpkg/versions/**') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
+
+      # ----------------------------
+      # CACHE CMake Build
+      # ----------------------------
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: Build/release
+          key: cmake-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cmake-build-${{ runner.os }}-
 
       # ----------------------------
       # VCPKG BOOTSTRAP + INSTALL
@@ -134,15 +144,17 @@ jobs:
       # ----------------------------
       # CONFIGURE + BUILD
       # ----------------------------
-      - name: Build Ladybird
+      - name: Configure and build Ladybird
         run: |
           chmod +x ./Meta/ladybird.py
 
-          sudo --preserve-env=PATH -u builder env \
-            CC=clang \
-            CXX=clang++ \
+          # Configure CMake (with full env for builder)
+          sudo -u builder env \
+            PATH="$PATH" \
+            CC=$(which clang) \
+            CXX=$(which clang++) \
             BUILD_PRESET=Release \
-            cmake -S . -B build \
+            cmake -S . -B Build/release \
               -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
               -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
@@ -151,14 +163,19 @@ jobs:
               -DICU_ROOT="$PWD/build/vcpkg_installed/x64-linux" \
               -DICU_NO_SYSTEM_PATHS=ON
 
-          sudo --preserve-env=PATH -u builder ./Meta/ladybird.py build
+          # Build using ladybird.py
+          sudo -u builder env \
+            PATH="$PATH" \
+            CC=$(which clang) \
+            CXX=$(which clang++) \
+            BUILD_PRESET=Release \
+            ./Meta/ladybird.py build
 
       # ----------------------------
       # VERIFY ICU (DEBUG)
       # ----------------------------
       - name: Verify ICU version
-        run: |
-          grep -R "ICU_VERSION" build/CMakeCache.txt || true
+        run: grep -R "ICU_VERSION" Build/release/CMakeCache.txt || true
 
       # ----------------------------
       # RESOURCES
@@ -184,8 +201,7 @@ jobs:
       # PACKAGE
       # ----------------------------
       - name: Package build
-        run: |
-          sudo -u builder zip -r ladybird-arch-linux.zip Build
+        run: sudo -u builder zip -r ladybird-arch-linux.zip Build
 
       # ----------------------------
       # ARTIFACT
