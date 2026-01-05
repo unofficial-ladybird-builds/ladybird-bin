@@ -103,7 +103,22 @@ jobs:
         run: |
           clang --version
           cmake --version
+          whereis ninja
           ninja --version
+
+          NINJA_PATH="$(command -v ninja || true)"
+
+          if [ -z "$NINJA_PATH" ]; then
+              echo "❌ ninja not found"
+              exit 1
+          fi
+          
+          NINJA_DIR="$(dirname "$NINJA_PATH")"
+          
+          export PATH="$NINJA_DIR:$PATH"
+          
+          echo "ninja found at: $NINJA_PATH"
+          echo "PATH updated temporarily"
 
       # ----------------------------
       # CACHE vcpkg
