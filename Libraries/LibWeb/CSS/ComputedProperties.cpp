@@ -628,6 +628,12 @@ ImageRendering ComputedProperties::image_rendering() const
 // https://drafts.csswg.org/css-backgrounds-4/#layering
 Vector<BackgroundLayerData> ComputedProperties::background_layers() const
 {
+    auto const& background_image_values = property(PropertyID::BackgroundImage).as_value_list().values();
+
+    // OPTIMIZATION: If all background-image values are `none`, we can skip computing the layers entirely
+    if (all_of(background_image_values, [](auto const& value) { return value->to_keyword() == Keyword::None; }))
+        return {};
+
     auto coordinated_value_list = assemble_coordinated_value_list(
         PropertyID::BackgroundImage,
         {
@@ -647,26 +653,27 @@ Vector<BackgroundLayerData> ComputedProperties::background_layers() const
     layers.ensure_capacity(coordinated_value_list.get(PropertyID::BackgroundImage)->size());
 
     for (size_t i = 0; i < coordinated_value_list.get(PropertyID::BackgroundImage)->size(); i++) {
+        auto const& background_image_value = coordinated_value_list.get(PropertyID::BackgroundImage)->at(i);
+
+        if (background_image_value->to_keyword() == Keyword::None)
+            continue;
+
         auto const& background_attachment_value = coordinated_value_list.get(PropertyID::BackgroundAttachment)->at(i);
         auto const& background_blend_mode_value = coordinated_value_list.get(PropertyID::BackgroundBlendMode)->at(i);
         auto const& background_clip_value = coordinated_value_list.get(PropertyID::BackgroundClip)->at(i);
-        auto const& background_image_value = coordinated_value_list.get(PropertyID::BackgroundImage)->at(i);
         auto const& background_origin_value = coordinated_value_list.get(PropertyID::BackgroundOrigin)->at(i);
         auto const& background_position_x_value = coordinated_value_list.get(PropertyID::BackgroundPositionX)->at(i);
         auto const& background_position_y_value = coordinated_value_list.get(PropertyID::BackgroundPositionY)->at(i);
         auto const& background_repeat_value = coordinated_value_list.get(PropertyID::BackgroundRepeat)->at(i);
         auto const& background_size_value = coordinated_value_list.get(PropertyID::BackgroundSize)->at(i);
 
-        BackgroundLayerData layer;
+        BackgroundLayerData layer {
+            .background_image = background_image_value->as_abstract_image()
+        };
 
         layer.attachment = keyword_to_background_attachment(background_attachment_value->to_keyword()).value();
         layer.blend_mode = keyword_to_mix_blend_mode(background_blend_mode_value->to_keyword()).value();
         layer.clip = keyword_to_background_box(background_clip_value->to_keyword()).value();
-
-        if (background_image_value->is_abstract_image())
-            layer.background_image = background_image_value->as_abstract_image();
-        else
-            VERIFY(background_image_value->to_keyword() == Keyword::None);
 
         layer.origin = keyword_to_background_box(background_origin_value->to_keyword()).value();
 
@@ -700,6 +707,21 @@ Vector<BackgroundLayerData> ComputedProperties::background_layers() const
     }
 
     return layers;
+}
+
+BackgroundBox ComputedProperties::background_color_clip() const
+{
+    // The background color is clipped according to the final layer's background-clip value. We propagate this
+    // separately to allow us to avoid computing layer data in the case a layer's `background-image` is `none`
+
+    auto const& background_image_values = property(PropertyID::BackgroundImage).as_value_list().values();
+    auto const& background_clip_values = property(PropertyID::BackgroundClip).as_value_list().values();
+
+    // Background clip values are coordinated against background image values so the value used for the final layer is
+    // not necessarily the last specified one.
+    auto final_layer_index = (background_image_values.size() - 1) % background_clip_values.size();
+
+    return keyword_to_background_box(background_clip_values[final_layer_index]->to_keyword()).value();
 }
 
 Length ComputedProperties::border_spacing_horizontal(Layout::Node const& layout_node) const
@@ -2340,6 +2362,12 @@ Optional<FlyString> ComputedProperties::view_transition_name() const
 
 Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations() const
 {
+    auto const& animation_name_values = property(PropertyID::AnimationName).as_value_list().values();
+
+    // OPTIMIZATION: If all animation names are 'none', there are no animations to process
+    if (all_of(animation_name_values, [](auto const& value) { return value->to_keyword() == Keyword::None; }))
+        return {};
+
     // CSS Animations are defined by binding keyframes to an element using the animation-* properties. These list-valued
     // properties, which are all longhands of the animation shorthand, form a coordinating list property group with
     // animation-name as the coordinating list base property and each item in the coordinated value list defining the
@@ -2441,6 +2469,68 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
     }
 
     return animations;
+}
+
+Vector<TransitionProperties> ComputedProperties::transitions() const
+{
+    auto const& coordinated_properties = assemble_coordinated_value_list(
+        PropertyID::TransitionProperty,
+        { PropertyID::TransitionProperty, PropertyID::TransitionDuration, PropertyID::TransitionTimingFunction, PropertyID::TransitionDelay, PropertyID::TransitionBehavior });
+
+    auto const& property_values = coordinated_properties.get(PropertyID::TransitionProperty).value();
+    auto const& duration_values = coordinated_properties.get(PropertyID::TransitionDuration).value();
+    auto const& timing_function_values = coordinated_properties.get(PropertyID::TransitionTimingFunction).value();
+    auto const& delay_values = coordinated_properties.get(PropertyID::TransitionDelay).value();
+    auto const& behavior_values = coordinated_properties.get(PropertyID::TransitionBehavior).value();
+
+    Vector<TransitionProperties> transitions;
+    transitions.ensure_capacity(property_values.size());
+
+    for (size_t i = 0; i < property_values.size(); i++) {
+        auto properties = [&]() -> Vector<PropertyID> {
+            auto const& property_value = property_values[i];
+
+            if (property_value->is_keyword() && property_value->to_keyword() == Keyword::None)
+                return {};
+
+            auto maybe_property = property_id_from_string(property_value->as_custom_ident().custom_ident());
+            if (!maybe_property.has_value())
+                return {};
+
+            Vector<PropertyID> properties;
+
+            auto const append_property_mapping_logical_aliases = [&](PropertyID property_id) {
+                if (property_is_logical_alias(property_id))
+                    properties.append(map_logical_alias_to_physical_property(property_id, LogicalAliasMappingContext { writing_mode(), direction() }));
+                else if (property_id != PropertyID::Custom)
+                    properties.append(property_id);
+            };
+
+            auto transition_property = maybe_property.release_value();
+            if (property_is_shorthand(transition_property)) {
+                auto expanded_longhands = expanded_longhands_for_shorthand(transition_property);
+
+                properties.ensure_capacity(expanded_longhands.size());
+
+                for (auto const& prop : expanded_longhands_for_shorthand(transition_property))
+                    append_property_mapping_logical_aliases(prop);
+            } else {
+                append_property_mapping_logical_aliases(transition_property);
+            }
+
+            return properties;
+        }();
+
+        transitions.append(TransitionProperties {
+            .properties = properties,
+            .duration = Time::from_style_value(duration_values[i], {}).to_milliseconds(),
+            .timing_function = EasingFunction::from_style_value(timing_function_values[i]),
+            .delay = Time::from_style_value(delay_values[i], {}).to_milliseconds(),
+            .transition_behavior = keyword_to_transition_behavior(behavior_values[i]->to_keyword()).value(),
+        });
+    }
+
+    return transitions;
 }
 
 MaskType ComputedProperties::mask_type() const

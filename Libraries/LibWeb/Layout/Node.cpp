@@ -388,10 +388,9 @@ NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, NonnullOw
 void NodeWithStyle::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto& layer : computed_values().background_layers()) {
-        if (layer.background_image && layer.background_image->is_image())
-            layer.background_image->as_image().visit_edges(visitor);
-    }
+    for (auto const& layer : computed_values().background_layers())
+        layer.background_image->visit_edges(visitor);
+
     if (m_list_style_image && m_list_style_image->is_image())
         m_list_style_image->as_image().visit_edges(visitor);
 }
@@ -423,14 +422,13 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
 
     auto background_layers = computed_style.background_layers();
 
-    for (auto const& layer : background_layers) {
-        if (layer.background_image)
-            const_cast<CSS::AbstractImageStyleValue&>(*layer.background_image).load_any_resources(document());
-    }
+    for (auto const& layer : background_layers)
+        const_cast<CSS::AbstractImageStyleValue&>(*layer.background_image).load_any_resources(document());
 
     computed_values.set_background_layers(move(background_layers));
 
     computed_values.set_background_color(computed_style.color_or_fallback(CSS::PropertyID::BackgroundColor, color_resolution_context, CSS::InitialValues::background_color()));
+    computed_values.set_background_color_clip(computed_style.background_color_clip());
 
     computed_values.set_box_sizing(computed_style.box_sizing());
 
