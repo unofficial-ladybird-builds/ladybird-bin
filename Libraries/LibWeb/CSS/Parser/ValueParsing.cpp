@@ -29,6 +29,8 @@
 #include <LibWeb/CSS/StyleValues/AngleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/BackgroundSizeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/BasicShapeStyleValue.h>
+#include <LibWeb/CSS/StyleValues/BorderRadiusRectStyleValue.h>
+#include <LibWeb/CSS/StyleValues/BorderRadiusStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorFunctionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorMixStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
@@ -3379,6 +3381,99 @@ RefPtr<URLStyleValue const> Parser::parse_url_value(TokenStream<ComponentValue>&
     return URLStyleValue::create(url.release_value());
 }
 
+RefPtr<BorderRadiusRectStyleValue const> Parser::parse_border_radius_rect_value(TokenStream<ComponentValue>& tokens)
+{
+    auto top_left = [&](StyleValueVector& radii) { return radii[0]; };
+    auto top_right = [&](StyleValueVector& radii) {
+        switch (radii.size()) {
+        case 4:
+        case 3:
+        case 2:
+            return radii[1];
+        case 1:
+            return radii[0];
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    };
+    auto bottom_right = [&](StyleValueVector& radii) {
+        switch (radii.size()) {
+        case 4:
+        case 3:
+            return radii[2];
+        case 2:
+        case 1:
+            return radii[0];
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    };
+    auto bottom_left = [&](StyleValueVector& radii) {
+        switch (radii.size()) {
+        case 4:
+            return radii[3];
+        case 3:
+        case 2:
+            return radii[1];
+        case 1:
+            return radii[0];
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    };
+
+    StyleValueVector horizontal_radii;
+    StyleValueVector vertical_radii;
+    bool reading_vertical = false;
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    auto context_guard = push_temporary_value_parsing_context(SpecialContext::BorderRadius);
+
+    while (tokens.has_next_token()) {
+        if (tokens.next_token().is_delim('/')) {
+            if (reading_vertical || horizontal_radii.is_empty())
+                return nullptr;
+
+            reading_vertical = true;
+            tokens.discard_a_token(); // `/`
+            tokens.discard_whitespace();
+            continue;
+        }
+
+        auto maybe_dimension = parse_length_percentage_value(tokens);
+        if (!maybe_dimension)
+            return nullptr;
+        if (maybe_dimension->is_length() && maybe_dimension->as_length().length().raw_value() < 0)
+            return nullptr;
+        if (maybe_dimension->is_percentage() && maybe_dimension->as_percentage().percentage().value() < 0)
+            return nullptr;
+        if (reading_vertical) {
+            vertical_radii.append(maybe_dimension.release_nonnull());
+        } else {
+            horizontal_radii.append(maybe_dimension.release_nonnull());
+        }
+        tokens.discard_whitespace();
+    }
+
+    if (horizontal_radii.size() > 4 || vertical_radii.size() > 4
+        || horizontal_radii.is_empty()
+        || (reading_vertical && vertical_radii.is_empty()))
+        return nullptr;
+
+    auto top_left_radius = BorderRadiusStyleValue::create(top_left(horizontal_radii),
+        vertical_radii.is_empty() ? top_left(horizontal_radii) : top_left(vertical_radii));
+    auto top_right_radius = BorderRadiusStyleValue::create(top_right(horizontal_radii),
+        vertical_radii.is_empty() ? top_right(horizontal_radii) : top_right(vertical_radii));
+    auto bottom_right_radius = BorderRadiusStyleValue::create(bottom_right(horizontal_radii),
+        vertical_radii.is_empty() ? bottom_right(horizontal_radii) : bottom_right(vertical_radii));
+    auto bottom_left_radius = BorderRadiusStyleValue::create(bottom_left(horizontal_radii),
+        vertical_radii.is_empty() ? bottom_left(horizontal_radii) : bottom_left(vertical_radii));
+
+    transaction.commit();
+    return BorderRadiusRectStyleValue::create(top_left_radius, top_right_radius, bottom_right_radius, bottom_left_radius);
+}
+
 // https://drafts.csswg.org/css-images-4/#radial-size
 RefPtr<RadialSizeStyleValue const> Parser::parse_radial_size(TokenStream<ComponentValue>& tokens)
 {
@@ -3510,7 +3605,6 @@ RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentVa
     // FIXME: Implement path(). See: https://www.w3.org/TR/css-shapes-1/#basic-shape-functions
     if (function_name.equals_ignoring_ascii_case("inset"sv)) {
         // inset() = inset( <length-percentage>{1,4} [ round <'border-radius'> ]? )
-        // FIXME: Parse the border-radius.
         auto arguments_tokens = TokenStream { component_value.function().value };
 
         // If less than four <length-percentage> values are provided,
@@ -3540,16 +3634,29 @@ RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentVa
             left = right;
 
         arguments_tokens.discard_whitespace();
+
+        NonnullRefPtr<StyleValue const> border_radius = BorderRadiusRectStyleValue::create_zero();
+        if (arguments_tokens.next_token().is_ident("round"sv)) {
+            arguments_tokens.discard_a_token(); // 'round'
+            auto parsed_border_radius = parse_border_radius_rect_value(arguments_tokens);
+
+            if (!parsed_border_radius)
+                return nullptr;
+
+            border_radius = parsed_border_radius.release_nonnull();
+
+            arguments_tokens.discard_whitespace();
+        }
+
         if (arguments_tokens.has_next_token())
             return nullptr;
 
         transaction.commit();
-        return BasicShapeStyleValue::create(Inset { top.release_nonnull(), right.release_nonnull(), bottom.release_nonnull(), left.release_nonnull() });
+        return BasicShapeStyleValue::create(Inset { top.release_nonnull(), right.release_nonnull(), bottom.release_nonnull(), left.release_nonnull(), border_radius });
     }
 
     if (function_name.equals_ignoring_ascii_case("xywh"sv)) {
         // xywh() = xywh( <length-percentage>{2} <length-percentage [0,∞]>{2} [ round <'border-radius'> ]? )
-        // FIXME: Parse the border-radius.
         auto arguments_tokens = TokenStream { component_value.function().value };
 
         arguments_tokens.discard_whitespace();
@@ -3573,6 +3680,20 @@ RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentVa
             return nullptr;
 
         arguments_tokens.discard_whitespace();
+
+        NonnullRefPtr<StyleValue const> border_radius = BorderRadiusRectStyleValue::create_zero();
+        if (arguments_tokens.next_token().is_ident("round"sv)) {
+            arguments_tokens.discard_a_token(); // 'round'
+            auto parsed_border_radius = parse_border_radius_rect_value(arguments_tokens);
+
+            if (!parsed_border_radius)
+                return nullptr;
+
+            border_radius = parsed_border_radius.release_nonnull();
+
+            arguments_tokens.discard_whitespace();
+        }
+
         if (arguments_tokens.has_next_token())
             return nullptr;
 
@@ -3584,12 +3705,11 @@ RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentVa
             return nullptr;
 
         transaction.commit();
-        return BasicShapeStyleValue::create(Xywh { x.release_nonnull(), y.release_nonnull(), width.release_nonnull(), height.release_nonnull() });
+        return BasicShapeStyleValue::create(Xywh { x.release_nonnull(), y.release_nonnull(), width.release_nonnull(), height.release_nonnull(), border_radius });
     }
 
     if (function_name.equals_ignoring_ascii_case("rect"sv)) {
         // rect() = rect( [ <length-percentage> | auto ]{4} [ round <'border-radius'> ]? )
-        // FIXME: Parse the border-radius.
         auto arguments_tokens = TokenStream { component_value.function().value };
 
         auto parse_length_percentage_or_auto = [this](TokenStream<ComponentValue>& tokens) -> RefPtr<StyleValue const> {
@@ -3610,11 +3730,26 @@ RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentVa
             return nullptr;
 
         arguments_tokens.discard_whitespace();
+
+        NonnullRefPtr<StyleValue const> border_radius = BorderRadiusRectStyleValue::create_zero();
+        if (arguments_tokens.next_token().is_ident("round"sv)) {
+            arguments_tokens.discard_a_token(); // 'round'
+
+            auto parsed_border_radius = parse_border_radius_rect_value(arguments_tokens);
+
+            if (!parsed_border_radius)
+                return nullptr;
+
+            border_radius = parsed_border_radius.release_nonnull();
+
+            arguments_tokens.discard_whitespace();
+        }
+
         if (arguments_tokens.has_next_token())
             return nullptr;
 
         transaction.commit();
-        return BasicShapeStyleValue::create(Rect { top.release_nonnull(), right.release_nonnull(), bottom.release_nonnull(), left.release_nonnull() });
+        return BasicShapeStyleValue::create(Rect { top.release_nonnull(), right.release_nonnull(), bottom.release_nonnull(), left.release_nonnull(), border_radius });
     }
 
     if (function_name.equals_ignoring_ascii_case("circle"sv)) {
@@ -4507,6 +4642,13 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                 switch (special_context) {
                 case SpecialContext::AngularColorStopList:
                     return CalculationContext { .percentages_resolve_as = ValueType::Angle };
+                case SpecialContext::BorderRadius:
+                    return CalculationContext {
+                        .percentages_resolve_as = ValueType::Length,
+                        .accepted_type_ranges = {
+                            { ValueType::Length, { 0, NumericLimits<float>::max() } },
+                            { ValueType::Percentage, { 0, NumericLimits<float>::max() } } },
+                    };
                 case SpecialContext::CubicBezierFunctionXCoordinate:
                     // Coordinates on the X axis must be between 0 and 1
                     return CalculationContext { .accepted_type_ranges = { { ValueType::Number, { 0, 1 } } } };
