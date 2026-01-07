@@ -86,6 +86,7 @@ static Track track_from_track_entry(TrackEntry const& track_entry)
 DecoderErrorOr<void> MatroskaDemuxer::create_context_for_track(Track const& track, NonnullRefPtr<IncrementallyPopulatedStream::Cursor> const& stream_cursor)
 {
     auto iterator = TRY(m_reader.create_sample_iterator(stream_cursor, track.identifier()));
+    Threading::MutexLocker locker(m_track_statuses_mutex);
     VERIFY(m_track_statuses.set(track, TrackStatus(move(iterator))) == HashSetResult::InsertedNewEntry);
     return {};
 }
@@ -116,6 +117,7 @@ DecoderErrorOr<Optional<Track>> MatroskaDemuxer::get_preferred_track_for_type(Tr
 
 DecoderErrorOr<MatroskaDemuxer::TrackStatus*> MatroskaDemuxer::get_track_status(Track const& track)
 {
+    Threading::MutexLocker locker(m_track_statuses_mutex);
     return &m_track_statuses.get(track).release_value();
 }
 
@@ -160,7 +162,7 @@ DecoderErrorOr<CodedFrame> MatroskaDemuxer::get_next_sample_for_track(Track cons
 
     if (!status.block.has_value() || status.frame_index >= status.frames.size()) {
         status.block = TRY(status.iterator.next_block());
-        status.frames = TRY(m_reader.get_frames(status.block.value()));
+        status.frames = TRY(status.iterator.get_frames(status.block.value()));
         status.frame_index = 0;
     }
 
@@ -183,7 +185,7 @@ DecoderErrorOr<CodedFrame> MatroskaDemuxer::get_next_sample_for_track(Track cons
 
 DecoderErrorOr<AK::Duration> MatroskaDemuxer::total_duration()
 {
-    auto duration = TRY(m_reader.segment_information()).duration();
+    auto duration = m_reader.duration();
     return duration.value_or(AK::Duration::zero());
 }
 
