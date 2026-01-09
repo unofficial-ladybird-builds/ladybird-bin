@@ -105,19 +105,16 @@ jobs:
           cmake --version
           whereis ninja
           ninja --version
-          ./Meta/ladybird.py build
 
           NINJA_PATH="$(command -v ninja || true)"
-
           if [ -z "$NINJA_PATH" ]; then
-              echo "❌ ninja not found"
-              exit 1
+            echo "❌ ninja not found"
+            exit 1
           fi
-          
+
           NINJA_DIR="$(dirname "$NINJA_PATH")"
-          
           export PATH="$NINJA_DIR:$PATH"
-          
+
           echo "ninja found at: $NINJA_PATH"
           echo "PATH updated temporarily"
 
@@ -144,7 +141,31 @@ jobs:
           key: cmake-build-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             cmake-build-${{ runner.os }}-
- 
+
+      # ----------------------------
+      # VCPKG BOOTSTRAP + INSTALL (LOGGED)
+      # ----------------------------
+      - name: Bootstrap vcpkg and install dependencies
+        run: |
+          sudo -u builder git clone https://github.com/microsoft/vcpkg.git Build/vcpkg || true
+          cd Build/vcpkg
+          sudo -u builder ./bootstrap-vcpkg.sh
+          export VCPKG_DISABLE_METRICS=1
+
+          # Capture stdout + stderr into a log file
+          sudo -u builder ./vcpkg install 2>&1 | tee vcpkg-manifest-install.log || true
+
+          cd ../..
+
+      # ----------------------------
+      # UPLOAD VCPKG LOG (ALWAYS)
+      # ----------------------------
+      - name: Upload vcpkg install log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-manifest-install-log
+          path: Build/vcpkg/vcpkg-manifest-install.log
 
       # ----------------------------
       # CONFIGURE + BUILD
@@ -153,7 +174,6 @@ jobs:
         run: |
           chmod +x ./Meta/ladybird.py
 
-          # Configure CMake (with full env for builder)
           sudo -u builder env \
             PATH="$PATH" \
             CC=$(which clang) \
@@ -168,7 +188,6 @@ jobs:
               -DICU_ROOT="$PWD/build/vcpkg_installed/x64-linux" \
               -DICU_NO_SYSTEM_PATHS=ON
 
-          # Build using ladybird.py
           sudo -u builder env \
             PATH="$PATH" \
             CC=$(which clang) \
