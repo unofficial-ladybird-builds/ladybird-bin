@@ -2503,11 +2503,13 @@ void Document::set_focused_area(GC::Ptr<Node> node)
 
     // Scroll the viewport if necessary to make the newly focused element visible.
     if (new_focused_element) {
-        new_focused_element->queue_an_element_task(HTML::Task::Source::UserInteraction, [&] {
+        new_focused_element->queue_an_element_task(HTML::Task::Source::UserInteraction, [new_focused_element] {
+            if (new_focused_element->document().focused_area().ptr() != new_focused_element)
+                return;
             ScrollIntoViewOptions scroll_options;
             scroll_options.block = Bindings::ScrollLogicalPosition::Nearest;
             scroll_options.inline_ = Bindings::ScrollLogicalPosition::Nearest;
-            (void)as<Element>(*m_focused_area).scroll_into_view(scroll_options);
+            (void)new_focused_element->scroll_into_view(scroll_options);
         });
     }
 
@@ -6442,18 +6444,20 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> Document::parse_html_unsafe(JS::VM&
     return document;
 }
 
-InputEventsTarget* Document::active_input_events_target()
+InputEventsTarget* Document::active_input_events_target(Node const* for_node)
 {
     auto focused_area = this->focused_area();
     if (!focused_area)
-        return {};
+        return nullptr;
 
-    if (auto* input_element = as_if<HTML::HTMLInputElement>(*focused_area))
-        return input_element;
-    if (auto* text_area_element = as_if<HTML::HTMLTextAreaElement>(*focused_area))
-        return text_area_element;
-    if (focused_area->is_editable_or_editing_host())
-        return m_editing_host_manager;
+    if (focused_area->is_editable_or_editing_host()) {
+        if (!for_node || m_editing_host_manager->is_within_active_contenteditable(*for_node))
+            return m_editing_host_manager;
+    }
+    if (auto* form_text_element = as_if<HTML::FormAssociatedTextControlElement>(*focused_area)) {
+        if (!for_node || for_node->find_in_shadow_including_ancestry([&](Node const& it) { return &it == focused_area; }))
+            return form_text_element;
+    }
     return nullptr;
 }
 
