@@ -105,6 +105,7 @@ jobs:
           cmake --version
           whereis ninja
           ninja --version
+          ./Meta/ladybird.py build
 
           NINJA_PATH="$(command -v ninja || true)"
 
@@ -143,18 +144,7 @@ jobs:
           key: cmake-build-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             cmake-build-${{ runner.os }}-
-
-      # ----------------------------
-      # VCPKG BOOTSTRAP + INSTALL
-      # ----------------------------
-      - name: Bootstrap vcpkg and install dependencies
-        run: |
-          sudo -u builder git clone https://github.com/microsoft/vcpkg.git Build/vcpkg || true
-          cd Build/vcpkg
-          sudo -u builder ./bootstrap-vcpkg.sh
-          export VCPKG_DISABLE_METRICS=1
-          sudo -u builder ./vcpkg install
-          cd ../..
+ 
 
       # ----------------------------
       # CONFIGURE + BUILD
