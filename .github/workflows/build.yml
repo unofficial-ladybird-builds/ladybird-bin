@@ -97,28 +97,6 @@ jobs:
           chown -R builder:builder .
 
       # ----------------------------
-      # TOOLCHAIN INFO
-      # ----------------------------
-      - name: Show tool versions
-        run: |
-          clang --version
-          cmake --version
-          whereis ninja
-          ninja --version
-
-          NINJA_PATH="$(command -v ninja || true)"
-          if [ -z "$NINJA_PATH" ]; then
-            echo "❌ ninja not found"
-            exit 1
-          fi
-
-          NINJA_DIR="$(dirname "$NINJA_PATH")"
-          export PATH="$NINJA_DIR:$PATH"
-
-          echo "ninja found at: $NINJA_PATH"
-          echo "PATH updated temporarily"
-
-      # ----------------------------
       # CACHE vcpkg
       # ----------------------------
       - name: Cache vcpkg
@@ -152,9 +130,7 @@ jobs:
           sudo -u builder ./bootstrap-vcpkg.sh
           export VCPKG_DISABLE_METRICS=1
 
-          # Capture stdout + stderr into a log file
           sudo -u builder ./vcpkg install 2>&1 | tee vcpkg-manifest-install.log || true
-
           cd ../..
 
       # ----------------------------
@@ -168,6 +144,16 @@ jobs:
           path: Build/vcpkg/vcpkg-manifest-install.log
 
       # ----------------------------
+      # VERIFY BUILDER TOOLCHAIN
+      # ----------------------------
+      - name: Verify builder toolchain
+        run: |
+          sudo -u builder env PATH="/usr/bin:/bin" which ninja
+          sudo -u builder env PATH="/usr/bin:/bin" ninja --version
+          sudo -u builder env PATH="/usr/bin:/bin" clang --version
+          sudo -u builder env PATH="/usr/bin:/bin" clang++ --version
+
+      # ----------------------------
       # CONFIGURE + BUILD
       # ----------------------------
       - name: Configure and build Ladybird
@@ -175,23 +161,23 @@ jobs:
           chmod +x ./Meta/ladybird.py
 
           sudo -u builder env \
-            PATH="$PATH" \
-            CC=$(which clang) \
-            CXX=$(which clang++) \
+            PATH="/usr/bin:/bin" \
+            CC=clang \
+            CXX=clang++ \
             BUILD_PRESET=Release \
             cmake -S . -B Build/release \
               -G Ninja \
+              -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja \
               -DCMAKE_TOOLCHAIN_FILE=Build/vcpkg/scripts/buildsystems/vcpkg.cmake \
               -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
               -DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF \
               -DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF \
-              -DICU_ROOT="$PWD/build/vcpkg_installed/x64-linux" \
               -DICU_NO_SYSTEM_PATHS=ON
 
           sudo -u builder env \
-            PATH="$PATH" \
-            CC=$(which clang) \
-            CXX=$(which clang++) \
+            PATH="/usr/bin:/bin" \
+            CC=clang \
+            CXX=clang++ \
             BUILD_PRESET=Release \
             ./Meta/ladybird.py build
 
