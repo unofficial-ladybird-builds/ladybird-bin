@@ -396,8 +396,15 @@ void TextNode::compute_text_for_rendering()
 Unicode::Segmenter& TextNode::grapheme_segmenter() const
 {
     if (!m_grapheme_segmenter) {
-        m_grapheme_segmenter = document().grapheme_segmenter().clone();
-        m_grapheme_segmenter->set_segmented_text(text_for_rendering());
+        auto const& text = text_for_rendering();
+        // Fast path: For ASCII text, every character is its own grapheme.
+        // We can use a trivial segmenter that avoids all ICU overhead.
+        if (text.is_ascii()) {
+            m_grapheme_segmenter = Unicode::Segmenter::create_for_ascii_grapheme(text.length_in_code_units());
+        } else {
+            m_grapheme_segmenter = document().grapheme_segmenter().clone();
+            m_grapheme_segmenter->set_segmented_text(text);
+        }
     }
 
     return *m_grapheme_segmenter;
@@ -426,6 +433,36 @@ TextNode::ChunkIterator::ChunkIterator(TextNode const& text_node, Utf16View cons
 
 static Gfx::GlyphRun::TextType text_type_for_code_point(u32 code_point)
 {
+    // Fast path for ASCII using a lookup table.
+    // Each ASCII character has a statically known bidi class.
+    if (code_point < 0x80) {
+        using enum Gfx::GlyphRun::TextType;
+        // clang-format off
+        static constexpr auto L = Ltr;
+        static constexpr auto C = Common;
+        static constexpr auto X = ContextDependent;
+        static constexpr Gfx::GlyphRun::TextType ascii_text_types[128] = {
+            // 0x00-0x0F: Control characters (BN=Common, S/B/WS=ContextDependent)
+            C, C, C, C, C, C, C, C, C, X, X, X, X, X, C, C,
+            // 0x10-0x1F: Control characters
+            C, C, C, C, C, C, C, C, C, C, C, C, X, X, X, X,
+            // 0x20-0x2F: Space and punctuation
+            X, C, C, X, X, X, C, C, C, C, C, X, X, X, X, X,
+            // 0x30-0x3F: Digits and punctuation
+            X, X, X, X, X, X, X, X, X, X, X, C, C, C, C, C,
+            // 0x40-0x4F: @ and uppercase letters
+            C, L, L, L, L, L, L, L, L, L, L, L, L, L, L, L,
+            // 0x50-0x5F: Uppercase letters and punctuation
+            L, L, L, L, L, L, L, L, L, L, L, C, C, C, C, C,
+            // 0x60-0x6F: ` and lowercase letters
+            C, L, L, L, L, L, L, L, L, L, L, L, L, L, L, L,
+            // 0x70-0x7F: Lowercase letters and punctuation
+            L, L, L, L, L, L, L, L, L, L, L, C, C, C, C, C,
+        };
+        // clang-format on
+        return ascii_text_types[code_point];
+    }
+
     switch (Unicode::bidirectional_class(code_point)) {
     case Unicode::BidiClass::WhiteSpaceNeutral:
 

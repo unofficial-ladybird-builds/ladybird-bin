@@ -24,6 +24,26 @@ InlineLevelIterator::InlineLevelIterator(Layout::InlineFormattingContext& inline
     , m_layout_mode(layout_mode)
 {
     skip_to_next();
+    generate_all_items();
+}
+
+void InlineLevelIterator::generate_all_items()
+{
+    for (;;) {
+        auto item = generate_next_item();
+        if (!item.has_value())
+            break;
+
+        // Track accumulated width for tab calculations.
+        // Reset on forced breaks since tabs measure from line start.
+        if (item->type == Item::Type::ForcedBreak) {
+            m_accumulated_width_for_tabs = 0;
+        } else {
+            m_accumulated_width_for_tabs += item->border_box_width();
+        }
+
+        m_items.append(item.release_value());
+    }
 }
 
 void InlineLevelIterator::enter_node_with_box_model_metrics(Layout::NodeWithStyleAndBoxModelMetrics const& node)
@@ -140,20 +160,16 @@ void InlineLevelIterator::skip_to_next()
 
 Optional<InlineLevelIterator::Item> InlineLevelIterator::next()
 {
-    if (m_lookahead_items.is_empty())
-        return next_without_lookahead();
-    return m_lookahead_items.dequeue();
+    if (m_next_item_index >= m_items.size())
+        return {};
+    return m_items[m_next_item_index++];
 }
 
 CSSPixels InlineLevelIterator::next_non_whitespace_sequence_width()
 {
     CSSPixels next_width = 0;
-    for (;;) {
-        auto next_item_opt = next_without_lookahead();
-        if (!next_item_opt.has_value())
-            break;
-        m_lookahead_items.enqueue(next_item_opt.release_value());
-        auto& next_item = m_lookahead_items.tail();
+    for (size_t i = m_next_item_index; i < m_items.size(); ++i) {
+        auto const& next_item = m_items[i];
         if (next_item.type == InlineLevelIterator::Item::Type::ForcedBreak)
             break;
         if (next_item.node->computed_values().text_wrap_mode() == CSS::TextWrapMode::Wrap) {
@@ -175,18 +191,19 @@ Gfx::GlyphRun::TextType InlineLevelIterator::resolve_text_direction_from_context
 {
     VERIFY(m_text_node_context.has_value());
 
+    // Search forward in the pre-generated chunks array to find the next chunk with known direction.
+    // Since chunks are pre-generated, this is just O(1) array access per iteration.
     Optional<Gfx::GlyphRun::TextType> next_known_direction;
-    for (size_t i = 0;; ++i) {
-        auto peek = m_text_node_context->chunk_iterator.peek(i);
-        if (!peek.has_value())
-            break;
-        if (peek->text_type == Gfx::GlyphRun::TextType::Ltr || peek->text_type == Gfx::GlyphRun::TextType::Rtl) {
-            next_known_direction = peek->text_type;
+    for (size_t i = m_text_node_context->next_chunk_index; i < m_text_node_context->chunks.size(); ++i) {
+        auto const& chunk = m_text_node_context->chunks[i];
+        if (chunk.text_type == Gfx::GlyphRun::TextType::Ltr || chunk.text_type == Gfx::GlyphRun::TextType::Rtl) {
+            next_known_direction = chunk.text_type;
             break;
         }
     }
 
     auto last_known_direction = m_text_node_context->last_known_direction;
+
     if (last_known_direction.has_value() && next_known_direction.has_value() && *last_known_direction != *next_known_direction) {
         switch (m_containing_block->computed_values().direction()) {
         case CSS::Direction::Ltr:
@@ -204,7 +221,7 @@ Gfx::GlyphRun::TextType InlineLevelIterator::resolve_text_direction_from_context
     return Gfx::GlyphRun::TextType::ContextDependent;
 }
 
-Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead()
+Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
 {
     if (!m_current_node)
         return {};
@@ -212,17 +229,21 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
     if (auto* text_node = as_if<Layout::TextNode>(*m_current_node)) {
         if (!m_text_node_context.has_value())
             enter_text_node(*text_node);
-        else
-            m_text_node_context->is_first_chunk = false;
 
-        auto chunk_opt = m_text_node_context->chunk_iterator.next();
+        // Track chunk position locally
+        bool is_first_chunk = (m_text_node_context->next_chunk_index == 0);
 
-        if (!m_text_node_context->chunk_iterator.peek(0).has_value())
-            m_text_node_context->is_last_chunk = true;
+        // Get the next chunk from the pre-generated array
+        Optional<TextNode::Chunk> chunk_opt;
+        if (m_text_node_context->next_chunk_index < m_text_node_context->chunks.size()) {
+            chunk_opt = m_text_node_context->chunks[m_text_node_context->next_chunk_index++];
+        }
+
+        bool is_last_chunk = (m_text_node_context->next_chunk_index >= m_text_node_context->chunks.size());
 
         auto is_empty_editable = false;
         if (!chunk_opt.has_value()) {
-            auto const is_only_chunk = m_text_node_context->is_first_chunk && m_text_node_context->is_last_chunk;
+            auto const is_only_chunk = is_first_chunk && is_last_chunk;
             if (is_only_chunk && text_node->text_for_rendering().is_empty()) {
                 if (auto const* shadow_root = as_if<DOM::ShadowRoot>(text_node->dom_node().root()))
                     if (auto const* form_associated_element = as_if<HTML::FormAssociatedTextControlElement>(shadow_root->host()))
@@ -231,22 +252,31 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
             }
 
             if (is_empty_editable) {
-                chunk_opt = m_text_node_context->chunk_iterator.create_empty_chunk();
+                // Create an empty chunk for editable empty text fields
+                chunk_opt = TextNode::Chunk {
+                    .view = {},
+                    .font = text_node->computed_values().font_list().first(),
+                    .is_all_whitespace = true,
+                    .text_type = Gfx::GlyphRun::TextType::Common,
+                };
+                // Advance the index so the next call will move to the next node
+                m_text_node_context->next_chunk_index = 1;
             } else {
                 m_text_node_context = {};
                 skip_to_next();
-                return next_without_lookahead();
+                return generate_next_item();
             }
         }
 
         auto& chunk = chunk_opt.value();
         auto text_type = chunk.text_type;
-        if (text_type == Gfx::GlyphRun::TextType::Ltr || text_type == Gfx::GlyphRun::TextType::Rtl)
+        if (text_type == Gfx::GlyphRun::TextType::Ltr || text_type == Gfx::GlyphRun::TextType::Rtl) {
             m_text_node_context->last_known_direction = text_type;
+        }
 
-        auto do_respect_linebreak = m_text_node_context->chunk_iterator.should_respect_linebreaks();
+        auto do_respect_linebreak = m_text_node_context->should_respect_linebreaks;
         if (do_respect_linebreak && chunk.has_breaking_newline) {
-            m_text_node_context->is_last_chunk = true;
+            is_last_chunk = true;
             if (chunk.is_all_whitespace)
                 text_type = Gfx::GlyphRun::TextType::EndPadding;
         }
@@ -263,13 +293,9 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
 
         auto x = 0.0f;
         if (chunk.has_breaking_tab) {
-            CSSPixels accumulated_width;
-
-            // make sure to account for any fragments that take up a portion of the measured tab stop distance
-            auto fragments = m_containing_block_used_values.line_boxes.last().fragments();
-            for (auto const& frag : fragments) {
-                accumulated_width += frag.width();
-            }
+            // Use the accumulated width we've been tracking during pre-generation.
+            // This accounts for items that would appear before this tab on the same line.
+            CSSPixels accumulated_width = m_accumulated_width_for_tabs;
 
             // https://drafts.csswg.org/css-text/#tab-size-property
             auto tab_width = text_node->computed_values().tab_size().visit(
@@ -310,7 +336,7 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
 
         // NOTE: We never consider `content: ""` to be collapsible whitespace.
         bool is_generated_empty_string = is_empty_editable || (text_node->is_generated_for_pseudo_element() && chunk.length == 0);
-        auto collapse_whitespace = m_text_node_context->chunk_iterator.should_collapse_whitespace();
+        auto collapse_whitespace = m_text_node_context->should_collapse_whitespace;
 
         Item item {
             .type = Item::Type::Text,
@@ -322,7 +348,7 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
             .is_collapsible_whitespace = collapse_whitespace && chunk.is_all_whitespace && !is_generated_empty_string,
         };
 
-        add_extra_box_model_metrics_to_item(item, m_text_node_context->is_first_chunk, m_text_node_context->is_last_chunk);
+        add_extra_box_model_metrics_to_item(item, is_first_chunk, is_last_chunk);
         return item;
     }
 
@@ -355,12 +381,12 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::next_without_lookahead(
 
     if (is<Layout::ListItemMarkerBox>(*m_current_node)) {
         skip_to_next();
-        return next_without_lookahead();
+        return generate_next_item();
     }
 
     if (!is<Layout::Box>(*m_current_node)) {
         skip_to_next();
-        return next_without_lookahead();
+        return generate_next_item();
     }
 
     if (is<Layout::ReplacedBox>(*m_current_node)) {
@@ -400,10 +426,23 @@ void InlineLevelIterator::enter_text_node(Layout::TextNode const& text_node)
     bool do_wrap_lines = text_wrap_mode == CSS::TextWrapMode::Wrap;
     bool do_respect_linebreaks = first_is_one_of(white_space_collapse, CSS::WhiteSpaceCollapse::Preserve, CSS::WhiteSpaceCollapse::PreserveBreaks, CSS::WhiteSpaceCollapse::BreakSpaces);
 
+    // Pre-generate all chunks for this text node upfront.
+    // This allows O(1) peek() and next() operations instead of lazy generation with O(n) queue operations.
+    TextNode::ChunkIterator chunk_iterator { text_node, do_wrap_lines, do_respect_linebreaks };
+    Vector<TextNode::Chunk> chunks;
+    while (true) {
+        auto chunk = chunk_iterator.next();
+        if (!chunk.has_value())
+            break;
+        chunks.append(chunk.release_value());
+    }
+
     m_text_node_context = TextNodeContext {
-        .is_first_chunk = true,
-        .is_last_chunk = false,
-        .chunk_iterator = TextNode::ChunkIterator { text_node, do_wrap_lines, do_respect_linebreaks },
+        .chunks = move(chunks),
+        .next_chunk_index = 0,
+        .should_collapse_whitespace = chunk_iterator.should_collapse_whitespace(),
+        .should_wrap_lines = do_wrap_lines,
+        .should_respect_linebreaks = do_respect_linebreaks,
     };
 }
 

@@ -55,7 +55,8 @@ public:
     CSSPixels next_non_whitespace_sequence_width();
 
 private:
-    Optional<Item> next_without_lookahead();
+    void generate_all_items();
+    Optional<Item> generate_next_item();
     Gfx::GlyphRun::TextType resolve_text_direction_from_context();
     void skip_to_next();
     void compute_next();
@@ -78,9 +79,11 @@ private:
     LayoutMode const m_layout_mode;
 
     struct TextNodeContext {
-        bool is_first_chunk {};
-        bool is_last_chunk {};
-        TextNode::ChunkIterator chunk_iterator;
+        Vector<TextNode::Chunk> chunks;
+        size_t next_chunk_index { 0 };
+        bool should_collapse_whitespace {};
+        bool should_wrap_lines {};
+        bool should_respect_linebreaks {};
         Optional<Gfx::GlyphRun::TextType> last_known_direction {};
     };
 
@@ -96,7 +99,13 @@ private:
     Optional<ExtraBoxMetrics> m_extra_trailing_metrics;
 
     Vector<GC::Ref<NodeWithStyleAndBoxModelMetrics const>> m_box_model_node_stack;
-    Queue<InlineLevelIterator::Item> m_lookahead_items;
+
+    // Pre-generated items for O(1) iteration and lookahead.
+    Vector<Item> m_items;
+    size_t m_next_item_index { 0 };
+
+    // Accumulated width tracking for tab calculations during pre-generation.
+    CSSPixels m_accumulated_width_for_tabs { 0 };
 };
 
 }
