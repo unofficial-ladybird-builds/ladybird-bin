@@ -1357,6 +1357,7 @@ static void propagate_overflow_to_viewport(Element& root_element, Layout::Viewpo
     viewport_computed_values.set_overflow_y(overflow_y_to_apply);
 
     // The element from which the value is propagated must then have a used overflow value of visible.
+    // FIXME: Apply this to the used values, not the computed ones.
     overflow_origin_computed_values.set_overflow_x(CSS::Overflow::Visible);
     overflow_origin_computed_values.set_overflow_y(CSS::Overflow::Visible);
 }
@@ -5659,12 +5660,9 @@ WebIDL::ExceptionOr<void> Document::set_design_mode(String const& design_mode)
         // 1. Set this's design mode enabled to true.
         set_design_mode_enabled_state(true);
         // 2. Reset this's active range's start and end boundary points to be at the start of this.
-        if (auto selection = get_selection(); selection) {
-            if (auto active_range = selection->range(); active_range) {
-                TRY(active_range->set_start(*this, 0));
-                TRY(active_range->set_end(*this, 0));
-                update_layout(UpdateLayoutReason::DocumentSetDesignMode);
-            }
+        if (auto selection = get_selection()) {
+            TRY(selection->collapse(this, 0));
+            update_layout(UpdateLayoutReason::DocumentSetDesignMode);
         }
         // 3. Run the focusing steps for this's document element, if non-null.
         if (auto* document_element = this->document_element(); document_element)
@@ -5761,7 +5759,7 @@ GC::Ptr<Element const> Document::scrolling_element() const
     if (in_quirks_mode()) {
         // 1. If the body element exists, and it is not potentially scrollable, return the body element and abort these steps.
         //    For this purpose, a value of overflow:clip on the the body element’s parent element must be treated as overflow:hidden.
-        if (auto const* body_element = body(); body_element && !body_element->is_potentially_scrollable())
+        if (auto const* body_element = body(); body_element && !body_element->is_potentially_scrollable(Element::TreatOverflowClipOnBodyParentAsOverflowHidden::Yes))
             return body_element;
 
         // 2. Return null and abort these steps.

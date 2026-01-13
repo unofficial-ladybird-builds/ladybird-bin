@@ -221,6 +221,8 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::EasingFunction); parsed.has_value())
         return parsed.release_value();
+    if (auto parsed = parse_for_type(ValueType::FontStyle); parsed.has_value())
+        return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::Image); parsed.has_value())
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::Position); parsed.has_value())
@@ -593,8 +595,6 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         return parse_all_as(tokens, [this](auto& tokens) { return parse_font_feature_settings_value(tokens); });
     case PropertyID::FontLanguageOverride:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_font_language_override_value(tokens); });
-    case PropertyID::FontStyle:
-        return parse_all_as(tokens, [this](auto& tokens) { return parse_font_style_value(tokens); });
     case PropertyID::FontVariationSettings:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_font_variation_settings_value(tokens); });
     case PropertyID::FontVariant:
@@ -2617,7 +2617,7 @@ RefPtr<StyleValue const> Parser::parse_font_value(TokenStream<ComponentValue>& t
         }
         case PropertyID::FontStyle: {
             VERIFY(!font_style);
-            font_style = FontStyleStyleValue::create(*keyword_to_font_style(value.release_nonnull()->to_keyword()));
+            font_style = value.release_nonnull();
             tokens.discard_whitespace();
             continue;
         }
@@ -2656,7 +2656,6 @@ RefPtr<StyleValue const> Parser::parse_font_value(TokenStream<ComponentValue>& t
         line_height = property_initial_value(PropertyID::LineHeight);
 
     transaction.commit();
-    auto initial_value = KeywordStyleValue::create(Keyword::Initial);
     return ShorthandStyleValue::create(PropertyID::Font,
         {
             // Set explicitly https://drafts.csswg.org/css-fonts/#set-explicitly
@@ -2687,12 +2686,12 @@ RefPtr<StyleValue const> Parser::parse_font_value(TokenStream<ComponentValue>& t
             line_height.release_nonnull(),
 
             // Reset implicitly
-            initial_value,                                   // font-feature-settings
-            property_initial_value(PropertyID::FontKerning), // font-kerning,
-            initial_value,                                   // font-language-override
-                                                             // FIXME: font-optical-sizing,
-                                                             // FIXME: font-size-adjust,
-            initial_value,                                   // font-variation-settings
+            property_initial_value(PropertyID::FontFeatureSettings),   // font-feature-settings
+            property_initial_value(PropertyID::FontKerning),           // font-kerning,
+            property_initial_value(PropertyID::FontLanguageOverride),  // font-language-override
+                                                                       // FIXME: font-optical-sizing,
+                                                                       // FIXME: font-size-adjust,
+            property_initial_value(PropertyID::FontVariationSettings), // font-variation-settings
         });
 }
 
@@ -2802,12 +2801,8 @@ RefPtr<StyleValue const> Parser::parse_font_feature_settings_value(TokenStream<C
     auto transaction = tokens.begin_transaction();
     auto tag_values = parse_a_comma_separated_list_of_component_values(tokens);
 
-    // "The computed value of font-feature-settings is a map, so any duplicates in the specified value must not be preserved.
-    // If the same feature tag appears more than once, the value associated with the last appearance supersedes any previous
-    // value for that axis."
-    // So, we deduplicate them here using a HashSet.
-
-    OrderedHashMap<FlyString, NonnullRefPtr<OpenTypeTaggedStyleValue const>> feature_tags_map;
+    StyleValueVector feature_tags;
+    feature_tags.ensure_capacity(tag_values.size());
     for (auto const& values : tag_values) {
         // <feature-tag-value> = <opentype-tag> [ <integer [0,∞]> | on | off ]?
         TokenStream tag_tokens { values };
@@ -2845,49 +2840,11 @@ RefPtr<StyleValue const> Parser::parse_font_feature_settings_value(TokenStream<C
         if (!opentype_tag || !value || tag_tokens.has_next_token())
             return nullptr;
 
-        feature_tags_map.set(opentype_tag->string_value(), OpenTypeTaggedStyleValue::create(OpenTypeTaggedStyleValue::Mode::FontFeatureSettings, opentype_tag->string_value(), value.release_nonnull()));
+        feature_tags.append(OpenTypeTaggedStyleValue::create(OpenTypeTaggedStyleValue::Mode::FontFeatureSettings, opentype_tag->string_value(), value.release_nonnull()));
     }
-
-    // "The computed value contains the de-duplicated feature tags, sorted in ascending order by code unit."
-    StyleValueVector feature_tags;
-    feature_tags.ensure_capacity(feature_tags_map.size());
-    for (auto const& [key, feature_tag] : feature_tags_map)
-        feature_tags.append(feature_tag);
-
-    quick_sort(feature_tags, [](auto& a, auto& b) {
-        return a->as_open_type_tagged().tag() < b->as_open_type_tagged().tag();
-    });
 
     transaction.commit();
     return StyleValueList::create(move(feature_tags), StyleValueList::Separator::Comma);
-}
-
-RefPtr<StyleValue const> Parser::parse_font_style_value(TokenStream<ComponentValue>& tokens)
-{
-    // https://drafts.csswg.org/css-fonts/#font-style-prop
-    // normal | italic | left | right | oblique <angle [-90deg,90deg]>?
-    auto transaction = tokens.begin_transaction();
-    auto keyword_value = parse_css_value_for_property(PropertyID::FontStyle, tokens);
-    if (!keyword_value || !keyword_value->is_keyword())
-        return nullptr;
-    auto font_style = keyword_to_font_style(keyword_value->to_keyword());
-    VERIFY(font_style.has_value());
-    if (tokens.has_next_token() && keyword_value->to_keyword() == Keyword::Oblique) {
-        if (auto angle_value = parse_angle_value(tokens)) {
-            if (angle_value->is_angle()) {
-                auto angle = angle_value->as_angle().angle();
-                auto angle_degrees = angle.to_degrees();
-                if (angle_degrees < -90 || angle_degrees > 90)
-                    return nullptr;
-            }
-
-            transaction.commit();
-            return FontStyleStyleValue::create(*font_style, angle_value);
-        }
-    }
-
-    transaction.commit();
-    return FontStyleStyleValue::create(*font_style);
 }
 
 RefPtr<StyleValue const> Parser::parse_font_variation_settings_value(TokenStream<ComponentValue>& tokens)

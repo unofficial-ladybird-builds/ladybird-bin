@@ -46,8 +46,7 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
     // If all the longhands are the same CSS-wide keyword, just return that once.
     Optional<Keyword> built_in_keyword;
     bool all_same_keyword = true;
-    StyleComputer::for_each_property_expanding_shorthands(m_properties.shorthand_property, *this, [&](PropertyID name, StyleValue const& value) {
-        (void)name;
+    StyleComputer::for_each_property_expanding_shorthands(m_properties.shorthand_property, *this, [&](PropertyID, StyleValue const& value) {
         if (!value.is_css_wide_keyword()) {
             all_same_keyword = false;
             return;
@@ -424,6 +423,13 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
         auto line_height = longhand(PropertyID::LineHeight);
         auto font_family = longhand(PropertyID::FontFamily);
 
+        for (auto const& reset_only_sub_property : { PropertyID::FontFeatureSettings, PropertyID::FontKerning, PropertyID::FontLanguageOverride, PropertyID::FontVariationSettings }) {
+            auto const& value = longhand(reset_only_sub_property);
+
+            if (!value->equals(property_initial_value(reset_only_sub_property)))
+                return;
+        }
+
         // Some longhands prevent serialization if they are not allowed in the shorthand.
         // <font-variant-css2> = normal | small-caps
         auto font_variant_string = font_variant->to_string(mode);
@@ -433,7 +439,7 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
 
         // <font-width-css3> = normal | ultra-condensed | extra-condensed | condensed | semi-condensed | semi-expanded | expanded | extra-expanded | ultra-expanded
         auto font_width_as_keyword = [&]() -> Optional<Keyword> {
-            if (first_is_one_of(font_width->to_keyword(), Keyword::Initial, Keyword::Normal, Keyword::UltraCondensed, Keyword::ExtraCondensed, Keyword::Condensed, Keyword::SemiCondensed, Keyword::SemiExpanded, Keyword::Expanded, Keyword::ExtraExpanded, Keyword::UltraExpanded))
+            if (first_is_one_of(font_width->to_keyword(), Keyword::Normal, Keyword::UltraCondensed, Keyword::ExtraCondensed, Keyword::Condensed, Keyword::SemiCondensed, Keyword::SemiExpanded, Keyword::Expanded, Keyword::ExtraExpanded, Keyword::UltraExpanded))
                 return font_width->to_keyword();
 
             Optional<double> font_width_as_percentage;
@@ -501,15 +507,15 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
         auto font_style_string = font_style->to_string(mode);
         if (font_style_string != "normal"sv)
             append(font_style_string);
-        if (font_variant_string != "normal"sv && font_variant_string != "initial"sv)
+        if (font_variant_string != "normal"sv)
             append(font_variant_string);
         auto font_weight_string = font_weight->to_string(mode);
-        if (font_weight_string != "normal"sv && font_weight_string != "initial"sv && font_weight_string != "400"sv)
+        if (font_weight_string != "normal"sv && font_weight_string != "400"sv)
             append(font_weight_string);
-        if (font_width_as_keyword != Keyword::Normal && font_width_as_keyword != Keyword::Initial)
+        if (font_width_as_keyword != Keyword::Normal)
             append(string_from_keyword(font_width_as_keyword.value()));
         append(font_size->to_string(mode));
-        if (line_height->to_keyword() != Keyword::Normal && line_height->to_keyword() != Keyword::Initial)
+        if (line_height->to_keyword() != Keyword::Normal)
             append(MUST(String::formatted("/ {}", line_height->to_string(mode))));
         append(font_family->to_string(mode));
         return;
