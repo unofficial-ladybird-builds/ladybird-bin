@@ -363,7 +363,7 @@ Crypto::SignedBigInteger get_utc_epoch_nanoseconds(Temporal::ISODateTime const& 
     return result;
 }
 
-static i64 clip_bigint_to_sane_time(Crypto::SignedBigInteger const& value)
+i64 clip_bigint_to_sane_time(Crypto::SignedBigInteger const& value)
 {
     static Crypto::SignedBigInteger const min_bigint { NumericLimits<i64>::min() };
     static Crypto::SignedBigInteger const max_bigint { NumericLimits<i64>::max() };
@@ -376,11 +376,10 @@ static i64 clip_bigint_to_sane_time(Crypto::SignedBigInteger const& value)
     if (value > max_bigint)
         return NumericLimits<i64>::max();
 
-    // FIXME: Can we do this without string conversion?
-    return MUST(value.to_base(10)).to_number<i64>().value();
+    return value.to_i64();
 }
 
-static i64 clip_double_to_sane_time(double value)
+i64 clip_double_to_sane_time(double value)
 {
     static constexpr auto min_double = static_cast<double>(NumericLimits<i64>::min());
     static constexpr auto max_double = static_cast<double>(NumericLimits<i64>::max());
@@ -419,7 +418,7 @@ Unicode::TimeZoneOffset get_named_time_zone_offset_nanoseconds(StringView time_z
 {
     // Since UnixDateTime::from_seconds_since_epoch() and UnixDateTime::from_nanoseconds_since_epoch() both take an i64, converting to
     // seconds first gives us a greater range. The TZDB doesn't have sub-second offsets.
-    auto seconds = epoch_nanoseconds.divided_by(Temporal::NANOSECONDS_PER_SECOND).quotient;
+    auto seconds = big_floor(epoch_nanoseconds, Temporal::NANOSECONDS_PER_SECOND);
     auto time = UnixDateTime::from_seconds_since_epoch(clip_bigint_to_sane_time(seconds));
 
     auto offset = Unicode::time_zone_offset(time_zone_identifier, time);
