@@ -56,13 +56,14 @@ endpoint WebContentServer
     get_hovered_node_id(u64 page_id) =|
 
     js_console_input(u64 page_id, String js_source) =|
-    js_console_request_messages(u64 page_id, i32 start_index) =|
     run_javascript(u64 page_id, String js_source) =|
 
     list_style_sheets(u64 page_id) =|
     request_style_sheet_source(u64 page_id, Web::CSS::StyleSheetIdentifier identifier) =|
 
     set_listen_for_dom_mutations(u64 page_id, bool listen_for_dom_mutations) =|
+    did_connect_devtools_client(u64 page_id) =|
+    did_disconnect_devtools_client(u64 page_id) =|
     get_dom_node_inner_html(u64 page_id, Web::UniqueNodeID node_id) =|
     get_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id) =|
     set_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id, String html) =|

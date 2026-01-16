@@ -335,6 +335,18 @@ void ViewImplementation::set_listen_for_dom_mutations(bool listen_for_dom_mutati
     client().async_set_listen_for_dom_mutations(page_id(), listen_for_dom_mutations);
 }
 
+void ViewImplementation::did_connect_devtools_client()
+{
+    m_devtools_connected = true;
+    client().async_did_connect_devtools_client(page_id());
+}
+
+void ViewImplementation::did_disconnect_devtools_client()
+{
+    m_devtools_connected = false;
+    client().async_did_disconnect_devtools_client(page_id());
+}
+
 void ViewImplementation::get_dom_node_inner_html(Web::UniqueNodeID node_id)
 {
     client().async_get_dom_node_inner_html(page_id(), node_id);
@@ -418,11 +430,6 @@ void ViewImplementation::run_javascript(String const& js_source)
 void ViewImplementation::js_console_input(String const& js_source)
 {
     client().async_js_console_input(page_id(), js_source);
-}
-
-void ViewImplementation::js_console_request_messages(i32 start_index)
-{
-    client().async_js_console_request_messages(page_id(), start_index);
 }
 
 void ViewImplementation::alert_closed()
@@ -588,6 +595,10 @@ void ViewImplementation::initialize_client(CreateNewClient create_new_client)
     languages_changed();
     autoplay_settings_changed();
     global_privacy_control_changed();
+
+    // If DevTools is connected, notify the new WebContent process.
+    if (m_devtools_connected)
+        client().async_did_connect_devtools_client(page_id());
 }
 
 void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_error_page)
@@ -1027,6 +1038,18 @@ void ViewImplementation::did_request_media_context_menu(Badge<WebContentClient>,
 
     if (m_media_context_menu->on_activation)
         m_media_context_menu->on_activation(to_widget_position(content_position));
+}
+
+u64 ViewImplementation::add_navigation_listener(NavigationListener listener)
+{
+    auto id = m_next_navigation_listener_id++;
+    m_navigation_listeners.set(id, move(listener));
+    return id;
+}
+
+void ViewImplementation::remove_navigation_listener(u64 listener_id)
+{
+    m_navigation_listeners.remove(listener_id);
 }
 
 }

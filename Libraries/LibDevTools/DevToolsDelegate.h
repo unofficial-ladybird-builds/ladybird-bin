@@ -9,11 +9,15 @@
 #include <AK/Error.h>
 #include <AK/Function.h>
 #include <AK/JsonValue.h>
+#include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibDevTools/Actors/CSSPropertiesActor.h>
 #include <LibDevTools/Actors/PageStyleActor.h>
 #include <LibDevTools/Actors/TabActor.h>
 #include <LibDevTools/Forward.h>
+#include <LibHTTP/Header.h>
+#include <LibRequests/NetworkError.h>
+#include <LibRequests/RequestTimingInfo.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
 #include <LibWeb/Forward.h>
@@ -72,11 +76,48 @@ public:
     using OnScriptEvaluationComplete = Function<void(ErrorOr<JsonValue>)>;
     virtual void evaluate_javascript(TabDescription const&, String const&, OnScriptEvaluationComplete) const { }
 
-    using OnConsoleMessageAvailable = Function<void(i32 message_id)>;
-    using OnReceivedConsoleMessages = Function<void(i32 start_index, Vector<WebView::ConsoleOutput>)>;
-    virtual void listen_for_console_messages(TabDescription const&, OnConsoleMessageAvailable, OnReceivedConsoleMessages) const { }
+    using OnConsoleMessage = Function<void(WebView::ConsoleOutput)>;
+    virtual void listen_for_console_messages(TabDescription const&, OnConsoleMessage) const { }
     virtual void stop_listening_for_console_messages(TabDescription const&) const { }
-    virtual void request_console_messages(TabDescription const&, i32) const { }
+
+    struct NetworkRequestData {
+        u64 request_id { 0 };
+        String url;
+        String method;
+        UnixDateTime start_time;
+        Vector<HTTP::Header> request_headers;
+        ByteBuffer request_body;
+        Optional<String> initiator_type;
+    };
+
+    struct NetworkResponseData {
+        u64 request_id { 0 };
+        u32 status_code { 0 };
+        Optional<String> reason_phrase;
+        Vector<HTTP::Header> response_headers;
+    };
+
+    struct NetworkRequestCompleteData {
+        u64 request_id { 0 };
+        u64 body_size { 0 };
+        Requests::RequestTimingInfo timing_info;
+        Optional<Requests::NetworkError> network_error;
+    };
+
+    using OnNetworkRequestStarted = Function<void(NetworkRequestData)>;
+    using OnNetworkResponseHeadersReceived = Function<void(NetworkResponseData)>;
+    using OnNetworkResponseBodyReceived = Function<void(u64 request_id, ByteBuffer data)>;
+    using OnNetworkRequestFinished = Function<void(NetworkRequestCompleteData)>;
+    virtual void listen_for_network_events(TabDescription const&, OnNetworkRequestStarted, OnNetworkResponseHeadersReceived, OnNetworkResponseBodyReceived, OnNetworkRequestFinished) const { }
+    virtual void stop_listening_for_network_events(TabDescription const&) const { }
+
+    using OnNavigationStarted = Function<void(String url)>;
+    using OnNavigationFinished = Function<void(String url, String title)>;
+    virtual void listen_for_navigation_events(TabDescription const&, OnNavigationStarted, OnNavigationFinished) const { }
+    virtual void stop_listening_for_navigation_events(TabDescription const&) const { }
+
+    virtual void did_connect_devtools_client(TabDescription const&) const { }
+    virtual void did_disconnect_devtools_client(TabDescription const&) const { }
 };
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2024-2026, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -201,6 +201,12 @@ void DisplayListPlayerSkia::add_clip_rect(AddClipRect const& command)
     canvas.clipRect(to_skia_rect(rect), true);
 }
 
+void DisplayListPlayerSkia::add_clip_path(AddClipPath const& command)
+{
+    auto& canvas = surface().canvas();
+    canvas.clipPath(to_skia_path(command.path), true);
+}
+
 void DisplayListPlayerSkia::save(Save const&)
 {
     auto& canvas = surface().canvas();
@@ -223,48 +229,6 @@ void DisplayListPlayerSkia::translate(Translate const& command)
 {
     auto& canvas = surface().canvas();
     canvas.translate(command.delta.x(), command.delta.y());
-}
-
-void DisplayListPlayerSkia::push_stacking_context(PushStackingContext const& command)
-{
-    auto& canvas = surface().canvas();
-
-    auto new_transform = Gfx::translation_matrix(Vector3<float>(command.transform.origin.x(), command.transform.origin.y(), 0));
-    new_transform = new_transform * command.transform.matrix;
-    new_transform = new_transform * Gfx::translation_matrix(Vector3<float>(-command.transform.origin.x(), -command.transform.origin.y(), 0));
-    if (command.transform.parent_perspective_matrix.has_value())
-        new_transform = command.transform.parent_perspective_matrix.value() * new_transform;
-    auto matrix = to_skia_matrix4x4(new_transform);
-
-    surface().canvas().save();
-    if (command.clip_path.has_value())
-        canvas.clipPath(to_skia_path(command.clip_path.value()), true);
-    canvas.concat(matrix);
-
-    if (command.opacity < 1 || command.compositing_and_blending_operator != Gfx::CompositingAndBlendingOperator::Normal || command.isolate) {
-        SkPaint paint;
-        paint.setAlphaf(command.opacity);
-        paint.setBlender(Gfx::to_skia_blender(command.compositing_and_blending_operator));
-
-        if (command.bounding_rect.has_value()) {
-            auto bounds = to_skia_rect(command.bounding_rect.value());
-            // NOTE: saveLayer() is invoked after transform matrix application because bounding rect is computed
-            //       in stacking context's coordinate space.
-            canvas.saveLayer(bounds, &paint);
-        } else {
-            canvas.saveLayer(nullptr, &paint);
-        }
-    } else {
-        canvas.save();
-    }
-}
-
-void DisplayListPlayerSkia::pop_stacking_context(PopStackingContext const&)
-{
-    // Restore corresponding for save() for transform and clip path application
-    surface().canvas().restore();
-    // Restore corresponding for saveLayer() required for opacity/blending/isolate
-    surface().canvas().restore();
 }
 
 static ColorStopList replace_transition_hints_with_normal_color_stops(ColorStopList const& color_stop_list)
@@ -958,29 +922,20 @@ void DisplayListPlayerSkia::paint_scrollbar(PaintScrollBar const& command)
     canvas.drawRRect(thumb_rrect, stroke_paint);
 }
 
-void DisplayListPlayerSkia::apply_opacity(ApplyOpacity const& command)
+void DisplayListPlayerSkia::apply_effects(ApplyEffects const& command)
 {
     auto& canvas = surface().canvas();
     SkPaint paint;
-    paint.setAlphaf(command.opacity);
-    canvas.saveLayer(nullptr, &paint);
-}
 
-void DisplayListPlayerSkia::apply_composite_and_blending_operator(ApplyCompositeAndBlendingOperator const& command)
-{
-    auto& canvas = surface().canvas();
-    SkPaint paint;
-    paint.setBlender(Gfx::to_skia_blender(command.compositing_and_blending_operator));
-    canvas.saveLayer(nullptr, &paint);
-}
+    if (command.opacity < 1.0f)
+        paint.setAlphaf(command.opacity);
 
-void DisplayListPlayerSkia::apply_filter(ApplyFilter const& command)
-{
-    sk_sp<SkImageFilter> image_filter = to_skia_image_filter(command.filter);
+    if (command.compositing_and_blending_operator != Gfx::CompositingAndBlendingOperator::Normal)
+        paint.setBlender(Gfx::to_skia_blender(command.compositing_and_blending_operator));
 
-    SkPaint paint;
-    paint.setImageFilter(image_filter);
-    auto& canvas = surface().canvas();
+    if (command.filter.has_value())
+        paint.setImageFilter(to_skia_image_filter(command.filter.value()));
+
     canvas.saveLayer(nullptr, &paint);
 }
 

@@ -801,6 +801,7 @@ set(SOURCES
     Page/EventHandler.cpp
     Page/InputEvent.cpp
     Page/Page.cpp
+    Painting/AccumulatedVisualContext.cpp
     Painting/AudioPaintable.cpp
     Painting/BackgroundPainting.cpp
     Painting/BackingStoreManager.cpp
@@ -811,7 +812,6 @@ set(SOURCES
     Painting/BoxModelMetrics.cpp
     Painting/CanvasPaintable.cpp
     Painting/CheckBoxPaintable.cpp
-    Painting/ClipFrame.cpp
     Painting/DisplayList.cpp
     Painting/DisplayListCommand.cpp
     Painting/DisplayListPlayerSkia.cpp

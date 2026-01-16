@@ -18,6 +18,9 @@
 #include <LibCore/Promise.h>
 #include <LibGfx/Cursor.h>
 #include <LibGfx/Forward.h>
+#include <LibHTTP/Header.h>
+#include <LibRequests/Forward.h>
+#include <LibRequests/NetworkError.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/ActivateTab.h>
 #include <LibWeb/HTML/AudioPlayState.h>
@@ -103,6 +106,8 @@ public:
     void clear_highlighted_dom_node();
 
     void set_listen_for_dom_mutations(bool);
+    void did_connect_devtools_client();
+    void did_disconnect_devtools_client();
     void get_dom_node_inner_html(Web::UniqueNodeID node_id);
     void get_dom_node_outer_html(Web::UniqueNodeID node_id);
     void set_dom_node_outer_html(Web::UniqueNodeID node_id, String const& html);
@@ -123,7 +128,6 @@ public:
 
     void run_javascript(String const&);
     void js_console_input(String const&);
-    void js_console_request_messages(i32 start_index);
 
     void alert_closed();
     void confirm_closed(bool accepted);
@@ -176,6 +180,14 @@ public:
     Function<void(URL::URL const&)> on_url_change;
     Function<void(URL::URL const&, bool)> on_load_start;
     Function<void(URL::URL const&)> on_load_finish;
+
+    struct NavigationListener {
+        Function<void(URL::URL const&, bool)> on_load_start;
+        Function<void(URL::URL const&)> on_load_finish;
+    };
+    u64 add_navigation_listener(NavigationListener);
+    void remove_navigation_listener(u64 listener_id);
+
     Function<void(ByteString const& path, i32)> on_request_file;
     Function<void(Gfx::Bitmap const&)> on_favicon_change;
     Function<void(Gfx::Cursor const&)> on_cursor_change;
@@ -199,8 +211,11 @@ public:
     Function<void(Vector<Web::CSS::StyleSheetIdentifier>)> on_received_style_sheet_list;
     Function<void(Web::CSS::StyleSheetIdentifier const&, URL::URL const&, String const&)> on_received_style_sheet_source;
     Function<void(JsonValue)> on_received_js_console_result;
-    Function<void(i32 message_id)> on_console_message_available;
-    Function<void(i32 start_index, Vector<ConsoleOutput>)> on_received_console_messages;
+    Function<void(ConsoleOutput)> on_console_message;
+    Function<void(u64 request_id, URL::URL const&, ByteString const&, Vector<HTTP::Header> const&, ByteBuffer, Optional<String>)> on_network_request_started;
+    Function<void(u64 request_id, u32 status_code, Optional<String> const&, Vector<HTTP::Header> const&)> on_network_response_headers_received;
+    Function<void(u64 request_id, ByteBuffer)> on_network_response_body_received;
+    Function<void(u64 request_id, u64 body_size, Requests::RequestTimingInfo const&, Optional<Requests::NetworkError> const&)> on_network_request_finished;
     Function<void(i32 count_waiting)> on_resource_status_change;
     Function<void()> on_restore_window;
     Function<void(Gfx::IntPoint)> on_reposition_window;
@@ -352,6 +367,11 @@ protected:
     // FIXME: Reconcile this ID with `page_id`. The latter is only unique per WebContent connection, whereas the view ID
     //        is required to be globally unique for Firefox DevTools.
     u64 m_view_id { 0 };
+
+    HashMap<u64, NavigationListener> m_navigation_listeners;
+    u64 m_next_navigation_listener_id { 1 };
+
+    bool m_devtools_connected { false };
 };
 
 }

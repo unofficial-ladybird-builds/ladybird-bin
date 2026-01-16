@@ -1277,15 +1277,13 @@ void Application::evaluate_javascript(DevTools::TabDescription const& descriptio
     view->js_console_input(script);
 }
 
-void Application::listen_for_console_messages(DevTools::TabDescription const& description, OnConsoleMessageAvailable on_console_message_available, OnReceivedConsoleMessages on_received_console_output) const
+void Application::listen_for_console_messages(DevTools::TabDescription const& description, OnConsoleMessage on_console_message) const
 {
     auto view = ViewImplementation::find_view_by_id(description.id);
     if (!view.has_value())
         return;
 
-    view->on_console_message_available = move(on_console_message_available);
-    view->on_received_console_messages = move(on_received_console_output);
-    view->js_console_request_messages(0);
+    view->on_console_message = move(on_console_message);
 }
 
 void Application::stop_listening_for_console_messages(DevTools::TabDescription const& description) const
@@ -1294,17 +1292,93 @@ void Application::stop_listening_for_console_messages(DevTools::TabDescription c
     if (!view.has_value())
         return;
 
-    view->on_console_message_available = nullptr;
-    view->on_received_console_messages = nullptr;
+    view->on_console_message = nullptr;
 }
 
-void Application::request_console_messages(DevTools::TabDescription const& description, i32 start_index) const
+void Application::listen_for_network_events(DevTools::TabDescription const& description, OnNetworkRequestStarted on_request_started, OnNetworkResponseHeadersReceived on_response_headers, OnNetworkResponseBodyReceived on_response_body, OnNetworkRequestFinished on_request_finished) const
 {
     auto view = ViewImplementation::find_view_by_id(description.id);
     if (!view.has_value())
         return;
 
-    view->js_console_request_messages(start_index);
+    view->on_network_request_started = [on_request_started = move(on_request_started)](u64 request_id, URL::URL const& url, ByteString const& method, Vector<HTTP::Header> const& headers, ByteBuffer request_body, Optional<String> initiator_type) {
+        on_request_started({ request_id, url.to_string(), MUST(String::from_byte_string(method)), UnixDateTime::now(), headers, move(request_body), move(initiator_type) });
+    };
+
+    view->on_network_response_headers_received = [on_response_headers = move(on_response_headers)](u64 request_id, u32 status_code, Optional<String> const& reason_phrase, Vector<HTTP::Header> const& headers) {
+        on_response_headers({ request_id, status_code, reason_phrase, headers });
+    };
+
+    view->on_network_response_body_received = [on_response_body = move(on_response_body)](u64 request_id, ByteBuffer data) {
+        on_response_body(request_id, move(data));
+    };
+
+    view->on_network_request_finished = [on_request_finished = move(on_request_finished)](u64 request_id, u64 body_size, Requests::RequestTimingInfo const& timing_info, Optional<Requests::NetworkError> const& network_error) {
+        on_request_finished({ request_id, body_size, timing_info, network_error });
+    };
+}
+
+void Application::stop_listening_for_network_events(DevTools::TabDescription const& description) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    view->on_network_request_started = nullptr;
+    view->on_network_response_headers_received = nullptr;
+    view->on_network_response_body_received = nullptr;
+    view->on_network_request_finished = nullptr;
+}
+
+void Application::listen_for_navigation_events(DevTools::TabDescription const& description, OnNavigationStarted on_started, OnNavigationFinished on_finished) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    ViewImplementation::NavigationListener listener;
+    listener.on_load_start = [on_started = move(on_started)](URL::URL const& url, bool) {
+        on_started(url.to_string());
+    };
+    listener.on_load_finish = [view_id = view->view_id(), on_finished = move(on_finished)](URL::URL const& url) {
+        auto view = ViewImplementation::find_view_by_id(view_id);
+        if (!view.has_value())
+            return;
+        on_finished(url.to_string(), view->title().to_well_formed_utf8());
+    };
+
+    auto listener_id = view->add_navigation_listener(move(listener));
+    m_navigation_listener_ids.set(description.id, listener_id);
+}
+
+void Application::stop_listening_for_navigation_events(DevTools::TabDescription const& description) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    if (auto listener_id = m_navigation_listener_ids.get(description.id); listener_id.has_value()) {
+        view->remove_navigation_listener(listener_id.value());
+        m_navigation_listener_ids.remove(description.id);
+    }
+}
+
+void Application::did_connect_devtools_client(DevTools::TabDescription const& description) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    view->did_connect_devtools_client();
+}
+
+void Application::did_disconnect_devtools_client(DevTools::TabDescription const& description) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    view->did_disconnect_devtools_client();
 }
 
 }

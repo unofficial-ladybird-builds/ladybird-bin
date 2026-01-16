@@ -29,12 +29,11 @@ private:
     void draw_scaled_immutable_bitmap(DrawScaledImmutableBitmap const&) override;
     void draw_repeated_immutable_bitmap(DrawRepeatedImmutableBitmap const&) override;
     void add_clip_rect(AddClipRect const&) override;
+    void add_clip_path(AddClipPath const&) override;
     void save(Save const&) override;
     void save_layer(SaveLayer const&) override;
     void restore(Restore const&) override;
     void translate(Translate const&) override;
-    void push_stacking_context(PushStackingContext const&) override;
-    void pop_stacking_context(PopStackingContext const&) override;
     void paint_linear_gradient(PaintLinearGradient const&) override;
     void paint_outer_box_shadow(PaintOuterBoxShadow const&) override;
     void paint_inner_box_shadow(PaintInnerBoxShadow const&) override;
@@ -53,9 +52,7 @@ private:
     void add_mask(AddMask const&) override;
     void paint_scrollbar(PaintScrollBar const&) override;
     void paint_nested_display_list(PaintNestedDisplayList const&) override;
-    void apply_opacity(ApplyOpacity const&) override;
-    void apply_composite_and_blending_operator(ApplyCompositeAndBlendingOperator const&) override;
-    void apply_filter(ApplyFilter const&) override;
+    void apply_effects(ApplyEffects const&) override;
     void apply_transform(ApplyTransform const&) override;
     void apply_mask_bitmap(ApplyMaskBitmap const&) override;
 

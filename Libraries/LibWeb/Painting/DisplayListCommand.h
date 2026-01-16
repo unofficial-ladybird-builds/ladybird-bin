@@ -37,6 +37,8 @@ namespace Web::Painting {
 class DisplayList;
 
 struct DrawGlyphRun {
+    static constexpr StringView command_name = "DrawGlyphRun"sv;
+
     NonnullRefPtr<Gfx::GlyphRun const> glyph_run;
     double scale { 1 };
     Gfx::IntRect rect;
@@ -46,46 +48,46 @@ struct DrawGlyphRun {
     Gfx::IntRect bounding_rectangle;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return bounding_rectangle; }
-    void translate_by(Gfx::IntPoint const& offset);
     void dump(StringBuilder&) const;
 };
 
 struct FillRect {
+    static constexpr StringView command_name = "FillRect"sv;
+
     Gfx::IntRect rect;
     Color color;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct DrawPaintingSurface {
+    static constexpr StringView command_name = "DrawPaintingSurface"sv;
+
     Gfx::IntRect dst_rect;
     NonnullRefPtr<Gfx::PaintingSurface const> surface;
     Gfx::IntRect src_rect;
     Gfx::ScalingMode scaling_mode;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return dst_rect; }
-    void translate_by(Gfx::IntPoint const& offset) { dst_rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct DrawScaledImmutableBitmap {
+    static constexpr StringView command_name = "DrawScaledImmutableBitmap"sv;
+
     Gfx::IntRect dst_rect;
     Gfx::IntRect clip_rect;
     NonnullRefPtr<Gfx::ImmutableBitmap const> bitmap;
     Gfx::ScalingMode scaling_mode;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return clip_rect; }
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        dst_rect.translate_by(offset);
-        clip_rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct DrawRepeatedImmutableBitmap {
+    static constexpr StringView command_name = "DrawRepeatedImmutableBitmap"sv;
+
     struct Repeat {
         bool x { false };
         bool y { false };
@@ -97,104 +99,91 @@ struct DrawRepeatedImmutableBitmap {
     Gfx::ScalingMode scaling_mode;
     Repeat repeat;
 
-    void translate_by(Gfx::IntPoint const& offset) { dst_rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct Save {
+    static constexpr StringView command_name = "Save"sv;
     static constexpr int nesting_level_change = 1;
 
     void dump(StringBuilder&) const;
 };
 
 struct SaveLayer {
+    static constexpr StringView command_name = "SaveLayer"sv;
     static constexpr int nesting_level_change = 1;
 
     void dump(StringBuilder&) const;
 };
 
 struct Restore {
+    static constexpr StringView command_name = "Restore"sv;
     static constexpr int nesting_level_change = -1;
 
     void dump(StringBuilder&) const;
 };
 
 struct Translate {
+    static constexpr StringView command_name = "Translate"sv;
+
     Gfx::IntPoint delta;
 
-    void translate_by(Gfx::IntPoint const& offset) { delta.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct AddClipRect {
+    static constexpr StringView command_name = "AddClipRect"sv;
+
     Gfx::IntRect rect;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
     bool is_clip_or_mask() const { return true; }
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
-struct PushStackingContext {
-    static constexpr int nesting_level_change = 1;
+struct AddClipPath {
+    static constexpr StringView command_name = "AddClipPath"sv;
 
-    float opacity;
-    Gfx::CompositingAndBlendingOperator compositing_and_blending_operator;
-    bool isolate;
-    // A translation to be applied after the stacking context has been transformed.
-    StackingContextTransform transform;
-    Optional<Gfx::Path> clip_path = {};
+    Gfx::Path path;
+    Gfx::IntRect bounding_rectangle;
 
-    size_t matching_pop_index { 0 };
-    bool can_aggregate_children_bounds { false };
-    Optional<Gfx::IntRect> bounding_rect {};
-
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        transform.origin.translate_by(offset.to_type<float>());
-        if (clip_path.has_value()) {
-            clip_path.value().transform(Gfx::AffineTransform().translate(offset.to_type<float>()));
-        }
-    }
-    void dump(StringBuilder&) const;
-};
-
-struct PopStackingContext {
-    static constexpr int nesting_level_change = -1;
-
+    [[nodiscard]] Gfx::IntRect bounding_rect() const { return bounding_rectangle; }
+    bool is_clip_or_mask() const { return true; }
     void dump(StringBuilder&) const;
 };
 
 struct PaintLinearGradient {
+    static constexpr StringView command_name = "PaintLinearGradient"sv;
+
     Gfx::IntRect gradient_rect;
     LinearGradientData linear_gradient_data;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return gradient_rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        gradient_rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct PaintOuterBoxShadow {
+    static constexpr StringView command_name = "PaintOuterBoxShadow"sv;
+
     PaintBoxShadowParams box_shadow_params;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const;
-    void translate_by(Gfx::IntPoint const& offset);
     void dump(StringBuilder&) const;
 };
 
 struct PaintInnerBoxShadow {
+    static constexpr StringView command_name = "PaintInnerBoxShadow"sv;
+
     PaintBoxShadowParams box_shadow_params;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const;
-    void translate_by(Gfx::IntPoint const& offset);
     void dump(StringBuilder&) const;
 };
 
 struct PaintTextShadow {
+    static constexpr StringView command_name = "PaintTextShadow"sv;
+
     NonnullRefPtr<Gfx::GlyphRun const> glyph_run;
     double glyph_run_scale { 1 };
     Gfx::IntRect shadow_bounding_rect;
@@ -204,21 +193,23 @@ struct PaintTextShadow {
     Color color;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return { draw_location.to_type<int>(), shadow_bounding_rect.size() }; }
-    void translate_by(Gfx::IntPoint const& offset) { draw_location.translate_by(offset.to_type<float>()); }
     void dump(StringBuilder&) const;
 };
 
 struct FillRectWithRoundedCorners {
+    static constexpr StringView command_name = "FillRectWithRoundedCorners"sv;
+
     Gfx::IntRect rect;
     Color color;
     CornerRadii corner_radii;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct FillPath {
+    static constexpr StringView command_name = "FillPath"sv;
+
     Gfx::IntRect path_bounding_rect;
     Gfx::Path path;
     float opacity { 1.0f };
@@ -228,15 +219,12 @@ struct FillPath {
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return path_bounding_rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        path.offset(offset.to_type<float>());
-        path_bounding_rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct StrokePath {
+    static constexpr StringView command_name = "StrokePath"sv;
+
     Gfx::Path::CapStyle cap_style;
     Gfx::Path::JoinStyle join_style;
     float miter_limit;
@@ -251,42 +239,35 @@ struct StrokePath {
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return path_bounding_rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        path.offset(offset.to_type<float>());
-        path_bounding_rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct DrawEllipse {
+    static constexpr StringView command_name = "DrawEllipse"sv;
+
     Gfx::IntRect rect;
     Color color;
     int thickness;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct FillEllipse {
+    static constexpr StringView command_name = "FillEllipse"sv;
+
     Gfx::IntRect rect;
     Color color;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct DrawLine {
+    static constexpr StringView command_name = "DrawLine"sv;
+
     Color color;
     Gfx::IntPoint from;
     Gfx::IntPoint to;
@@ -294,40 +275,36 @@ struct DrawLine {
     Gfx::LineStyle style;
     Color alternate_color;
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        from.translate_by(offset);
-        to.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct ApplyBackdropFilter {
+    static constexpr StringView command_name = "ApplyBackdropFilter"sv;
+
     Gfx::IntRect backdrop_region;
     BorderRadiiData border_radii_data;
     Optional<Gfx::Filter> backdrop_filter;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return backdrop_region; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        backdrop_region.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct DrawRect {
+    static constexpr StringView command_name = "DrawRect"sv;
+
     Gfx::IntRect rect;
     Color color;
     bool rough;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct PaintRadialGradient {
+    static constexpr StringView command_name = "PaintRadialGradient"sv;
+
     Gfx::IntRect rect;
     RadialGradientData radial_gradient_data;
     Gfx::IntPoint center;
@@ -335,22 +312,24 @@ struct PaintRadialGradient {
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct PaintConicGradient {
+    static constexpr StringView command_name = "PaintConicGradient"sv;
+
     Gfx::IntRect rect;
     ConicGradientData conic_gradient_data;
     Gfx::IntPoint position;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset) { rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct AddRoundedRectClip {
+    static constexpr StringView command_name = "AddRoundedRectClip"sv;
+
     CornerRadii corner_radii;
     Gfx::IntRect border_rect;
     CornerClip corner_clip;
@@ -358,39 +337,35 @@ struct AddRoundedRectClip {
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return border_rect; }
     bool is_clip_or_mask() const { return true; }
 
-    void translate_by(Gfx::IntPoint const& offset) { border_rect.translate_by(offset); }
     void dump(StringBuilder&) const;
 };
 
 struct AddMask {
+    static constexpr StringView command_name = "AddMask"sv;
+
     RefPtr<DisplayList> display_list;
     Gfx::IntRect rect;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
     bool is_clip_or_mask() const { return true; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        rect.translate_by(offset);
-    }
-
     void dump(StringBuilder&) const;
 };
 
 struct PaintNestedDisplayList {
+    static constexpr StringView command_name = "PaintNestedDisplayList"sv;
+
     RefPtr<DisplayList> display_list;
     Gfx::IntRect rect;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
 struct PaintScrollBar {
+    static constexpr StringView command_name = "PaintScrollBar"sv;
+
     int scroll_frame_id { 0 };
     Gfx::IntRect gutter_rect;
     Gfx::IntRect thumb_rect;
@@ -399,58 +374,36 @@ struct PaintScrollBar {
     Color track_color;
     bool vertical;
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        gutter_rect.translate_by(offset);
-        thumb_rect.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
-struct ApplyOpacity {
-    // Implementation of this item does saveLayer(), so we need to increment the nesting level.
+struct ApplyEffects {
+    static constexpr StringView command_name = "ApplyEffects"sv;
     static constexpr int nesting_level_change = 1;
 
-    float opacity;
-    void dump(StringBuilder&) const;
-};
+    float opacity { 1.0f };
+    Gfx::CompositingAndBlendingOperator compositing_and_blending_operator { Gfx::CompositingAndBlendingOperator::Normal };
+    Optional<Gfx::Filter> filter {};
 
-struct ApplyCompositeAndBlendingOperator {
-    // Implementation of this item does saveLayer(), so we need to increment the nesting level.
-    static constexpr int nesting_level_change = 1;
-
-    Gfx::CompositingAndBlendingOperator compositing_and_blending_operator;
-    void dump(StringBuilder&) const;
-};
-
-struct ApplyFilter {
-    // Implementation of this item does saveLayer(), so we need to increment the nesting level.
-    static constexpr int nesting_level_change = 1;
-
-    Gfx::Filter filter;
     void dump(StringBuilder&) const;
 };
 
 struct ApplyTransform {
+    static constexpr StringView command_name = "ApplyTransform"sv;
+
     Gfx::FloatPoint origin;
     Gfx::FloatMatrix4x4 matrix;
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        origin.translate_by(offset.to_type<float>());
-    }
     void dump(StringBuilder&) const;
 };
 
 struct ApplyMaskBitmap {
+    static constexpr StringView command_name = "ApplyMaskBitmap"sv;
+
     Gfx::IntPoint origin;
     NonnullRefPtr<Gfx::ImmutableBitmap const> bitmap;
     Gfx::MaskKind kind;
 
-    void translate_by(Gfx::IntPoint const& offset)
-    {
-        origin.translate_by(offset);
-    }
     void dump(StringBuilder&) const;
 };
 
@@ -465,8 +418,7 @@ using DisplayListCommand = Variant<
     Restore,
     Translate,
     AddClipRect,
-    PushStackingContext,
-    PopStackingContext,
+    AddClipPath,
     PaintLinearGradient,
     PaintRadialGradient,
     PaintConicGradient,
@@ -485,9 +437,7 @@ using DisplayListCommand = Variant<
     AddMask,
     PaintNestedDisplayList,
     PaintScrollBar,
-    ApplyOpacity,
-    ApplyCompositeAndBlendingOperator,
-    ApplyFilter,
+    ApplyEffects,
     ApplyTransform,
     ApplyMaskBitmap>;
 

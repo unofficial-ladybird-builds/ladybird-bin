@@ -12,6 +12,7 @@
 #include <LibDevTools/Actors/ConsoleActor.h>
 #include <LibDevTools/Actors/FrameActor.h>
 #include <LibDevTools/Actors/InspectorActor.h>
+#include <LibDevTools/Actors/NetworkEventActor.h>
 #include <LibDevTools/Actors/StyleSheetsActor.h>
 #include <LibDevTools/Actors/TabActor.h>
 #include <LibDevTools/Actors/ThreadActor.h>
@@ -37,15 +38,16 @@ FrameActor::FrameActor(DevToolsServer& devtools, String name, WeakPtr<TabActor> 
     , m_accessibility(move(accessibility))
 {
     if (auto tab = m_tab.strong_ref()) {
+        // NB: We must notify WebContent that DevTools is connected before setting up listeners,
+        //     so that WebContent knows to start sending network response bodies over IPC.
+        //     IPC messages are processed in order, so this is guaranteed to arrive first.
+        devtools.delegate().did_connect_devtools_client(tab->description());
+
         devtools.delegate().listen_for_console_messages(
             tab->description(),
-            [weak_self = make_weak_ptr<FrameActor>()](i32 message_index) {
+            [weak_self = make_weak_ptr<FrameActor>()](WebView::ConsoleOutput console_output) {
                 if (auto self = weak_self.strong_ref())
-                    self->console_message_available(message_index);
-            },
-            [weak_self = make_weak_ptr<FrameActor>()](i32 start_index, Vector<WebView::ConsoleOutput> console_output) {
-                if (auto self = weak_self.strong_ref())
-                    self->console_messages_received(start_index, move(console_output));
+                    self->on_console_message(move(console_output));
             });
 
         // FIXME: We should adopt WebContent to inform us when style sheets are available or removed.
@@ -53,13 +55,47 @@ FrameActor::FrameActor(DevToolsServer& devtools, String name, WeakPtr<TabActor> 
             async_handler<FrameActor>({}, [](auto& self, auto style_sheets, auto& response) {
                 self.style_sheets_available(response, move(style_sheets));
             }));
+
+        devtools.delegate().listen_for_network_events(
+            tab->description(),
+            [weak_self = make_weak_ptr<FrameActor>()](DevToolsDelegate::NetworkRequestData data) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_network_request_started(move(data));
+            },
+            [weak_self = make_weak_ptr<FrameActor>()](DevToolsDelegate::NetworkResponseData data) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_network_response_headers_received(move(data));
+            },
+            [weak_self = make_weak_ptr<FrameActor>()](u64 request_id, ByteBuffer data) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_network_response_body_received(request_id, move(data));
+            },
+            [weak_self = make_weak_ptr<FrameActor>()](DevToolsDelegate::NetworkRequestCompleteData data) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_network_request_finished(move(data));
+            });
+
+        devtools.delegate().listen_for_navigation_events(
+            tab->description(),
+            [weak_self = make_weak_ptr<FrameActor>()](String url) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_navigation_started(move(url));
+            },
+            [weak_self = make_weak_ptr<FrameActor>()](String url, String title) {
+                if (auto self = weak_self.strong_ref())
+                    self->on_navigation_finished(move(url), move(title));
+            });
     }
 }
 
 FrameActor::~FrameActor()
 {
-    if (auto tab = m_tab.strong_ref())
+    if (auto tab = m_tab.strong_ref()) {
         devtools().delegate().stop_listening_for_console_messages(tab->description());
+        devtools().delegate().stop_listening_for_network_events(tab->description());
+        devtools().delegate().stop_listening_for_navigation_events(tab->description());
+        devtools().delegate().did_disconnect_devtools_client(tab->description());
+    }
 }
 
 void FrameActor::handle_message(Message const& message)
@@ -212,102 +248,77 @@ void FrameActor::style_sheets_available(JsonObject& response, Vector<Web::CSS::S
     style_sheets_actor->set_style_sheets(move(style_sheets));
 }
 
-void FrameActor::console_message_available(i32 message_index)
+void FrameActor::on_console_message(WebView::ConsoleOutput console_output)
 {
-    if (message_index <= m_highest_received_message_index) {
-        dbgln("Notified about console message we already have");
-        return;
-    }
-    if (message_index <= m_highest_notified_message_index) {
-        dbgln("Notified about console message we're already aware of");
-        return;
-    }
-
-    m_highest_notified_message_index = message_index;
-
-    if (!m_waiting_for_messages)
-        request_console_messages();
-}
-
-void FrameActor::console_messages_received(i32 start_index, Vector<WebView::ConsoleOutput> console_output)
-{
-    auto end_index = start_index + static_cast<i32>(console_output.size()) - 1;
-    if (end_index <= m_highest_received_message_index) {
-        dbgln("Received old console messages");
-        return;
-    }
-
     JsonArray console_messages;
     JsonArray error_messages;
 
-    for (auto& output : console_output) {
-        JsonObject message;
+    JsonObject message;
 
-        output.output.visit(
-            [&](WebView::ConsoleLog& log) {
-                switch (log.level) {
-                case JS::Console::LogLevel::Debug:
-                    message.set("level"sv, "debug"sv);
-                    break;
-                case JS::Console::LogLevel::Error:
-                    message.set("level"sv, "error"sv);
-                    break;
-                case JS::Console::LogLevel::Info:
-                    message.set("level"sv, "info"sv);
-                    break;
-                case JS::Console::LogLevel::Log:
-                    message.set("level"sv, "log"sv);
-                    break;
-                case JS::Console::LogLevel::Warn:
-                    message.set("level"sv, "warn"sv);
-                    break;
-                default:
-                    // FIXME: Implement remaining console levels.
-                    return;
-                }
+    console_output.output.visit(
+        [&](WebView::ConsoleLog& log) {
+            switch (log.level) {
+            case JS::Console::LogLevel::Debug:
+                message.set("level"sv, "debug"sv);
+                break;
+            case JS::Console::LogLevel::Error:
+                message.set("level"sv, "error"sv);
+                break;
+            case JS::Console::LogLevel::Info:
+                message.set("level"sv, "info"sv);
+                break;
+            case JS::Console::LogLevel::Log:
+                message.set("level"sv, "log"sv);
+                break;
+            case JS::Console::LogLevel::Warn:
+                message.set("level"sv, "warn"sv);
+                break;
+            default:
+                // FIXME: Implement remaining console levels.
+                return;
+            }
 
-                message.set("filename"sv, "<eval>"sv);
-                message.set("lineNumber"sv, 1);
-                message.set("columnNumber"sv, 1);
-                message.set("timeStamp"sv, output.timestamp.milliseconds_since_epoch());
-                message.set("arguments"sv, JsonArray { move(log.arguments) });
+            message.set("filename"sv, "<eval>"sv);
+            message.set("lineNumber"sv, 1);
+            message.set("columnNumber"sv, 1);
+            message.set("timeStamp"sv, console_output.timestamp.milliseconds_since_epoch());
+            message.set("arguments"sv, JsonArray { move(log.arguments) });
 
-                console_messages.must_append(move(message));
-            },
-            [&](WebView::ConsoleError const& error) {
-                StringBuilder stack;
+            console_messages.must_append(move(message));
+        },
+        [&](WebView::ConsoleError const& error) {
+            StringBuilder stack;
 
-                for (auto const& frame : error.trace) {
-                    if (frame.function.has_value())
-                        stack.append(*frame.function);
-                    stack.append('@');
-                    stack.append(frame.file.map([](auto const& file) -> StringView { return file; }).value_or("unknown"sv));
-                    stack.appendff(":{}:{}\n", frame.line.value_or(0), frame.column.value_or(0));
-                }
+            for (auto const& frame : error.trace) {
+                if (frame.function.has_value())
+                    stack.append(*frame.function);
+                stack.append('@');
+                stack.append(frame.file.map([](auto const& file) -> StringView { return file; }).value_or("unknown"sv));
+                stack.appendff(":{}:{}\n", frame.line.value_or(0), frame.column.value_or(0));
+            }
 
-                JsonObject preview;
-                preview.set("kind"sv, "Error"sv);
-                preview.set("message"sv, error.message);
-                preview.set("name"sv, error.name);
-                if (!stack.is_empty())
-                    preview.set("stack"sv, MUST(stack.to_string()));
+            JsonObject preview;
+            preview.set("kind"sv, "Error"sv);
+            preview.set("message"sv, error.message);
+            preview.set("name"sv, error.name);
+            if (!stack.is_empty())
+                preview.set("stack"sv, MUST(stack.to_string()));
 
-                JsonObject exception;
-                exception.set("class"sv, error.name);
-                exception.set("isError"sv, true);
-                exception.set("preview"sv, move(preview));
+            JsonObject exception;
+            exception.set("class"sv, error.name);
+            exception.set("isError"sv, true);
+            exception.set("preview"sv, move(preview));
 
-                JsonObject page_error;
-                page_error.set("error"sv, true);
-                page_error.set("exception"sv, move(exception));
-                page_error.set("hasException"sv, !error.trace.is_empty());
-                page_error.set("isPromiseRejection"sv, error.inside_promise);
-                page_error.set("timeStamp"sv, output.timestamp.milliseconds_since_epoch());
+            JsonObject page_error;
+            page_error.set("error"sv, true);
+            page_error.set("exception"sv, move(exception));
+            page_error.set("hasException"sv, !error.trace.is_empty());
+            page_error.set("isPromiseRejection"sv, error.inside_promise);
+            page_error.set("timeStamp"sv, console_output.timestamp.milliseconds_since_epoch());
 
-                message.set("pageError"sv, move(page_error));
-                error_messages.must_append(move(message));
-            });
-    }
+            message.set("pageError"sv, move(page_error));
+            error_messages.must_append(move(message));
+        });
 
     JsonArray array;
 
@@ -326,26 +337,204 @@ void FrameActor::console_messages_received(i32 start_index, Vector<WebView::Cons
         array.must_append(move(error_message));
     }
 
+    if (array.is_empty())
+        return;
+
+    JsonObject resources_message;
+    resources_message.set("type"sv, "resources-available-array"sv);
+    resources_message.set("array"sv, move(array));
+    send_message(move(resources_message));
+}
+
+void FrameActor::on_network_request_started(DevToolsDelegate::NetworkRequestData data)
+{
+    auto& actor = devtools().register_actor<NetworkEventActor>(data.request_id);
+    actor.set_request_info(move(data.url), move(data.method), data.start_time, move(data.request_headers), move(data.request_body), move(data.initiator_type));
+    m_network_events.set(data.request_id, actor);
+
+    JsonArray events;
+    events.must_append(actor.serialize_initial_event());
+
+    JsonArray network_event;
+    network_event.must_append("network-event"sv);
+    network_event.must_append(move(events));
+
+    JsonArray array;
+    array.must_append(move(network_event));
+
     JsonObject message;
     message.set("type"sv, "resources-available-array"sv);
     message.set("array"sv, move(array));
     send_message(move(message));
-
-    m_highest_received_message_index = end_index;
-    m_waiting_for_messages = false;
-
-    if (m_highest_received_message_index < m_highest_notified_message_index)
-        request_console_messages();
 }
 
-void FrameActor::request_console_messages()
+void FrameActor::on_network_response_headers_received(DevToolsDelegate::NetworkResponseData data)
 {
-    VERIFY(!m_waiting_for_messages);
+    auto it = m_network_events.find(data.request_id);
+    if (it == m_network_events.end())
+        return;
 
-    if (auto tab = m_tab.strong_ref()) {
-        devtools().delegate().request_console_messages(m_tab->description(), m_highest_received_message_index + 1);
-        m_waiting_for_messages = true;
+    auto& actor = *it->value;
+    actor.set_response_start(data.status_code, data.reason_phrase);
+
+    // Extract Content-Type before moving headers
+    String mime_type;
+    i64 headers_size = 0;
+    for (auto const& header : data.response_headers) {
+        headers_size += static_cast<i64>(header.name.bytes().size() + header.value.bytes().size() + 4);
+        if (header.name.equals_ignoring_ascii_case("content-type"sv))
+            mime_type = MUST(String::from_byte_string(header.value));
     }
+
+    actor.set_response_headers(move(data.response_headers));
+
+    // Build resource updates object
+    JsonObject resource_updates;
+    resource_updates.set("status"sv, String::number(data.status_code));
+    resource_updates.set("statusText"sv, data.reason_phrase.value_or(String {}));
+    resource_updates.set("headersSize"sv, headers_size);
+    resource_updates.set("mimeType"sv, mime_type);
+    // FIXME: Get actual HTTP version from response
+    resource_updates.set("httpVersion"sv, "HTTP/1.1"sv);
+    // FIXME: Get actual remote address and port from connection
+    resource_updates.set("remoteAddress"sv, String {});
+    resource_updates.set("remotePort"sv, 0);
+    // FIXME: Calculate actual waiting time (time between request sent and first byte received)
+    resource_updates.set("waitingTime"sv, 0);
+    // Mark headers as available
+    resource_updates.set("responseHeadersAvailable"sv, true);
+
+    JsonObject update_entry;
+    update_entry.set("resourceId"sv, static_cast<i64>(data.request_id));
+    update_entry.set("resourceType"sv, "network-event"sv);
+    update_entry.set("resourceUpdates"sv, move(resource_updates));
+    update_entry.set("browsingContextID"sv, 1);
+    update_entry.set("innerWindowId"sv, 1);
+
+    JsonArray updates;
+    updates.must_append(move(update_entry));
+
+    JsonArray network_event_updates;
+    network_event_updates.must_append("network-event"sv);
+    network_event_updates.must_append(move(updates));
+
+    JsonArray array;
+    array.must_append(move(network_event_updates));
+
+    JsonObject message;
+    message.set("type"sv, "resources-updated-array"sv);
+    message.set("array"sv, move(array));
+    send_message(move(message));
+}
+
+void FrameActor::on_network_response_body_received(u64 request_id, ByteBuffer data)
+{
+    auto it = m_network_events.find(request_id);
+    if (it == m_network_events.end())
+        return;
+
+    it->value->append_response_body(move(data));
+}
+
+void FrameActor::on_network_request_finished(DevToolsDelegate::NetworkRequestCompleteData data)
+{
+    auto it = m_network_events.find(data.request_id);
+    if (it == m_network_events.end())
+        return;
+
+    auto& actor = *it->value;
+    actor.set_request_complete(data.body_size, data.timing_info, data.network_error);
+
+    // Calculate total time in milliseconds
+    auto total_time = (data.timing_info.response_end_microseconds - data.timing_info.request_start_microseconds) / 1000;
+
+    // Build resource updates object with content and timing info
+    JsonObject resource_updates;
+    resource_updates.set("contentSize"sv, static_cast<i64>(data.body_size));
+    resource_updates.set("transferredSize"sv, static_cast<i64>(data.body_size));
+    resource_updates.set("totalTime"sv, total_time);
+    // Mark as complete
+    resource_updates.set("responseContentAvailable"sv, true);
+    resource_updates.set("eventTimingsAvailable"sv, true);
+
+    JsonObject update_entry;
+    update_entry.set("resourceId"sv, static_cast<i64>(data.request_id));
+    update_entry.set("resourceType"sv, "network-event"sv);
+    update_entry.set("resourceUpdates"sv, move(resource_updates));
+    update_entry.set("browsingContextID"sv, 1);
+    update_entry.set("innerWindowId"sv, 1);
+
+    JsonArray updates;
+    updates.must_append(move(update_entry));
+
+    JsonArray network_event_updates;
+    network_event_updates.must_append("network-event"sv);
+    network_event_updates.must_append(move(updates));
+
+    JsonArray array;
+    array.must_append(move(network_event_updates));
+
+    JsonObject message;
+    message.set("type"sv, "resources-updated-array"sv);
+    message.set("array"sv, move(array));
+    send_message(move(message));
+}
+
+void FrameActor::on_navigation_started(String url)
+{
+    // Clear our internal tracking of network events
+    m_network_events.clear();
+
+    // Send will-navigate document event to trigger network panel clear
+    JsonObject document_event;
+    document_event.set("resourceType"sv, "document-event"sv);
+    document_event.set("name"sv, "will-navigate"sv);
+    document_event.set("time"sv, UnixDateTime::now().milliseconds_since_epoch());
+    document_event.set("newURI"sv, url);
+    document_event.set("isFrameSwitching"sv, false);
+
+    JsonArray events;
+    events.must_append(move(document_event));
+
+    JsonArray document_event_array;
+    document_event_array.must_append("document-event"sv);
+    document_event_array.must_append(move(events));
+
+    JsonArray array;
+    array.must_append(move(document_event_array));
+
+    JsonObject resources_message;
+    resources_message.set("type"sv, "resources-available-array"sv);
+    resources_message.set("array"sv, move(array));
+    send_message(move(resources_message));
+
+    // Also send tabNavigated for backwards compatibility
+    JsonObject message;
+    message.set("type"sv, "tabNavigated"sv);
+    message.set("url"sv, move(url));
+    message.set("state"sv, "start"sv);
+    message.set("isFrameSwitching"sv, false);
+    send_message(move(message));
+}
+
+void FrameActor::on_navigation_finished(String url, String title)
+{
+    // Update the tab description with the new URL and title
+    if (auto tab = m_tab.strong_ref()) {
+        tab->set_url(url);
+        tab->set_title(title);
+    }
+
+    JsonObject message;
+    message.set("type"sv, "tabNavigated"sv);
+    message.set("url"sv, move(url));
+    message.set("title"sv, move(title));
+    message.set("state"sv, "stop"sv);
+    message.set("isFrameSwitching"sv, false);
+    send_message(move(message));
+
+    // Also send a frameUpdate message to update the frame info
+    send_frame_update_message();
 }
 
 }

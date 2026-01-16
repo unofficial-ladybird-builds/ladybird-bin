@@ -90,6 +90,8 @@ private:
     virtual void request_style_sheet_source(u64 page_id, Web::CSS::StyleSheetIdentifier identifier) override;
 
     virtual void set_listen_for_dom_mutations(u64 page_id, bool) override;
+    virtual void did_connect_devtools_client(u64 page_id) override;
+    virtual void did_disconnect_devtools_client(u64 page_id) override;
     virtual void get_dom_node_inner_html(u64 page_id, Web::UniqueNodeID node_id) override;
     virtual void get_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id) override;
     virtual void set_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id, String html) override;
@@ -126,7 +128,6 @@ private:
 
     virtual void js_console_input(u64 page_id, String) override;
     virtual void run_javascript(u64 page_id, String) override;
-    virtual void js_console_request_messages(u64 page_id, i32) override;
 
     virtual void alert_closed(u64 page_id) override;
     virtual void confirm_closed(u64 page_id, bool accepted) override;

@@ -77,6 +77,9 @@ public:
     void select_dropdown_closed(Optional<u32> const& selected_item_id);
 
     void set_user_style(String source);
+    void did_connect_devtools_client();
+    void did_disconnect_devtools_client();
+    bool has_devtools_client() const { return m_devtools_client_count > 0; }
 
     void ready_to_paint();
 
@@ -84,10 +87,8 @@ public:
     void js_console_input(StringView js_source);
     void did_execute_js_console_input(JsonValue const&);
     void run_javascript(StringView js_source);
-    void js_console_request_messages(i32 start_index);
-    void did_output_js_console_message(i32 message_index);
+    void did_output_js_console_message(WebView::ConsoleOutput);
     void console_peer_did_misbehave(char const* reason);
-    void did_get_js_console_messages(i32 start_index, ReadonlySpan<WebView::ConsoleOutput> console_output);
 
     Vector<Web::CSS::StyleSheetIdentifier> list_style_sheets() const;
 
@@ -181,6 +182,10 @@ private:
     virtual void page_did_paint(Gfx::IntRect const& content_rect, i32 bitmap_id) override;
     virtual void page_did_take_screenshot(Gfx::ShareableBitmap const& screenshot) override;
     virtual void received_message_from_web_ui(String const& name, JS::Value data) override;
+    virtual void page_did_start_network_request(u64 request_id, URL::URL const&, ByteString const&, Vector<HTTP::Header> const&, ReadonlyBytes, Optional<String>) override;
+    virtual void page_did_receive_network_response_headers(u64 request_id, u32 status_code, Optional<String>, Vector<HTTP::Header> const&) override;
+    virtual void page_did_receive_network_response_body(u64 request_id, ReadonlyBytes) override;
+    virtual void page_did_finish_network_request(u64 request_id, u64 body_size, Requests::RequestTimingInfo const&, Optional<Requests::NetworkError> const&) override;
 
     void setup_palette();
     ConnectionFromClient& client() const;
@@ -207,6 +212,8 @@ private:
     GC::Root<JS::GlobalObject> m_console_global_object;
 
     RefPtr<Core::Timer> m_paint_refresh_timer;
+
+    u64 m_devtools_client_count { 0 };
 };
 
 }

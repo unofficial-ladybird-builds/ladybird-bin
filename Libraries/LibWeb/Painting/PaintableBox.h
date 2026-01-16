@@ -10,10 +10,10 @@
 #include <LibGfx/Forward.h>
 #include <LibWeb/CSS/StyleValues/GridTrackSizeListStyleValue.h>
 #include <LibWeb/Layout/Box.h>
+#include <LibWeb/Painting/AccumulatedVisualContext.h>
 #include <LibWeb/Painting/BackgroundPainting.h>
 #include <LibWeb/Painting/BoxModelMetrics.h>
 #include <LibWeb/Painting/ChromeMetrics.h>
-#include <LibWeb/Painting/ClipFrame.h>
 #include <LibWeb/Painting/Paintable.h>
 #include <LibWeb/Painting/PaintableFragment.h>
 
@@ -28,9 +28,6 @@ public:
     static GC::Ref<PaintableBox> create(Layout::Box const&);
     static GC::Ref<PaintableBox> create(Layout::InlineNode const&);
     virtual ~PaintableBox();
-
-    virtual void before_paint(DisplayListRecordingContext&, PaintPhase) const override;
-    virtual void after_paint(DisplayListRecordingContext&, PaintPhase) const override;
 
     virtual void paint(DisplayListRecordingContext&, PaintPhase) const override;
 
@@ -132,12 +129,6 @@ public:
 
     virtual void set_needs_display(InvalidateDisplayList = InvalidateDisplayList::Yes) override;
 
-    void apply_scroll_offset(DisplayListRecordingContext&) const;
-    void reset_scroll_offset(DisplayListRecordingContext&) const;
-
-    void apply_clip_overflow_rect(DisplayListRecordingContext&, PaintPhase) const;
-    void clear_clip_overflow_rect(DisplayListRecordingContext&, PaintPhase) const;
-
     [[nodiscard]] virtual TraversalDecision hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const override;
     Optional<HitTestResult> hit_test(CSSPixelPoint, HitTestType) const;
 
@@ -238,13 +229,15 @@ public:
 
     void set_enclosing_scroll_frame(RefPtr<ScrollFrame const> const& scroll_frame) { m_enclosing_scroll_frame = scroll_frame; }
     void set_own_scroll_frame(RefPtr<ScrollFrame> const& scroll_frame) { m_own_scroll_frame = scroll_frame; }
-    void set_enclosing_clip_frame(RefPtr<ClipFrame const> const& clip_frame) { m_enclosing_clip_frame = clip_frame; }
-    void set_own_clip_frame(RefPtr<ClipFrame const> const& clip_frame) { m_own_clip_frame = clip_frame; }
+
+    void set_accumulated_visual_context(auto state) { m_accumulated_visual_context = move(state); }
+    [[nodiscard]] auto accumulated_visual_context() const { return m_accumulated_visual_context; }
+    void set_accumulated_visual_context_for_descendants(auto state) { m_accumulated_visual_context_for_descendants = move(state); }
+    [[nodiscard]] auto accumulated_visual_context_for_descendants() const { return m_accumulated_visual_context_for_descendants; }
 
     [[nodiscard]] RefPtr<ScrollFrame const> enclosing_scroll_frame() const { return m_enclosing_scroll_frame; }
     [[nodiscard]] Optional<int> scroll_frame_id() const;
     [[nodiscard]] CSSPixelPoint cumulative_offset_of_enclosing_scroll_frame() const;
-    [[nodiscard]] Optional<CSSPixelRect> clip_rect_for_hit_testing() const;
 
     [[nodiscard]] RefPtr<ScrollFrame const> own_scroll_frame() const { return m_own_scroll_frame; }
     [[nodiscard]] Optional<int> own_scroll_frame_id() const;
@@ -254,9 +247,6 @@ public:
             return m_own_scroll_frame->own_offset();
         return {};
     }
-
-    [[nodiscard]] RefPtr<ClipFrame const> enclosing_clip_frame() const { return m_enclosing_clip_frame; }
-    [[nodiscard]] RefPtr<ClipFrame const> own_clip_frame() const { return m_own_clip_frame; }
 
     Optional<Gfx::Filter> resolve_filter(DisplayListRecordingContext&, CSS::Filter const& computed_filter) const;
 
@@ -297,7 +287,6 @@ protected:
         ScrollDirection direction,
         ChromeMetrics const& chrome_metrics,
         AdjustThumbRectForScrollOffset = AdjustThumbRectForScrollOffset::No) const;
-    CSSPixelPoint adjust_position_for_cumulative_scroll_offset(CSSPixelPoint position) const;
     CSSPixels available_scrollbar_length(ScrollDirection direction, ChromeMetrics const& chrome_metrics) const;
     Optional<CSSPixelRect> absolute_scrollbar_rect(ScrollDirection direction, bool with_gutter, ChromeMetrics const& chrome_metrics) const;
     Optional<CSSPixelRect> absolute_resizer_rect(ChromeMetrics const& chrome_metrics) const;
@@ -317,6 +306,8 @@ private:
     bool scrollbar_contains(ScrollDirection, CSSPixelPoint adjusted_position, ChromeMetrics const& chrome_metrics) const;
     void scroll_to_mouse_position(CSSPixelPoint, ChromeMetrics const& chrome_metrics);
 
+    CSSPixelPoint transform_to_local_coordinates(CSSPixelPoint screen_position) const;
+
     GC::Ptr<StackingContext> m_stacking_context;
 
     Optional<OverflowData> m_overflow_data;
@@ -329,8 +320,8 @@ private:
 
     RefPtr<ScrollFrame const> m_enclosing_scroll_frame;
     RefPtr<ScrollFrame const> m_own_scroll_frame;
-    RefPtr<ClipFrame const> m_enclosing_clip_frame;
-    RefPtr<ClipFrame const> m_own_clip_frame;
+    RefPtr<AccumulatedVisualContext const> m_accumulated_visual_context;
+    RefPtr<AccumulatedVisualContext const> m_accumulated_visual_context_for_descendants;
 
     Optional<BordersDataWithElementKind> m_override_borders_data;
     Optional<TableCellCoordinates> m_table_cell_coordinates;

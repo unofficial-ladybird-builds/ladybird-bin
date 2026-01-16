@@ -188,9 +188,14 @@ private:
     virtual void listen_for_style_sheet_sources(DevTools::TabDescription const&, OnStyleSheetSourceReceived) const override;
     virtual void stop_listening_for_style_sheet_sources(DevTools::TabDescription const&) const override;
     virtual void evaluate_javascript(DevTools::TabDescription const&, String const&, OnScriptEvaluationComplete) const override;
-    virtual void listen_for_console_messages(DevTools::TabDescription const&, OnConsoleMessageAvailable, OnReceivedConsoleMessages) const override;
+    virtual void listen_for_console_messages(DevTools::TabDescription const&, OnConsoleMessage) const override;
     virtual void stop_listening_for_console_messages(DevTools::TabDescription const&) const override;
-    virtual void request_console_messages(DevTools::TabDescription const&, i32) const override;
+    virtual void listen_for_network_events(DevTools::TabDescription const&, OnNetworkRequestStarted, OnNetworkResponseHeadersReceived, OnNetworkResponseBodyReceived, OnNetworkRequestFinished) const override;
+    virtual void stop_listening_for_network_events(DevTools::TabDescription const&) const override;
+    virtual void listen_for_navigation_events(DevTools::TabDescription const&, OnNavigationStarted, OnNavigationFinished) const override;
+    virtual void stop_listening_for_navigation_events(DevTools::TabDescription const&) const override;
+    virtual void did_connect_devtools_client(DevTools::TabDescription const&) const override;
+    virtual void did_disconnect_devtools_client(DevTools::TabDescription const&) const override;
 
     static Application* s_the;
 
@@ -256,6 +261,8 @@ private:
 #endif
 
     OwnPtr<DevTools::DevToolsServer> m_devtools;
+
+    mutable HashMap<u64, u64> m_navigation_listener_ids;
 } SWIFT_IMMORTAL_REFERENCE;
 
 }
