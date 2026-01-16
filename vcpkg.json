@@ -10,7 +10,7 @@
     },
     {
       "name": "angle",
-      "platform": "linux | windows | android | freebsd"
+      "platform": "linux | windows | android | bsd"
     },
     {
       "name": "cpptrace",
@@ -57,11 +57,11 @@
     },
     {
       "name": "fontconfig",
-      "platform": "linux | freebsd | openbsd | osx"
+      "platform": "linux | bsd | osx"
     },
     {
       "name": "harfbuzz",
-      "platform": "linux | freebsd | openbsd | windows",
+      "platform": "linux | bsd | windows",
       "features": [
         "freetype",
         "icu"
@@ -86,7 +86,7 @@
     },
     {
       "name": "libproxy",
-      "platform": "!(android | freebsd)"
+      "platform": "!(android | bsd)"
     },
     {
       "name": "libavif",
@@ -189,7 +189,7 @@
     },
     {
       "name": "skia",
-      "platform": "linux | freebsd | openbsd",
+      "platform": "linux | bsd",
       "default-features": false,
       "features": [
         "freetype",
@@ -262,7 +262,7 @@
     },
     {
       "name": "icu",
-      "version": "78.1#0"
+      "version": "78.1#1"
     },
     {
       "name": "libjpeg-turbo",
@@ -306,11 +306,11 @@
     },
     {
       "name": "qtbase",
-      "version": "6.8.3#2"
+      "version": "6.10.0#1"
     },
     {
       "name": "sdl3",
-      "version": "3.2.22#0"
+      "version": "3.2.28#0"
     },
     {
       "name": "simdjson",
