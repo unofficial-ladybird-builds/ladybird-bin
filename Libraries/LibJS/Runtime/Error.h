@@ -40,13 +40,16 @@ public:
 
     virtual ~Error() override = default;
 
-    [[nodiscard]] String stack_string(CompactTraceback compact = CompactTraceback::No) const;
+    [[nodiscard]] Utf16String stack_string(CompactTraceback compact = CompactTraceback::No) const;
 
     ThrowCompletionOr<void> install_error_cause(Value options);
 
     void set_message(Utf16String);
 
     Vector<TracebackFrame, 32> const& traceback() const { return m_traceback; }
+
+    void set_cached_string(GC::Ref<PrimitiveString> string) { m_cached_string = string; }
+    GC::Ptr<PrimitiveString> cached_string() const { return m_cached_string; }
 
 protected:
     explicit Error(Object& prototype);
@@ -58,6 +61,8 @@ private:
 
     void populate_stack();
     Vector<TracebackFrame, 32> m_traceback;
+
+    GC::Ptr<PrimitiveString> m_cached_string;
 };
 
 template<>
