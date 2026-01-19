@@ -186,27 +186,6 @@ CSSPixelRect PaintableBox::absolute_rect() const
     return *m_absolute_rect;
 }
 
-CSSPixelRect PaintableBox::compute_absolute_paint_rect() const
-{
-    // FIXME: This likely incomplete:
-    auto rect = absolute_border_box_rect();
-    if (has_scrollable_overflow()) {
-        auto scrollable_overflow_rect = this->scrollable_overflow_rect().value();
-        if (computed_values().overflow_x() == CSS::Overflow::Visible)
-            rect.unite_horizontally(scrollable_overflow_rect);
-        if (computed_values().overflow_y() == CSS::Overflow::Visible)
-            rect.unite_vertically(scrollable_overflow_rect);
-    }
-    for (auto const& shadow : box_shadow_data()) {
-        if (shadow.placement == ShadowPlacement::Inner)
-            continue;
-        auto inflate = shadow.spread_distance + shadow.blur_radius;
-        auto shadow_rect = rect.inflated(inflate, inflate, inflate, inflate).translated(shadow.offset_x, shadow.offset_y);
-        rect.unite(shadow_rect);
-    }
-    return rect;
-}
-
 CSSPixelRect PaintableBox::absolute_padding_box_rect() const
 {
     auto absolute_rect = this->absolute_rect();
@@ -250,13 +229,6 @@ CSSPixelRect PaintableBox::overflow_clip_edge_rect() const
 {
     // FIXME: Apply overflow-clip-margin-* properties
     return absolute_padding_box_rect();
-}
-
-CSSPixelRect PaintableBox::absolute_paint_rect() const
-{
-    if (!m_absolute_paint_rect.has_value())
-        m_absolute_paint_rect = compute_absolute_paint_rect();
-    return *m_absolute_paint_rect;
 }
 
 template<typename Callable>
@@ -637,11 +609,19 @@ void PaintableBox::paint_backdrop_filter(DisplayListRecordingContext& context) c
 
 void PaintableBox::paint_background(DisplayListRecordingContext& context) const
 {
-    // If the body's background properties were propagated to the root element, do no re-paint the body's background.
+    // If the body's background properties were propagated to the root element, do not re-paint the body's background.
     if (layout_node_with_style_and_box_metrics().is_body() && document().html_element()->should_use_body_background_properties())
         return;
 
-    Painting::paint_background(context, *this, computed_values().image_rendering(), m_resolved_background, normalized_border_radii_data());
+    // If the body's background was propagated to the root element, use the body's image-rendering value.
+    auto image_rendering = computed_values().image_rendering();
+    if (layout_node().is_root_element()
+        && document().html_element()
+        && document().html_element()->should_use_body_background_properties()) {
+        image_rendering = document().background_image_rendering();
+    }
+
+    Painting::paint_background(context, *this, image_rendering, m_resolved_background, normalized_border_radii_data());
 }
 
 void PaintableBox::paint_box_shadow(DisplayListRecordingContext& context) const
