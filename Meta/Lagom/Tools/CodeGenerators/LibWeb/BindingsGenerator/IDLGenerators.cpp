@@ -112,7 +112,6 @@ static bool is_platform_object(Type const& type)
         "PerformanceMark"sv,
         "PerformanceNavigation"sv,
         "PeriodicWave"sv,
-        "PointerEvent"sv,
         "ReadableStreamBYOBReader"sv,
         "ReadableStreamDefaultReader"sv,
         "RadioNodeList"sv,
@@ -122,12 +121,21 @@ static bool is_platform_object(Type const& type)
         "Selection"sv,
         "ServiceWorkerContainer"sv,
         "ServiceWorkerRegistration"sv,
-        "SVGAnimationElement"sv,
         "SVGLength"sv,
         "SVGNumber"sv,
         "SVGTransform"sv,
         "ShadowRoot"sv,
         "SourceBuffer"sv,
+        "SpeechGrammar"sv,
+        "SpeechGrammarList"sv,
+        "SpeechRecognition"sv,
+        "SpeechRecognitionAlternative"sv,
+        "SpeechRecognitionPhrase"sv,
+        "SpeechRecognitionResult"sv,
+        "SpeechRecognitionResultList"sv,
+        "SpeechSynthesis"sv,
+        "SpeechSynthesisUtterance"sv,
+        "SpeechSynthesisVoice"sv,
         "Storage"sv,
         "Table"sv,
         "Text"sv,
@@ -245,7 +253,7 @@ static ByteString union_type_to_variant(UnionType const& union_type, Interface c
 
 CppType idl_type_name_to_cpp_type(Type const& type, Interface const& interface)
 {
-    if (is_platform_object(type) || type.name() == "WindowProxy"sv)
+    if (is_platform_object(type))
         return { .name = ByteString::formatted("GC::Root<{}>", type.name()), .sequence_storage_type = SequenceStorageType::RootVector };
 
     if (is_javascript_builtin(type))
@@ -4997,6 +5005,7 @@ using namespace Web::ResourceTiming;
 using namespace Web::Selection;
 using namespace Web::Serial;
 using namespace Web::ServiceWorker;
+using namespace Web::Speech;
 using namespace Web::StorageAPI;
 using namespace Web::Streams;
 using namespace Web::SVG;

@@ -198,6 +198,7 @@ public:
     [[nodiscard]] GC::Ref<Navigator> navigator();
     [[nodiscard]] GC::Ref<CloseWatcherManager> close_watcher_manager();
     [[nodiscard]] GC::Ref<CookieStore::CookieStore> cookie_store();
+    [[nodiscard]] GC::Ref<Speech::SpeechSynthesis> speech_synthesis();
 
     void alert(String const& message = {});
     bool confirm(Optional<String> const& message);
@@ -261,6 +262,8 @@ public:
 
     void consume_history_action_user_activation();
 
+    static bool in_test_mode();
+    static void set_enable_test_mode(bool);
     static void set_internals_object_exposed(bool);
 
     [[nodiscard]] OrderedHashMap<FlyString, GC::Ref<Navigable>> document_tree_child_navigable_target_name_property_set();
@@ -315,6 +318,7 @@ private:
     GC::Ptr<Location> m_location;
     GC::Ptr<CloseWatcherManager> m_close_watcher_manager;
     GC::Ptr<CookieStore::CookieStore> m_cookie_store;
+    GC::Ptr<Speech::SpeechSynthesis> m_speech_synthesis;
 
     // https://html.spec.whatwg.org/multipage/nav-history-apis.html#window-navigation-api
     GC::Ptr<Navigation> m_navigation;
