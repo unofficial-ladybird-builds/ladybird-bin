@@ -7,6 +7,7 @@
 #include <AK/TemporaryChange.h>
 #include <LibWeb/Painting/DevicePixelConverter.h>
 #include <LibWeb/Painting/DisplayList.h>
+#include <LibWeb/Painting/ResolvedCSSFilter.h>
 
 namespace Web::Painting {
 
@@ -99,14 +100,20 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
     };
 
     auto apply_accumulated_visual_context = [&](AccumulatedVisualContext const& node) {
-        save({});
-
         node.data().visit(
+            [&](EffectsData const& effects) {
+                Optional<Gfx::Filter> gfx_filter;
+                if (effects.filter.has_filters())
+                    gfx_filter = to_gfx_filter(effects.filter, device_pixels_per_css_pixel);
+                apply_effects({ .opacity = effects.opacity, .compositing_and_blending_operator = effects.blend_mode, .filter = gfx_filter });
+            },
             [&](PerspectiveData const& perspective) {
+                save({});
                 auto matrix = scale_matrix_translation(perspective.matrix, static_cast<float>(device_pixels_per_css_pixel));
                 apply_transform({ .origin = { 0, 0 }, .matrix = matrix });
             },
             [&](ScrollData const& scroll) {
+                save({});
                 auto own_offset = scroll_state.own_offset_for_frame_with_id(scroll.scroll_frame_id);
                 if (!own_offset.is_zero()) {
                     auto scroll_offset = own_offset.to_type<double>().scaled(device_pixels_per_css_pixel).to_type<int>();
@@ -114,11 +121,13 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
                 }
             },
             [&](TransformData const& transform) {
+                save({});
                 auto origin = transform.origin.to_type<double>().scaled(device_pixels_per_css_pixel).to_type<float>();
                 auto matrix = scale_matrix_translation(transform.matrix, static_cast<float>(device_pixels_per_css_pixel));
                 apply_transform({ .origin = { origin.x(), origin.y() }, .matrix = matrix });
             },
             [&](ClipData const& clip) {
+                save({});
                 auto device_rect = device_pixel_converter.rounded_device_rect(clip.rect).to_type<int>();
                 auto corner_radii = clip.corner_radii.as_corners(device_pixel_converter);
                 if (corner_radii.has_any_radius())
@@ -127,6 +136,7 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
                     add_clip_rect({ .rect = device_rect });
             },
             [&](ClipPathData const& clip_path) {
+                save({});
                 auto transformed_path = clip_path.path.copy_transformed(Gfx::AffineTransform {}.set_scale(static_cast<float>(device_pixels_per_css_pixel), static_cast<float>(device_pixels_per_css_pixel)));
                 add_clip_path(transformed_path);
             });
@@ -156,12 +166,13 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
     };
 
     for (size_t command_index = 0; command_index < commands.size(); command_index++) {
-        auto [context, command] = commands[command_index];
+        auto const& [context, command] = commands[command_index];
 
         switch_to_context(context);
 
         if (command.has<PaintScrollBar>()) {
-            auto& paint_scroll_bar = command.get<PaintScrollBar>();
+            auto translated_command = command;
+            auto& paint_scroll_bar = translated_command.get<PaintScrollBar>();
             auto scroll_offset = scroll_state.own_offset_for_frame_with_id(paint_scroll_bar.scroll_frame_id);
             if (paint_scroll_bar.vertical) {
                 auto offset = scroll_offset.y() * paint_scroll_bar.scroll_size;
@@ -170,6 +181,8 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
                 auto offset = scroll_offset.x() * paint_scroll_bar.scroll_size;
                 paint_scroll_bar.thumb_rect.translate_by(-offset.to_int() * device_pixels_per_css_pixel, 0);
             }
+            paint_scrollbar(paint_scroll_bar);
+            continue;
         }
 
         auto bounding_rect = command_bounding_rectangle(command);
@@ -218,7 +231,6 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
         else HANDLE_COMMAND(DrawRect, draw_rect)
         else HANDLE_COMMAND(AddRoundedRectClip, add_rounded_rect_clip)
         else HANDLE_COMMAND(AddMask, add_mask)
-        else HANDLE_COMMAND(PaintScrollBar, paint_scrollbar)
         else HANDLE_COMMAND(PaintNestedDisplayList, paint_nested_display_list)
         else HANDLE_COMMAND(ApplyEffects, apply_effects)
         else HANDLE_COMMAND(ApplyTransform, apply_transform)

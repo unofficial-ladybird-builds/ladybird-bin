@@ -8,10 +8,12 @@
 
 #include <AK/AtomicRefCounted.h>
 #include <AK/Variant.h>
+#include <LibGfx/CompositingAndBlendingOperator.h>
 #include <LibGfx/Matrix4x4.h>
 #include <LibGfx/Path.h>
 #include <LibGfx/WindingRule.h>
 #include <LibWeb/Painting/BorderRadiiData.h>
+#include <LibWeb/Painting/ResolvedCSSFilter.h>
 #include <LibWeb/Painting/ScrollState.h>
 
 namespace Web::Painting {
@@ -58,7 +60,22 @@ struct ClipPathData {
     Gfx::WindingRule fill_rule;
 };
 
-using VisualContextData = Variant<ScrollData, ClipData, TransformData, PerspectiveData, ClipPathData>;
+struct EffectsData {
+    float opacity { 1.0f };
+    Gfx::CompositingAndBlendingOperator blend_mode { Gfx::CompositingAndBlendingOperator::Normal };
+    ResolvedCSSFilter filter;
+    bool isolate { false };
+
+    bool needs_layer() const
+    {
+        return opacity < 1.0f
+            || blend_mode != Gfx::CompositingAndBlendingOperator::Normal
+            || filter.has_filters()
+            || isolate;
+    }
+};
+
+using VisualContextData = Variant<ScrollData, ClipData, TransformData, PerspectiveData, ClipPathData, EffectsData>;
 
 class AccumulatedVisualContext : public AtomicRefCounted<AccumulatedVisualContext> {
 public:
@@ -66,12 +83,6 @@ public:
 
     VisualContextData const& data() const { return m_data; }
     RefPtr<AccumulatedVisualContext const> parent() const { return m_parent; }
-
-    bool is_scroll() const { return m_data.has<ScrollData>(); }
-    bool is_clip() const { return m_data.has<ClipData>(); }
-    bool is_transform() const { return m_data.has<TransformData>(); }
-    bool is_perspective() const { return m_data.has<PerspectiveData>(); }
-    bool is_clip_path() const { return m_data.has<ClipPathData>(); }
 
     size_t depth() const { return m_depth; }
     size_t id() const { return m_id; }
