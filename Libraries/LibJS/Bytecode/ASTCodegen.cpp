@@ -97,6 +97,18 @@ static ThrowCompletionOr<ScopedOperand> constant_fold_unary_expression(Generator
     }
 }
 
+static Optional<ScopedOperand> try_constant_fold_unary_expression(Generator& generator, ScopedOperand& operand, UnaryOp op)
+{
+    if (operand.operand().is_constant()) {
+        // OPTIMIZATION: Do some basic constant folding for unary operations on numbers.
+        auto value = generator.get_constant(operand);
+        if (auto result = constant_fold_unary_expression(generator, value, op); !result.is_error())
+            return result.release_value();
+    }
+
+    return {};
+}
+
 static ThrowCompletionOr<ScopedOperand> constant_fold_binary_expression(Generator& generator, Value lhs, Value rhs, BinaryOp m_op)
 {
     switch (m_op) {
@@ -299,19 +311,59 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> BinaryExpression::gener
     return dst;
 }
 
+static Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> constant_fold_logical_expression(Bytecode::Generator& generator, Optional<ScopedOperand> preferred_dst, ScopedOperand& lhs, LogicalExpression const* expr)
+{
+    auto constant = generator.get_constant(lhs);
+
+    auto return_rhs = [&] -> CodeGenerationErrorOr<Optional<ScopedOperand>> {
+        auto dst = choose_dst(generator, preferred_dst);
+        auto rhs = TRY(expr->rhs()->generate_bytecode(generator, dst)).value();
+
+        if (rhs.operand().is_constant())
+            return rhs;
+
+        generator.emit_mov(dst, rhs);
+        return dst;
+    };
+
+    switch (expr->op()) {
+    case LogicalOp::And:
+        if (constant.to_boolean_slow_case())
+            return TRY(return_rhs());
+        return lhs;
+    case LogicalOp::Or:
+        if (constant.to_boolean_slow_case())
+            return lhs;
+        return TRY(return_rhs());
+    case LogicalOp::NullishCoalescing:
+        if (constant.is_nullish())
+            return TRY(return_rhs());
+        return lhs;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+
+    return Optional<ScopedOperand> {};
+}
+
 Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> LogicalExpression::generate_bytecode(Bytecode::Generator& generator, Optional<ScopedOperand> preferred_dst) const
 {
     Bytecode::Generator::SourceLocationScope scope(generator, *this);
-    auto dst = choose_dst(generator, preferred_dst);
     auto lhs = TRY(m_lhs->generate_bytecode(generator, preferred_dst)).value();
-    // FIXME: Only mov lhs into dst in case lhs is the value taken.
-    generator.emit_mov(dst, lhs);
+
+    // OPTIMIZATION: return lhs/rhs directly if we can detect lhs as a truthy/falsey literal
+    if (auto constant = generator.try_get_constant(lhs); constant.has_value()) {
+        return TRY(constant_fold_logical_expression(generator, preferred_dst, lhs, this));
+    }
 
     // lhs
     // jump op (true) end (false) rhs
     // rhs
     // jump always (true) end
     // end
+
+    auto dst = choose_dst(generator, preferred_dst);
+    generator.emit_mov(dst, lhs);
 
     auto& rhs_block = generator.make_block();
     auto& end_block = generator.make_block();
@@ -358,15 +410,14 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> UnaryExpression::genera
 
     Optional<ScopedOperand> src;
     // Typeof needs some special handling for when the LHS is an Identifier. Namely, it shouldn't throw on unresolvable references, but instead return "undefined".
-    if (m_op != UnaryOp::Typeof)
+    // Skip Not operator as it needs to be evaluated breadth first in order to detect `!!` optimization (otherwise the inner `!x` would eval first).
+    if (m_op != UnaryOp::Typeof && m_op != UnaryOp::Not)
         src = TRY(m_lhs->generate_bytecode(generator)).value();
 
     auto dst = choose_dst(generator, preferred_dst);
 
-    if (src.has_value() && src.value().operand().is_constant()) {
-        // OPTIMIZATION: Do some basic constant folding for unary operations on numbers.
-        auto value = generator.get_constant(*src);
-        if (auto result = constant_fold_unary_expression(generator, value, m_op); !result.is_error())
+    if (src.has_value()) {
+        if (auto result = try_constant_fold_unary_expression(generator, *src, m_op); result.has_value())
             return result.release_value();
     }
 
@@ -375,6 +426,21 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> UnaryExpression::genera
         generator.emit<Bytecode::Op::BitwiseNot>(dst, *src);
         break;
     case UnaryOp::Not:
+        if (auto nested = as_if<UnaryExpression>(*m_lhs); nested && nested->op() == UnaryOp::Not) {
+            auto value = TRY(nested->lhs()->generate_bytecode(generator)).value();
+
+            if (value.operand().is_constant())
+                return generator.add_constant(Value(generator.get_constant(value).to_boolean()));
+
+            generator.emit<Bytecode::Op::ToBoolean>(dst, value);
+            break;
+        }
+
+        src = TRY(m_lhs->generate_bytecode(generator)).value();
+
+        if (auto result = try_constant_fold_unary_expression(generator, *src, m_op); result.has_value())
+            return result.release_value();
+
         generator.emit<Bytecode::Op::Not>(dst, *src);
         break;
     case UnaryOp::Plus:

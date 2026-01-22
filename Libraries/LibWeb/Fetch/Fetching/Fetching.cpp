@@ -110,9 +110,6 @@ private:
 // https://fetch.spec.whatwg.org/#determine-the-http-cache-partition
 static RefPtr<HTTP::MemoryCache> determine_the_http_cache_partition(Infrastructure::Request const& request)
 {
-    if (!g_http_memory_cache_enabled)
-        return nullptr;
-
     // 1. Let key be the result of determining the network partition key given request.
     auto key = Infrastructure::determine_the_network_partition_key(request);
 
@@ -126,7 +123,10 @@ static RefPtr<HTTP::MemoryCache> determine_the_http_cache_partition(Infrastructu
 
 static GC::Ptr<Infrastructure::Response> select_response_from_cache(JS::Realm& realm, HTTP::MemoryCache& http_cache, Infrastructure::Request const& request)
 {
-    auto cache_entry = http_cache.open_entry(request.current_url(), request.method(), request.header_list());
+    if (!g_http_memory_cache_enabled)
+        return {};
+
+    auto cache_entry = http_cache.open_entry(request.current_url(), request.method(), request.header_list(), request.cache_mode());
     if (!cache_entry.has_value())
         return {};
 
@@ -146,6 +146,11 @@ static GC::Ptr<Infrastructure::Response> select_response_from_cache(JS::Realm& r
 
 static void store_response_in_cache(HTTP::MemoryCache& http_cache, Infrastructure::Request const& request, Infrastructure::Response const& response)
 {
+    if (!g_http_memory_cache_enabled)
+        return;
+    if (request.cache_mode() == HTTP::CacheMode::NoStore)
+        return;
+
     http_cache.create_entry(request.current_url(), request.method(), request.header_list(), request.request_time(), response.status(), response.status_message(), response.header_list());
 }
 
@@ -1665,27 +1670,27 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
         // 16. If httpRequest’s cache mode is "default" and httpRequest’s header list contains `If-Modified-Since`,
         //     `If-None-Match`, `If-Unmodified-Since`, `If-Match`, or `If-Range`, then set httpRequest’s cache mode to
         //     "no-store".
-        if (http_request->cache_mode() == Infrastructure::Request::CacheMode::Default
+        if (http_request->cache_mode() == HTTP::CacheMode::Default
             && (http_request->header_list()->contains("If-Modified-Since"sv)
                 || http_request->header_list()->contains("If-None-Match"sv)
                 || http_request->header_list()->contains("If-Unmodified-Since"sv)
                 || http_request->header_list()->contains("If-Match"sv)
                 || http_request->header_list()->contains("If-Range"sv))) {
-            http_request->set_cache_mode(Infrastructure::Request::CacheMode::NoStore);
+            http_request->set_cache_mode(HTTP::CacheMode::NoStore);
         }
 
         // 17. If httpRequest’s cache mode is "no-cache", httpRequest’s prevent no-cache cache-control header
         //     modification flag is unset, and httpRequest’s header list does not contain `Cache-Control`, then append
         //     (`Cache-Control`, `max-age=0`) to httpRequest’s header list.
-        if (http_request->cache_mode() == Infrastructure::Request::CacheMode::NoCache
+        if (http_request->cache_mode() == HTTP::CacheMode::NoCache
             && !http_request->prevent_no_cache_cache_control_header_modification()
             && !http_request->header_list()->contains("Cache-Control"sv)) {
             http_request->header_list()->append({ "Cache-Control"sv, "max-age=0"sv });
         }
 
         // 18. If httpRequest’s cache mode is "no-store" or "reload", then:
-        if (http_request->cache_mode() == Infrastructure::Request::CacheMode::NoStore
-            || http_request->cache_mode() == Infrastructure::Request::CacheMode::Reload) {
+        if (http_request->cache_mode() == HTTP::CacheMode::NoStore
+            || http_request->cache_mode() == HTTP::CacheMode::Reload) {
             // 1. If httpRequest’s header list does not contain `Pragma`, then append (`Pragma`, `no-cache`) to
             //    httpRequest’s header list.
             if (!http_request->header_list()->contains("Pragma"sv))
@@ -1773,11 +1778,11 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
 
         // 24. If httpCache is null, then set httpRequest’s cache mode to "no-store".
         if (!http_cache)
-            http_request->set_cache_mode(Infrastructure::Request::CacheMode::NoStore);
+            http_request->set_cache_mode(HTTP::CacheMode::NoStore);
 
         // 25. If httpRequest’s cache mode is neither "no-store" nor "reload", then:
-        if (http_request->cache_mode() != Infrastructure::Request::CacheMode::NoStore
-            && http_request->cache_mode() != Infrastructure::Request::CacheMode::Reload) {
+        if (http_request->cache_mode() != HTTP::CacheMode::NoStore
+            && http_request->cache_mode() != HTTP::CacheMode::Reload) {
             // 1. Set storedResponse to the result of selecting a response from the httpCache, possibly needing
             //    validation, as per the "Constructing Responses from Caches" chapter of HTTP Caching [HTTP-CACHING],
             //    if any.
@@ -1814,8 +1819,8 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
     // 10. If response is null, then:
     if (!response) {
         // 1. If httpRequest’s cache mode is "only-if-cached", then return a network error.
-        if (http_request->cache_mode() == Infrastructure::Request::CacheMode::OnlyIfCached)
-            return PendingResponse::create(vm, request, Infrastructure::Response::network_error(vm, "Request with 'only-if-cached' cache mode doesn't have a cached response"_string));
+        // NB: We skip this step in order to allow the disk cache in RequestServer to handle this request. If a disk
+        //     cache entry does not exist, it will return a network error itself.
 
         // 2. Let forwardResponse be the result of running HTTP-network fetch given httpFetchParams, includeCredentials,
         //    and isNewConnectionFetch.
@@ -2045,6 +2050,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     load_request.set_url(request->current_url());
     load_request.set_page(page);
     load_request.set_method(request->method());
+    load_request.set_cache_mode(request->cache_mode());
     load_request.set_store_set_cookie_headers(include_credentials == IncludeCredentials::Yes);
     load_request.set_initiator_type(request->initiator_type());
 

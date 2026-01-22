@@ -1181,6 +1181,10 @@ public:
     {
     }
 
+    LogicalOp op() const { return m_op; }
+    NonnullRefPtr<Expression const> lhs() const { return m_lhs; }
+    NonnullRefPtr<Expression const> rhs() const { return m_rhs; }
+
     virtual void dump(int indent) const override;
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
@@ -1208,6 +1212,9 @@ public:
         , m_lhs(move(lhs))
     {
     }
+
+    auto const& lhs() const { return m_lhs; }
+    auto const& op() const { return m_op; }
 
     virtual void dump(int indent) const override;
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
