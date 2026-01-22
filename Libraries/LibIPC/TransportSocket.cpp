@@ -5,9 +5,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Checked.h>
 #include <AK/NonnullOwnPtr.h>
+#include <AK/Types.h>
 #include <LibCore/Socket.h>
 #include <LibCore/System.h>
+#include <LibIPC/Limits.h>
 #include <LibIPC/TransportSocket.h>
 #include <LibThreading/Thread.h>
 
@@ -96,7 +99,8 @@ intptr_t TransportSocket::io_thread_loop()
         } while (result.is_error() && result.error().code() == EINTR);
         if (result.is_error()) {
             dbgln("TransportSocket poll error: {}", result.error());
-            VERIFY_NOT_REACHED();
+            m_io_thread_state = IOThreadState::Stopped;
+            break;
         }
 
         if (pollfds[1].revents & POLLIN) {
@@ -114,7 +118,9 @@ intptr_t TransportSocket::io_thread_loop()
         }
 
         if (pollfds[0].revents & (POLLERR | POLLNVAL)) {
-            VERIFY_NOT_REACHED();
+            dbgln("TransportSocket poll: socket error (POLLERR or POLLNVAL)");
+            m_io_thread_state = IOThreadState::Stopped;
+            break;
         }
 
         if (pollfds[0].revents & POLLOUT) {
@@ -200,6 +206,12 @@ void TransportSocket::wait_until_readable()
         m_incoming_cv.wait();
     }
 }
+
+// Maximum size of accumulated unprocessed bytes before we disconnect the peer
+static constexpr size_t MAX_UNPROCESSED_BUFFER_SIZE = 128 * MiB;
+
+// Maximum number of accumulated unprocessed file descriptors before we disconnect the peer
+static constexpr size_t MAX_UNPROCESSED_FDS = 512;
 
 struct MessageHeader {
     enum class Type : u8 {
@@ -288,7 +300,7 @@ TransportSocket::TransferState TransportSocket::transfer_data(ReadonlyBytes& byt
         }
 
         dbgln("TransportSocket::send_thread: {}", result.error());
-        VERIFY_NOT_REACHED();
+        return TransferState::SocketClosed;
     }
 
     auto written_byte_count = byte_count - bytes.size();
@@ -319,7 +331,8 @@ void TransportSocket::read_incoming_messages()
 
             dbgln("TransportSocket::read_as_much_as_possible_without_blocking: {}", error);
             warnln("TransportSocket::read_as_much_as_possible_without_blocking: {}", error);
-            VERIFY_NOT_REACHED();
+            m_peer_eof = true;
+            break;
         }
 
         auto bytes_read = maybe_bytes_read.release_value();
@@ -328,52 +341,111 @@ void TransportSocket::read_incoming_messages()
             break;
         }
 
-        m_unprocessed_bytes.append(bytes_read.data(), bytes_read.size());
+        if (m_unprocessed_bytes.size() + bytes_read.size() > MAX_UNPROCESSED_BUFFER_SIZE) {
+            dbgln("TransportSocket: Unprocessed buffer would exceed {} bytes, disconnecting peer", MAX_UNPROCESSED_BUFFER_SIZE);
+            m_peer_eof = true;
+            break;
+        }
+        if (m_unprocessed_bytes.try_append(bytes_read.data(), bytes_read.size()).is_error()) {
+            dbgln("TransportSocket: Failed to append to unprocessed_bytes buffer");
+            m_peer_eof = true;
+            break;
+        }
+        if (m_unprocessed_fds.size() + received_fds.size() > MAX_UNPROCESSED_FDS) {
+            dbgln("TransportSocket: Unprocessed FDs would exceed {}, disconnecting peer", MAX_UNPROCESSED_FDS);
+            m_peer_eof = true;
+            break;
+        }
         for (auto const& fd : received_fds) {
             m_unprocessed_fds.enqueue(File::adopt_fd(fd));
         }
     }
 
-    u32 received_fd_count = 0;
-    u32 acknowledged_fd_count = 0;
+    Checked<u32> received_fd_count = 0;
+    Checked<u32> acknowledged_fd_count = 0;
     size_t index = 0;
     while (index + sizeof(MessageHeader) <= m_unprocessed_bytes.size()) {
         MessageHeader header;
         memcpy(&header, m_unprocessed_bytes.data() + index, sizeof(MessageHeader));
         if (header.type == MessageHeader::Type::Payload) {
-            if (header.payload_size + sizeof(MessageHeader) > m_unprocessed_bytes.size() - index)
+            if (header.payload_size > MAX_MESSAGE_PAYLOAD_SIZE) {
+                dbgln("TransportSocket: Rejecting message with payload_size {} exceeding limit {}", header.payload_size, MAX_MESSAGE_PAYLOAD_SIZE);
+                m_peer_eof = true;
+                break;
+            }
+            if (header.fd_count > MAX_MESSAGE_FD_COUNT) {
+                dbgln("TransportSocket: Rejecting message with fd_count {} exceeding limit {}", header.fd_count, MAX_MESSAGE_FD_COUNT);
+                m_peer_eof = true;
+                break;
+            }
+            Checked<size_t> message_size = header.payload_size;
+            message_size += sizeof(MessageHeader);
+            if (message_size.has_overflow() || message_size.value() > m_unprocessed_bytes.size() - index)
                 break;
             if (header.fd_count > m_unprocessed_fds.size())
                 break;
             auto message = make<Message>();
             received_fd_count += header.fd_count;
+            if (received_fd_count.has_overflow()) {
+                dbgln("TransportSocket: received_fd_count would overflow");
+                m_peer_eof = true;
+                break;
+            }
             for (size_t i = 0; i < header.fd_count; ++i)
                 message->fds.enqueue(m_unprocessed_fds.dequeue());
-            message->bytes.append(m_unprocessed_bytes.data() + index + sizeof(MessageHeader), header.payload_size);
+            if (message->bytes.try_append(m_unprocessed_bytes.data() + index + sizeof(MessageHeader), header.payload_size).is_error()) {
+                dbgln("TransportSocket: Failed to allocate message buffer for payload_size {}", header.payload_size);
+                m_peer_eof = true;
+                break;
+            }
             batch.append(move(message));
         } else if (header.type == MessageHeader::Type::FileDescriptorAcknowledgement) {
-            VERIFY(header.payload_size == 0);
+            if (header.payload_size != 0) {
+                dbgln("TransportSocket: FileDescriptorAcknowledgement with non-zero payload_size {}", header.payload_size);
+                m_peer_eof = true;
+                break;
+            }
             acknowledged_fd_count += header.fd_count;
+            if (acknowledged_fd_count.has_overflow()) {
+                dbgln("TransportSocket: acknowledged_fd_count would overflow");
+                m_peer_eof = true;
+                break;
+            }
         } else {
-            VERIFY_NOT_REACHED();
+            dbgln("TransportSocket: Unknown message header type {}", static_cast<u8>(header.type));
+            m_peer_eof = true;
+            break;
         }
-        index += header.payload_size + sizeof(MessageHeader);
+        Checked<size_t> new_index = index;
+        new_index += header.payload_size;
+        new_index += sizeof(MessageHeader);
+        if (new_index.has_overflow()) {
+            dbgln("TransportSocket: index would overflow");
+            m_peer_eof = true;
+            break;
+        }
+        index = new_index.value();
     }
 
-    if (acknowledged_fd_count > 0) {
+    if (acknowledged_fd_count > 0u) {
         Threading::MutexLocker locker(m_fds_retained_until_received_by_peer_mutex);
-        while (acknowledged_fd_count > 0) {
+        while (acknowledged_fd_count > 0u) {
+            if (m_fds_retained_until_received_by_peer.is_empty()) {
+                dbgln("TransportSocket: Peer acknowledged more FDs than we sent");
+                m_peer_eof = true;
+                break;
+            }
             (void)m_fds_retained_until_received_by_peer.dequeue();
             --acknowledged_fd_count;
         }
     }
 
-    if (received_fd_count > 0) {
+    if (received_fd_count > 0u) {
         Vector<u8> message_buffer;
         message_buffer.resize(sizeof(MessageHeader));
         MessageHeader header;
         header.payload_size = 0;
-        header.fd_count = received_fd_count;
+        header.fd_count = received_fd_count.value();
         header.type = MessageHeader::Type::FileDescriptorAcknowledgement;
         memcpy(message_buffer.data(), &header, sizeof(MessageHeader));
         m_send_queue->enqueue_message(move(message_buffer), {});
@@ -381,8 +453,13 @@ void TransportSocket::read_incoming_messages()
     }
 
     if (index < m_unprocessed_bytes.size()) {
-        auto remaining_bytes = MUST(ByteBuffer::copy(m_unprocessed_bytes.span().slice(index)));
-        m_unprocessed_bytes = move(remaining_bytes);
+        auto remaining_bytes_or_error = ByteBuffer::copy(m_unprocessed_bytes.span().slice(index));
+        if (remaining_bytes_or_error.is_error()) {
+            dbgln("TransportSocket: Failed to copy remaining bytes");
+            m_peer_eof = true;
+        } else {
+            m_unprocessed_bytes = remaining_bytes_or_error.release_value();
+        }
     } else {
         m_unprocessed_bytes.clear();
     }

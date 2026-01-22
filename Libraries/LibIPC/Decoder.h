@@ -177,8 +177,9 @@ ErrorOr<T> decode(Decoder& decoder)
 {
     T vector;
     auto size = TRY(decoder.decode_size());
-    VERIFY(!Checked<size_t>::multiplication_would_overflow(size, sizeof(typename T::ValueType)));
-    vector.resize(size);
+    if (Checked<size_t>::multiplication_would_overflow(size, sizeof(typename T::ValueType)))
+        return Error::from_string_literal("IPC decode: Vector size would overflow");
+    TRY(vector.try_resize(size));
     TRY(decoder.decode_into({ reinterpret_cast<u8*>(vector.data()), size * sizeof(typename T::ValueType) }));
     return vector;
 }
@@ -230,6 +231,7 @@ ErrorOr<T> decode_variant(Decoder& decoder, size_t index)
 
         return decode_variant<T, Index + 1>(decoder, index);
     } else {
+        // Index was validated before calling decode_variant
         VERIFY_NOT_REACHED();
     }
 }
@@ -240,6 +242,8 @@ template<Concepts::Variant T>
 ErrorOr<T> decode(Decoder& decoder)
 {
     auto index = TRY(decoder.decode<typename T::IndexType>());
+    if (index >= TypeList<T>::size)
+        return Error::from_string_literal("IPC decode: Invalid variant index");
     return Detail::decode_variant<T>(decoder, index);
 }
 

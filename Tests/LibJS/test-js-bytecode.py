@@ -27,7 +27,7 @@ def setup() -> None:
 
     LADYBIRD_SOURCE_DIR = Path(ladybird_source_dir)
 
-    BYTECODE_TEST_DIR = LADYBIRD_SOURCE_DIR / "Libraries/LibJS/Bytecode/Tests/"
+    BYTECODE_TEST_DIR = LADYBIRD_SOURCE_DIR / "Tests/LibJS/Bytecode/"
 
 
 def strip_color(s: str) -> str:
@@ -105,11 +105,14 @@ def main() -> int:
             if executable.result():
                 failed += 1
 
+    total = len(js_files)
+    passed = total - failed
+
     if failed:
-        print(f"\nTests failed: {failed}")
+        print(f"\nTests: {passed} passed, {failed} failed, {total} total")
         return 1
 
-    print("All tests passed!")
+    print(f"All tests passed! ({total} total)")
     return 0
 
 

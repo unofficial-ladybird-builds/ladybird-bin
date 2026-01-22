@@ -99,6 +99,7 @@ struct DrawRepeatedImmutableBitmap {
     Gfx::ScalingMode scaling_mode;
     Repeat repeat;
 
+    [[nodiscard]] Gfx::IntRect bounding_rect() const { return clip_rect; }
     void dump(StringBuilder&) const;
 };
 
@@ -264,6 +265,7 @@ struct DrawLine {
     Gfx::LineStyle style;
     Color alternate_color;
 
+    [[nodiscard]] Gfx::IntRect bounding_rect() const { return Gfx::IntRect::from_two_points(from, to).inflated(thickness, thickness); }
     void dump(StringBuilder&) const;
 };
 

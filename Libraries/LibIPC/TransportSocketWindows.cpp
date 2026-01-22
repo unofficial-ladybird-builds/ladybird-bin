@@ -6,7 +6,10 @@
  */
 
 #include <AK/ByteReader.h>
+#include <AK/Checked.h>
+#include <AK/Types.h>
 #include <LibIPC/HandleType.h>
+#include <LibIPC/Limits.h>
 #include <LibIPC/TransportSocketWindows.h>
 
 #include <AK/Windows.h>
@@ -105,6 +108,9 @@ ErrorOr<void> TransportSocketWindows::duplicate_handles(Bytes bytes, Vector<size
     return {};
 }
 
+// Maximum size of accumulated unprocessed bytes before we disconnect the peer
+static constexpr size_t MAX_UNPROCESSED_BUFFER_SIZE = 128 * MiB;
+
 struct MessageHeader {
     u32 size { 0 };
 };
@@ -145,7 +151,8 @@ ErrorOr<void> TransportSocketWindows::transfer(ReadonlyBytes bytes_to_write)
                 continue;
             if (result == SOCKET_ERROR)
                 return Error::from_windows_error();
-            VERIFY_NOT_REACHED();
+            dbgln("TransportSocketWindows::transfer: Unexpected WSAPoll result {}", result);
+            return Error::from_string_literal("Unexpected WSAPoll result");
         }
 
         bytes_to_write = bytes_to_write.slice(maybe_nwritten.value());
@@ -170,7 +177,9 @@ TransportSocketWindows::ShouldShutdown TransportSocketWindows::read_as_many_mess
                 should_shutdown = ShouldShutdown::Yes;
                 break;
             }
-            VERIFY_NOT_REACHED();
+            dbgln("TransportSocketWindows::read_as_many_messages_as_possible_without_blocking: {}", error);
+            should_shutdown = ShouldShutdown::Yes;
+            break;
         }
 
         auto bytes_read = maybe_bytes_read.release_value();
@@ -179,24 +188,57 @@ TransportSocketWindows::ShouldShutdown TransportSocketWindows::read_as_many_mess
             break;
         }
 
-        m_unprocessed_bytes.append(bytes_read.data(), bytes_read.size());
+        if (m_unprocessed_bytes.size() + bytes_read.size() > MAX_UNPROCESSED_BUFFER_SIZE) {
+            dbgln("TransportSocketWindows: Unprocessed buffer would exceed {} bytes, disconnecting peer", MAX_UNPROCESSED_BUFFER_SIZE);
+            should_shutdown = ShouldShutdown::Yes;
+            break;
+        }
+        if (m_unprocessed_bytes.try_append(bytes_read.data(), bytes_read.size()).is_error()) {
+            dbgln("TransportSocketWindows: Failed to append to unprocessed_bytes buffer");
+            should_shutdown = ShouldShutdown::Yes;
+            break;
+        }
     }
 
     size_t index = 0;
     while (index + sizeof(MessageHeader) <= m_unprocessed_bytes.size()) {
         MessageHeader header;
         memcpy(&header, m_unprocessed_bytes.data() + index, sizeof(MessageHeader));
-        if (header.size + sizeof(MessageHeader) > m_unprocessed_bytes.size() - index)
+        if (header.size > MAX_MESSAGE_PAYLOAD_SIZE) {
+            dbgln("TransportSocketWindows: Rejecting message with size {} exceeding limit {}", header.size, MAX_MESSAGE_PAYLOAD_SIZE);
+            should_shutdown = ShouldShutdown::Yes;
+            break;
+        }
+        Checked<size_t> message_size = header.size;
+        message_size += sizeof(MessageHeader);
+        if (message_size.has_overflow() || message_size.value() > m_unprocessed_bytes.size() - index)
             break;
         Message message;
-        message.bytes.append(m_unprocessed_bytes.data() + index + sizeof(MessageHeader), header.size);
+        if (message.bytes.try_append(m_unprocessed_bytes.data() + index + sizeof(MessageHeader), header.size).is_error()) {
+            dbgln("TransportSocketWindows: Failed to allocate message buffer for size {}", header.size);
+            should_shutdown = ShouldShutdown::Yes;
+            break;
+        }
         callback(move(message));
-        index += header.size + sizeof(MessageHeader);
+        Checked<size_t> new_index = index;
+        new_index += header.size;
+        new_index += sizeof(MessageHeader);
+        if (new_index.has_overflow()) {
+            dbgln("TransportSocketWindows: index would overflow");
+            should_shutdown = ShouldShutdown::Yes;
+            break;
+        }
+        index = new_index.value();
     }
 
     if (index < m_unprocessed_bytes.size()) {
-        auto remaining_bytes = MUST(ByteBuffer::copy(m_unprocessed_bytes.span().slice(index)));
-        m_unprocessed_bytes = move(remaining_bytes);
+        auto remaining_bytes_or_error = ByteBuffer::copy(m_unprocessed_bytes.span().slice(index));
+        if (remaining_bytes_or_error.is_error()) {
+            dbgln("TransportSocketWindows: Failed to copy remaining bytes");
+            should_shutdown = ShouldShutdown::Yes;
+        } else {
+            m_unprocessed_bytes = remaining_bytes_or_error.release_value();
+        }
     } else {
         m_unprocessed_bytes.clear();
     }
