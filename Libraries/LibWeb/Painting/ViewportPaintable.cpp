@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/VisualViewport.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/Layout/TextNode.h>
 #include <LibWeb/Layout/Viewport.h>
@@ -142,9 +143,16 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
         return AccumulatedVisualContext::create(allocate_accumulated_visual_context_id(), move(data), parent);
     };
 
-    RefPtr<AccumulatedVisualContext const> viewport_state_for_descendants = nullptr;
+    // Create visual viewport transform as root (if not identity)
+    m_visual_viewport_context = nullptr;
+    auto transform = document().visual_viewport()->transform();
+    if (!transform.is_identity()) {
+        m_visual_viewport_context = append_node(nullptr, TransformData { transform.to_matrix(), CSSPixelPoint { 0, 0 } });
+    }
+
+    RefPtr<AccumulatedVisualContext const> viewport_state_for_descendants = m_visual_viewport_context;
     if (own_scroll_frame())
-        viewport_state_for_descendants = append_node(nullptr, ScrollData { own_scroll_frame()->id(), false });
+        viewport_state_for_descendants = append_node(m_visual_viewport_context, ScrollData { own_scroll_frame()->id(), false });
     set_accumulated_visual_context(nullptr);
     set_accumulated_visual_context_for_descendants(viewport_state_for_descendants);
 
@@ -156,7 +164,7 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
         RefPtr<AccumulatedVisualContext const> inherited_state;
 
         if (paintable_box.is_fixed_position()) {
-            inherited_state = nullptr;
+            inherited_state = m_visual_viewport_context;
         } else if (paintable_box.is_absolutely_positioned()) {
             // For position: absolute, use containing block's state to correctly escape scroll containers.
             // NOTE: transforms/perspectives can't be in intermediates for abspos because they establish
@@ -197,6 +205,7 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
         if (auto css_clip = paintable_box.get_clip_rect(); css_clip.has_value())
             own_state = append_node(own_state, ClipData { effective_css_clip_rect(*css_clip), {} });
 
+        // FIXME: Support other geometry boxes. See: https://drafts.fxtf.org/css-masking/#typedef-geometry-box
         if (auto const& clip_path = computed_values.clip_path(); clip_path.has_value() && clip_path->is_basic_shape()) {
             auto masking_area = paintable_box.absolute_border_box_rect();
             auto reference_box = CSSPixelRect { {}, masking_area.size() };
