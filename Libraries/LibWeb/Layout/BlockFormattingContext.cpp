@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2022, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2025-2026, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,7 +12,6 @@
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/BlockFormattingContext.h>
 #include <LibWeb/Layout/Box.h>
@@ -574,6 +573,35 @@ void BlockFormattingContext::resolve_used_height_if_treated_as_auto(Box const& b
         box_state.set_has_definite_height(true);
     }
 
+    if (box.document().in_quirks_mode()
+        && box.dom_node()
+        && box.dom_node()->is_html_body_element()
+        && box.computed_values().height().is_auto()) {
+        // 3.7. The body element fills the html element quirk
+        // https://quirks.spec.whatwg.org/#the-body-element-fills-the-html-element-quirk
+        // FIXME: Handle vertical writing mode.
+
+        // The element body must additionally meet the following conditions:
+        // - The computed value of the 'position' property of element is neither 'absolute' nor 'fixed'.
+        // - The computed value of the 'float' property of element is 'none'.
+        // - Element is not an inline-level element.
+        // - Element is not a multi-column spanning element.
+        // NON-STANDARD: We don't check column-span since no browser actually excludes it.
+        if (!box.is_absolutely_positioned() && !box.is_floating() && !box.is_inline()) {
+            // 1. Let margins be sum of the used values of the margin-left and margin-right properties of element
+            //    if element has a vertical writing mode, otherwise let margins be the sum of the used values of
+            //    the margin-top and margin-bottom properties of element.
+            auto margins = box_state.margin_top + box_state.margin_bottom;
+
+            // 2. Let size be the size of element's parent element's content box in the block flow direction minus margins.
+            auto size = box_state.containing_block_used_values()->content_height() - margins;
+
+            // 3. Return the bigger value of size and the normal border box size the element would have
+            //    according to the CSS specification.
+            height = max(size, height);
+        }
+    }
+
     box_state.set_content_height(height);
 }
 
@@ -659,15 +687,18 @@ CSSPixels BlockFormattingContext::compute_auto_height_for_block_level_element(Bo
     // 2. the bottom edge of the bottom (possibly collapsed) margin of its last in-flow child, if the child's bottom margin does not collapse with the element's bottom margin
     // 3. the bottom border edge of the last in-flow child whose top margin doesn't collapse with the element's bottom margin
     if (!box.children_are_inline()) {
+        CSSPixels marker_line_height = 0;
         for (auto* child_box = box.last_child_of_type<Box>(); child_box; child_box = child_box->previous_sibling_of_type<Box>()) {
             if (child_box->is_absolutely_positioned() || child_box->is_floating())
                 continue;
 
-            // FIXME: This is hack. If the last child is a list-item marker box, we ignore it for purposes of height calculation.
-            //        Perhaps markers should not be considered in-flow(?) Perhaps they should always be the first child of the list-item
-            //        box instead of the last child.
-            if (child_box->is_list_item_marker_box())
+            // NOTE: Markers are not in-flow, but for list items that contain only floats (or are otherwise empty),
+            //       the marker's line-height determines the list item's height. This ensures proper vertical stacking
+            //       of list items and alignment with their floated content.
+            if (child_box->is_list_item_marker_box()) {
+                marker_line_height = child_box->computed_values().line_height();
                 continue;
+            }
 
             auto const& child_box_state = m_state.get(*child_box);
 
@@ -682,6 +713,10 @@ CSSPixels BlockFormattingContext::compute_auto_height_for_block_level_element(Bo
 
             return max(CSSPixels(0), child_box_state.offset.y() + child_box_state.content_height() + child_box_state.border_box_bottom() + margin_bottom);
         }
+
+        // If no in-flow children were found but there's a marker, use the marker's line-height.
+        if (marker_line_height > 0)
+            return marker_line_height;
     }
 
     // 4. zero, otherwise
@@ -797,11 +832,9 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
     place_block_level_element_in_normal_flow_horizontally(box, available_space);
 
     AvailableSpace available_space_for_height_resolution = available_space;
-    auto is_grid_or_flex_container = box.display().is_grid_inside() || box.display().is_flex_inside();
     auto is_table_box = box.display().is_table_row() || box.display().is_table_row_group() || box.display().is_table_header_group() || box.display().is_table_footer_group() || box.display().is_table_cell() || box.display().is_table_caption();
-    // NOTE: Spec doesn't mention this but quirk application needs to be skipped for grid and flex containers.
-    //       See https://github.com/w3c/csswg-drafts/issues/5545
-    if (box.document().in_quirks_mode() && box.computed_values().height().is_percentage() && !is_table_box && !is_grid_or_flex_container) {
+    // https://quirks.spec.whatwg.org/#the-percentage-height-calculation-quirk
+    if (box.document().in_quirks_mode() && box.computed_values().height().is_percentage() && !is_table_box) {
         // In quirks mode, for the purpose of calculating the height of an element, if the
         // computed value of the position property of element is relative or static, the specified value
         // for the height property of element is a <percentage>, and element does not have a computed
@@ -1172,7 +1205,11 @@ void BlockFormattingContext::layout_floating_box(Box const& box, BlockContainer 
                     }
                 } else {
                     tentative_offset_from_edge = preceding_float.offset_from_edge + preceding_float.used_values.margin_box_left() + box_state.margin_box_right() + box_state.content_width();
-                    fits_next_to_preceding_float = tentative_offset_from_edge >= 0;
+                    if (available_space.width.is_definite()) {
+                        fits_next_to_preceding_float = (tentative_offset_from_edge + box_state.margin_box_left()) <= available_space.width.to_px_or_zero();
+                    } else if (available_space.width.is_max_content() || available_space.width.is_indefinite()) {
+                        fits_next_to_preceding_float = true;
+                    }
                 }
                 did_touch_preceding_float = true;
                 if (!fits_next_to_preceding_float)

@@ -199,10 +199,10 @@ public:
 
     bool has_pending_navigations() const { return !m_pending_navigations.is_empty(); }
 
-    bool is_ready_to_paint() const;
     void ready_to_paint();
+    void record_display_list_and_scroll_state(PaintConfig);
     void paint_next_frame();
-    void start_display_list_rendering(Gfx::PaintingSurface&, PaintConfig, Function<void()>&& callback);
+    void render_screenshot(Gfx::PaintingSurface&, PaintConfig, Function<void()>&& callback);
 
     bool needs_repaint() const { return m_needs_repaint; }
     void set_needs_repaint() { m_needs_repaint = true; }
@@ -210,6 +210,8 @@ public:
     [[nodiscard]] bool has_inclusive_ancestor_with_visibility_hidden() const;
 
     RefPtr<Gfx::SkiaBackendContext> skia_backend_context() const;
+
+    RenderingThread& rendering_thread() { return m_rendering_thread; }
 
     void set_pending_set_browser_zoom_request(bool value) { m_pending_set_browser_zoom_request = value; }
     bool pending_set_browser_zoom_request() const { return m_pending_set_browser_zoom_request; }
@@ -285,7 +287,6 @@ private:
     bool m_needs_repaint { true };
     bool m_pending_set_browser_zoom_request { false };
     bool m_should_show_line_box_borders { false };
-    i32 m_number_of_queued_rasterization_tasks { 0 };
     GC::Ref<Painting::BackingStoreManager> m_backing_store_manager;
     RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     RenderingThread m_rendering_thread;

@@ -170,6 +170,10 @@ Navigable::Navigable(GC::Ref<Page> page, bool is_svg_page)
     , m_event_handler({}, *this)
     , m_is_svg_page(is_svg_page)
     , m_backing_store_manager(heap().allocate<Painting::BackingStoreManager>(*this))
+    , m_rendering_thread([page_client = &page->client()](Gfx::IntRect const& viewport_rect, i32 bitmap_id) {
+        if (page_client)
+            page_client->page_did_paint(viewport_rect, bitmap_id);
+    })
 {
     all_navigables().set(*this);
 
@@ -1778,7 +1782,7 @@ void Navigable::begin_navigation(NavigateParams params)
 
     // 20. If url's scheme is "javascript", then:
     if (url.scheme() == "javascript"sv) {
-        // 1. Queue a global task on the navigation and traversal task source given navigable's active window to navigate to a javascript: URL given navigable, url, historyHandling, sourceSnapshotParams, initiatorOriginSnapshot, userInvolvement, cspNavigationType, and initialInsertion.
+        // 1. Queue a global task on the navigation and traversal task source given navigable's active window to navigate to a javascript: URL given navigable, url, historyHandling, sourceSnapshotParams, initiatorOriginSnapshot, userInvolvement, cspNavigationType, initialInsertion, and navigationId.
         VERIFY(active_window());
         queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(heap(), [this, url, history_handling, source_snapshot_params, initiator_origin_snapshot, user_involvement, csp_navigation_type, initial_insertion, navigation_id] {
             navigate_to_a_javascript_url(url, to_history_handling_behavior(history_handling), source_snapshot_params, initiator_origin_snapshot, user_involvement, csp_navigation_type, initial_insertion, navigation_id);
@@ -2145,14 +2149,18 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     // 1. Assert: historyHandling is "replace".
     VERIFY(history_handling == HistoryHandlingBehavior::Replace);
 
-    // 2. Set the ongoing navigation for targetNavigable to null.
+    // 2. If targetNavigable's ongoing navigation is no longer navigationId, then return.
+    if (ongoing_navigation() != navigation_id)
+        return;
+
+    // 3. Set the ongoing navigation for targetNavigable to null.
     set_ongoing_navigation({});
 
-    // 3. If initiatorOrigin is not same origin-domain with targetNavigable's active document's origin, then return.
+    // 4. If initiatorOrigin is not same origin-domain with targetNavigable's active document's origin, then return.
     if (!initiator_origin.is_same_origin_domain(active_document()->origin()))
         return;
 
-    // 4. Let request be a new request whose URL is url and whose policy container is sourceSnapshotParams's source policy container.
+    // 5. Let request be a new request whose URL is url and whose policy container is sourceSnapshotParams's source policy container.
     auto request = Fetch::Infrastructure::Request::create(vm);
     request->set_url(url);
     request->set_policy_container(source_snapshot_params->source_policy_container);
@@ -2160,14 +2168,14 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     // AD-HOC: See https://github.com/whatwg/html/issues/4651, requires some investigation to figure out what we should be setting here.
     request->set_client(source_snapshot_params->fetch_client);
 
-    // 5. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then return.
+    // 6. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then return.
     if (ContentSecurityPolicy::should_navigation_request_of_type_be_blocked_by_content_security_policy(request, csp_navigation_type) == ContentSecurityPolicy::Directives::Directive::Result::Blocked)
         return;
 
-    // 6. Let newDocument be the result of evaluating a javascript: URL given targetNavigable, url, initiatorOrigin, and userInvolvement.
+    // 7. Let newDocument be the result of evaluating a javascript: URL given targetNavigable, url, initiatorOrigin, and userInvolvement.
     auto new_document = evaluate_javascript_url(url, initiator_origin, user_involvement, navigation_id);
 
-    // 7. If newDocument is null:
+    // 8. If newDocument is null:
     if (!new_document) {
         // 1. If initialInsertion is true and targetNavigable's active document's is initial about:blank is true,
         //    then run the iframe load event steps given targetNavigable's container.
@@ -2180,16 +2188,16 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
         return;
     }
 
-    // 8. Assert: initiatorOrigin is newDocument's origin.
+    // 9. Assert: initiatorOrigin is newDocument's origin.
     VERIFY(initiator_origin == new_document->origin());
 
-    // 9. Let entryToReplace be targetNavigable's active session history entry.
+    // 10. Let entryToReplace be targetNavigable's active session history entry.
     auto entry_to_replace = active_session_history_entry();
 
-    // 10. Let oldDocState be entryToReplace's document state.
+    // 11. Let oldDocState be entryToReplace's document state.
     auto old_doc_state = entry_to_replace->document_state();
 
-    // 11. Let documentState be a new document state with
+    // 12. Let documentState be a new document state with
     //     document: newDocument
     //     history policy container: a clone of the oldDocState's history policy container if it is non-null; null otherwise
     //     request referrer: oldDocState's request referrer
@@ -2211,14 +2219,14 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     document_state->set_ever_populated(true);
     document_state->set_navigable_target_name(old_doc_state->navigable_target_name());
 
-    // 12. Let historyEntry be a new session history entry, with
+    // 13. Let historyEntry be a new session history entry, with
     //     URL: entryToReplace's URL
     //     document state: documentState
     GC::Ref<SessionHistoryEntry> history_entry = *heap().allocate<SessionHistoryEntry>();
     history_entry->set_url(entry_to_replace->url());
     history_entry->set_document_state(document_state);
 
-    // 13. Append session history traversal steps to targetNavigable's traversable to finalize a cross-document navigation with targetNavigable, historyHandling, userInvolvement, and historyEntry.
+    // 14. Append session history traversal steps to targetNavigable's traversable to finalize a cross-document navigation with targetNavigable, historyHandling, userInvolvement, and historyEntry.
     traversable_navigable()->append_session_history_traversal_steps(GC::create_function(heap(), [this, history_entry, history_handling, user_involvement] {
         // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
         auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
@@ -2587,7 +2595,7 @@ bool Navigable::has_a_rendering_opportunity() const
     // Rendering opportunities typically occur at regular intervals.
 
     // FIXME: Return `false` here if we're an inactive browser tab.
-    return is_ready_to_paint();
+    return true;
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#inform-the-navigation-api-about-child-navigable-destruction
@@ -2756,52 +2764,21 @@ void Navigable::set_has_session_history_entry_and_ready_for_navigation()
     }
 }
 
-bool Navigable::is_ready_to_paint() const
-{
-    return m_number_of_queued_rasterization_tasks <= 1;
-}
-
 void Navigable::ready_to_paint()
 {
-    m_number_of_queued_rasterization_tasks--;
-    VERIFY(m_number_of_queued_rasterization_tasks >= 0 && m_number_of_queued_rasterization_tasks < 2);
+    m_rendering_thread.ready_to_paint();
 }
 
-void Navigable::paint_next_frame()
-{
-    if (!is_top_level_traversable())
-        return;
-
-    auto [backing_store_id, painting_surface] = m_backing_store_manager->acquire_store_for_next_frame();
-    if (!painting_surface)
-        return;
-
-    VERIFY(m_number_of_queued_rasterization_tasks <= 1);
-    m_number_of_queued_rasterization_tasks++;
-
-    auto viewport_rect = page().css_to_device_rect(this->viewport_rect()).to_type<int>();
-    PaintConfig paint_config { .paint_overlay = true, .should_show_line_box_borders = m_should_show_line_box_borders, .canvas_fill_rect = Gfx::IntRect { {}, viewport_rect.size() } };
-    auto page_client = &page().top_level_traversable()->page().client();
-    start_display_list_rendering(*painting_surface, paint_config, [page_client, viewport_rect, backing_store_id] {
-        if (!page_client)
-            return;
-        page_client->page_did_paint(viewport_rect, backing_store_id);
-    });
-}
-
-void Navigable::start_display_list_rendering(Gfx::PaintingSurface& painting_surface, PaintConfig paint_config, Function<void()>&& callback)
+void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
 {
     m_needs_repaint = false;
     auto document = active_document();
-    if (!document) {
-        callback();
+    if (!document)
         return;
-    }
+
     auto display_list = document->record_display_list(paint_config);
-    if (!display_list) {
-        callback();
+    if (!display_list)
         return;
-    }
 
     auto& document_paintable = *document->paintable();
     Painting::ScrollStateSnapshotByDisplayList scroll_state_snapshot_by_display_list;
@@ -2823,7 +2800,26 @@ void Navigable::start_display_list_rendering(Gfx::PaintingSurface& painting_surf
         return TraversalDecision::Continue;
     });
 
-    m_rendering_thread.enqueue_rendering_task(*display_list, move(scroll_state_snapshot_by_display_list), painting_surface, move(callback));
+    m_rendering_thread.update_display_list(*display_list, move(scroll_state_snapshot_by_display_list));
+}
+
+void Navigable::paint_next_frame()
+{
+    if (!is_top_level_traversable())
+        return;
+
+    auto viewport_rect = page().css_to_device_rect(this->viewport_rect()).to_type<int>();
+    PaintConfig paint_config { .paint_overlay = true, .should_show_line_box_borders = m_should_show_line_box_borders, .canvas_fill_rect = Gfx::IntRect { {}, viewport_rect.size() } };
+
+    record_display_list_and_scroll_state(paint_config);
+
+    m_rendering_thread.present_frame(viewport_rect);
+}
+
+void Navigable::render_screenshot(Gfx::PaintingSurface& painting_surface, PaintConfig paint_config, Function<void()>&& callback)
+{
+    record_display_list_and_scroll_state(paint_config);
+    m_rendering_thread.request_screenshot(painting_surface, move(callback));
 }
 
 RefPtr<Gfx::SkiaBackendContext> Navigable::skia_backend_context() const
