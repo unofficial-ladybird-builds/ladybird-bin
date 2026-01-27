@@ -247,6 +247,7 @@ public:
     {
         m_contains_direct_call_to_eval = true;
         m_screwed_by_eval_in_scope_chain = true;
+        m_eval_in_current_function = true;
     }
     void set_contains_access_to_arguments_object_in_non_strict_mode() { m_contains_access_to_arguments_object_in_non_strict_mode = true; }
     void set_scope_node(ScopeNode* node) { m_node = node; }
@@ -288,6 +289,13 @@ public:
             m_parent_scope->m_screwed_by_eval_in_scope_chain = true;
         }
 
+        // Propagate eval-in-current-function only through block scopes, not across function boundaries.
+        // This is used for global identifier marking - eval can only inject vars into its containing
+        // function's scope, not into parent function scopes.
+        if (m_parent_scope && m_eval_in_current_function && m_type != ScopeType::Function) {
+            m_parent_scope->m_eval_in_current_function = true;
+        }
+
         for (auto& it : m_identifier_groups) {
             auto const& identifier_group_name = it.key;
             auto& identifier_group = it.value;
@@ -326,8 +334,10 @@ public:
             }
 
             if (m_type == ScopeType::Function && !m_is_function_declaration && m_bound_names.contains(identifier_group_name)) {
-                // NOTE: Currently parser can't determine that named function expression assignment creates scope with binding for function name so function names are not considered as candidates to be optimized in global variables access
-                identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment = true;
+                // Named function expression: identifiers with this name inside the function may refer
+                // to the function's immutable name binding, so they cannot be optimized as globals.
+                for (auto& identifier : identifier_group.identifiers)
+                    identifier->set_is_inside_scope_with_eval();
             }
 
             if (m_type == ScopeType::ClassDeclaration) {
@@ -351,7 +361,7 @@ public:
             }
 
             if (m_type == ScopeType::Program) {
-                auto can_use_global_for_identifier = !(identifier_group.used_inside_with_statement || identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment || m_parser.m_state.initiated_by_eval);
+                auto can_use_global_for_identifier = !(identifier_group.used_inside_with_statement || m_parser.m_state.initiated_by_eval);
                 if (can_use_global_for_identifier) {
                     for (auto& identifier : identifier_group.identifiers) {
                         // Only mark identifiers as global if they are not inside a function scope
@@ -403,7 +413,10 @@ public:
 
                 // Mark each identifier individually if it's inside a scope with eval.
                 // This allows per-identifier optimization decisions at Program scope.
-                if (m_contains_direct_call_to_eval || m_screwed_by_eval_in_scope_chain) {
+                // We use m_eval_in_current_function instead of m_screwed_by_eval_in_scope_chain
+                // because eval can only inject vars into its containing function's scope,
+                // not into parent function scopes.
+                if (m_eval_in_current_function) {
                     for (auto& identifier : identifier_group.identifiers)
                         identifier->set_is_inside_scope_with_eval();
                 }
@@ -415,8 +428,6 @@ public:
                             maybe_parent_scope_identifier_group.value().captured_by_nested_function = true;
                         if (identifier_group.used_inside_with_statement)
                             maybe_parent_scope_identifier_group.value().used_inside_with_statement = true;
-                        if (identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment)
-                            maybe_parent_scope_identifier_group.value().might_be_variable_in_lexical_scope_in_named_function_assignment = true;
                     } else {
                         m_parent_scope->m_identifier_groups.set(identifier_group_name, identifier_group);
                     }
@@ -589,7 +600,6 @@ private:
     struct IdentifierGroup {
         bool captured_by_nested_function { false };
         bool used_inside_with_statement { false };
-        bool might_be_variable_in_lexical_scope_in_named_function_assignment { false };
         Vector<NonnullRefPtr<Identifier>> identifiers;
         Optional<DeclarationKind> declaration_kind;
     };
@@ -601,6 +611,10 @@ private:
     bool m_contains_direct_call_to_eval { false };
     bool m_contains_await_expression { false };
     bool m_screwed_by_eval_in_scope_chain { false };
+
+    // Tracks eval within the current function (propagates through block scopes but not across function boundaries).
+    // Used for global identifier marking - eval can't inject vars into parent function scopes.
+    bool m_eval_in_current_function { false };
 
     // Function uses this binding from function environment if:
     // 1. It's an arrow function or establish parent scope for an arrow function
