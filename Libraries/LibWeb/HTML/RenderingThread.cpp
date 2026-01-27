@@ -239,7 +239,7 @@ RenderingThread::~RenderingThread()
 void RenderingThread::start(DisplayListPlayerType)
 {
     VERIFY(m_thread_data->has_skia_player());
-    m_thread = Threading::Thread::construct([thread_data = m_thread_data] {
+    m_thread = Threading::Thread::construct("Renderer"sv, [thread_data = m_thread_data] {
         thread_data->compositor_loop();
         return static_cast<intptr_t>(0);
     });
