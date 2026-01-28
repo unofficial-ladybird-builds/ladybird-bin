@@ -40,7 +40,7 @@ enum class CacheLifetimeStatus {
     MustRevalidate,
     StaleWhileRevalidate,
 };
-CacheLifetimeStatus cache_lifetime_status(HeaderList const&, AK::Duration freshness_lifetime, AK::Duration current_age);
+CacheLifetimeStatus cache_lifetime_status(HeaderList const& request_headers, HeaderList const& response_headers, AK::Duration freshness_lifetime, AK::Duration current_age);
 
 struct RevalidationAttributes {
     static RevalidationAttributes create(HeaderList const&);
@@ -51,6 +51,10 @@ struct RevalidationAttributes {
 
 void store_header_and_trailer_fields(HeaderList&, HeaderList const&);
 void update_header_fields(HeaderList&, HeaderList const&);
+
+bool contains_cache_control_directive(StringView cache_control, StringView directive);
+Optional<StringView> extract_cache_control_directive(StringView cache_control, StringView directive);
+Optional<AK::Duration> extract_cache_control_duration_directive(StringView cache_control, StringView directive, Optional<AK::Duration> valueless_fallback = {});
 
 ByteString normalize_request_vary_header_values(StringView header, HeaderList const& request_headers);
 
