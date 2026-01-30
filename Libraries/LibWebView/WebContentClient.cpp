@@ -30,7 +30,7 @@ WebContentClient::WebContentClient(NonnullOwnPtr<IPC::Transport> transport, View
     : IPC::ConnectionToServer<WebContentClientEndpoint, WebContentServerEndpoint>(*this, move(transport))
 {
     s_clients.set(this);
-    m_views.set(0, &view);
+    m_views.set(0, view);
 }
 
 WebContentClient::WebContentClient(NonnullOwnPtr<IPC::Transport> transport)
@@ -52,13 +52,13 @@ void WebContentClient::die()
 void WebContentClient::assign_view(Badge<Application>, ViewImplementation& view)
 {
     VERIFY(m_views.is_empty());
-    m_views.set(0, &view);
+    m_views.set(0, view);
 }
 
 void WebContentClient::register_view(u64 page_id, ViewImplementation& view)
 {
     VERIFY(page_id > 0);
-    m_views.set(page_id, &view);
+    m_views.set(page_id, view);
 }
 
 void WebContentClient::unregister_view(u64 page_id)
@@ -81,7 +81,7 @@ void WebContentClient::notify_all_views_of_crash()
     Vector<u64> view_ids;
     view_ids.ensure_capacity(m_views.size());
     for (auto& [page_id, view] : m_views)
-        view_ids.append(view->view_id());
+        view_ids.unchecked_append(view->view_id());
 
     for (auto view_id : view_ids) {
         Core::deferred_invoke([view_id] {
