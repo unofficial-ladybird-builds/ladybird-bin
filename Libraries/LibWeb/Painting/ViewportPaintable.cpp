@@ -1,10 +1,11 @@
 /*
  * Copyright (c) 2023, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2024, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2024-2026, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/VisualViewport.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/Layout/TextNode.h>
@@ -162,6 +163,57 @@ static CSSPixelRect effective_css_clip_rect(CSSPixelRect const& css_clip)
     return css_clip;
 }
 
+static Optional<TransformData> compute_transform(PaintableBox const& paintable_box, CSS::ComputedValues const& computed_values)
+{
+    if (!paintable_box.has_css_transform())
+        return {};
+
+    auto matrix = Gfx::FloatMatrix4x4::identity();
+    if (auto const& translate = computed_values.translate())
+        matrix = matrix * translate->to_matrix(paintable_box).release_value();
+    if (auto const& rotate = computed_values.rotate())
+        matrix = matrix * rotate->to_matrix(paintable_box).release_value();
+    if (auto const& scale = computed_values.scale())
+        matrix = matrix * scale->to_matrix(paintable_box).release_value();
+    for (auto const& transform : computed_values.transformations())
+        matrix = matrix * transform->to_matrix(paintable_box).release_value();
+    auto const& css_transform_origin = computed_values.transform_origin();
+    auto reference_box = paintable_box.transform_reference_box();
+    auto origin_x = reference_box.left() + css_transform_origin.x.to_px(paintable_box.layout_node(), reference_box.width());
+    auto origin_y = reference_box.top() + css_transform_origin.y.to_px(paintable_box.layout_node(), reference_box.height());
+    return TransformData { matrix, { origin_x, origin_y } };
+}
+
+// https://drafts.csswg.org/css-transforms-2/#perspective-matrix
+static Optional<Gfx::FloatMatrix4x4> compute_perspective_matrix(PaintableBox const& paintable_box, CSS::ComputedValues const& computed_values)
+{
+    auto perspective = computed_values.perspective();
+    if (!perspective.has_value())
+        return {};
+
+    // The perspective matrix is computed as follows:
+
+    // 1. Start with the identity matrix.
+    // 2. Translate by the computed X and Y values of 'perspective-origin'
+    // https://drafts.csswg.org/css-transforms-2/#perspective-origin-property
+    // Percentages: refer to the size of the reference box
+    auto reference_box = paintable_box.transform_reference_box();
+    auto perspective_origin = computed_values.perspective_origin().resolved(paintable_box.layout_node(), reference_box);
+    auto computed_x = perspective_origin.x().to_float();
+    auto computed_y = perspective_origin.y().to_float();
+    auto perspective_matrix = Gfx::translation_matrix(Vector3<float>(computed_x, computed_y, 0));
+
+    // 3. Multiply by the matrix that would be obtained from the 'perspective()' transform function, where the
+    //    length is provided by the value of the perspective property
+    // NB: Length values less than 1px being clamped to 1px is handled by the perspective() function already.
+    // FIXME: Create the matrix directly.
+    perspective_matrix = perspective_matrix * CSS::TransformationStyleValue::create(CSS::PropertyID::Transform, CSS::TransformFunction::Perspective, CSS::StyleValueVector { CSS::LengthStyleValue::create(CSS::Length::make_px(perspective.value())) })->to_matrix({}).release_value();
+
+    // 4. Translate by the negated computed X and Y values of 'perspective-origin'
+    perspective_matrix = perspective_matrix * Gfx::translation_matrix(Vector3<float>(-computed_x, -computed_y, 0));
+    return perspective_matrix;
+}
+
 void ViewportPaintable::assign_accumulated_visual_contexts()
 {
     m_next_accumulated_visual_context_id = 1;
@@ -226,8 +278,8 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
         if (effects.needs_layer())
             own_state = append_node(own_state, move(effects));
 
-        if (paintable_box.has_css_transform())
-            own_state = append_node(own_state, TransformData { paintable_box.transform(), paintable_box.transform_origin() });
+        if (auto transform_data = compute_transform(paintable_box, computed_values); transform_data.has_value())
+            own_state = append_node(own_state, *transform_data);
 
         if (auto css_clip = paintable_box.get_clip_rect(); css_clip.has_value())
             own_state = append_node(own_state, ClipData { effective_css_clip_rect(*css_clip), {} });
@@ -251,8 +303,8 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
         // Build state for descendants: own state + perspective + clip + scroll.
         RefPtr<AccumulatedVisualContext const> state_for_descendants = own_state;
 
-        if (auto perspective = paintable_box.perspective_matrix(); perspective.has_value())
-            state_for_descendants = append_node(state_for_descendants, PerspectiveData { *perspective });
+        if (auto perspective_matrix = compute_perspective_matrix(paintable_box, computed_values); perspective_matrix.has_value())
+            state_for_descendants = append_node(state_for_descendants, PerspectiveData { *perspective_matrix });
 
         auto overflow_x = computed_values.overflow_x();
         auto overflow_y = computed_values.overflow_y();
@@ -282,8 +334,11 @@ void ViewportPaintable::assign_accumulated_visual_contexts()
             }
         }
 
-        if (paintable_box.own_scroll_frame() && !paintable_box.is_sticky_position())
-            state_for_descendants = append_node(state_for_descendants, ScrollData { paintable_box.own_scroll_frame()->id(), false });
+        if (paintable_box.own_scroll_frame()) {
+            auto is_sticky_without_scrollable_overflow = paintable_box.is_sticky_position() && paintable_box.enclosing_scroll_frame() == paintable_box.own_scroll_frame();
+            if (!is_sticky_without_scrollable_overflow)
+                state_for_descendants = append_node(state_for_descendants, ScrollData { paintable_box.own_scroll_frame()->id(), false });
+        }
 
         paintable_box.set_accumulated_visual_context_for_descendants(state_for_descendants);
 
