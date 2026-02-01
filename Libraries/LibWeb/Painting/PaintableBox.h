@@ -247,12 +247,6 @@ public:
 
     [[nodiscard]] RefPtr<ScrollFrame const> own_scroll_frame() const { return m_own_scroll_frame; }
     [[nodiscard]] Optional<int> own_scroll_frame_id() const;
-    [[nodiscard]] CSSPixelPoint own_scroll_frame_offset() const
-    {
-        if (m_own_scroll_frame)
-            return m_own_scroll_frame->own_offset();
-        return {};
-    }
 
 protected:
     explicit PaintableBox(Layout::Box const&);
@@ -278,10 +272,6 @@ protected:
         Horizontal,
         Vertical,
     };
-    enum class AdjustThumbRectForScrollOffset {
-        No,
-        Yes,
-    };
     [[nodiscard]] TraversalDecision hit_test_children(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const;
     [[nodiscard]] TraversalDecision hit_test_continuation(Function<TraversalDecision(HitTestResult)> const& callback) const;
     [[nodiscard]] TraversalDecision hit_test_chrome(CSSPixelPoint adjusted_position, Function<TraversalDecision(HitTestResult)> const& callback) const;
@@ -289,7 +279,7 @@ protected:
     Optional<ScrollbarData> compute_scrollbar_data(
         ScrollDirection direction,
         ChromeMetrics const& chrome_metrics,
-        AdjustThumbRectForScrollOffset = AdjustThumbRectForScrollOffset::No) const;
+        ScrollStateSnapshot const* = nullptr) const;
     CSSPixels available_scrollbar_length(ScrollDirection direction, ChromeMetrics const& chrome_metrics) const;
     Optional<CSSPixelRect> absolute_scrollbar_rect(ScrollDirection direction, bool with_gutter, ChromeMetrics const& chrome_metrics) const;
     Optional<CSSPixelRect> absolute_resizer_rect(ChromeMetrics const& chrome_metrics) const;
