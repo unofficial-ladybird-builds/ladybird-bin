@@ -42,7 +42,8 @@ jobs:
             ttf-liberation \
             nasm \
             unzip \
-            zip
+            zip \
+            patchelf
 
       # ----------------------------
       # BUILDER USER
@@ -72,28 +73,42 @@ jobs:
       - name: Build Ladybird from AUR
         run: |
           cd ladybird
-          sudo -u builder env \
-            MAKEFLAGS="-j$(nproc)" \
-            makepkg -s --noconfirm
+          sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
       # ----------------------------
-      # COLLECT BUILD OUTPUTS
+      # BUNDLE Qt6 WITH BINARY
       # ----------------------------
-      - name: Collect artifacts
+      - name: Bundle Qt6 for portable binary
         run: |
-          mkdir -p artifacts
-          cp ladybird/*.pkg.tar.zst artifacts/
-          cp -r ladybird/src artifacts/src || true
-          cp -r ladybird/pkg artifacts/pkg || true
+          cd ladybird/pkg/usr/bin
+          mkdir -p lib
+          # Copy all Qt6 shared libs
+          cp /usr/lib/libQt6*.so* lib/
+          # Also copy Qt6 plugins if needed
+          mkdir -p platforms
+          cp -r /usr/lib/qt/plugins/platforms/* platforms/ || true
+          # Optional: copy multimedia plugins
+          mkdir -p audio
+          cp -r /usr/lib/qt/plugins/audio/* audio/ || true
+          # Make the binary find bundled libs
+          patchelf --set-rpath '$ORIGIN/lib' Ladybird
 
       # ----------------------------
-      # UPLOAD ARTIFACTS
+      # CREATE ZIP ARTIFACT
       # ----------------------------
-      - name: Upload build artifacts
+      - name: Package Ladybird portable zip
+        run: |
+          cd ladybird/pkg/usr/bin
+          zip -r "$GITHUB_WORKSPACE/ladybird-arch-linux.zip" ./*
+
+      # ----------------------------
+      # UPLOAD ARTIFACT
+      # ----------------------------
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-aur-build
-          path: artifacts/
+          name: ladybird-arch-linux
+          path: ladybird-arch-linux.zip
 
       # ----------------------------
       # RELEASE (TAGS ONLY)
@@ -102,4 +117,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: ladybird-arch-linux.zip
