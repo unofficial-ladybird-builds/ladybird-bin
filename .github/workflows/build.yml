@@ -45,7 +45,7 @@ jobs:
             zip
 
       # ----------------------------
-      # BUILDER USER (required for makepkg)
+      # BUILDER USER
       # ----------------------------
       - name: Create builder user
         run: |
@@ -53,12 +53,18 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       # ----------------------------
+      # FIX WORKSPACE PERMISSIONS
+      # ----------------------------
+      - name: Fix workspace ownership
+        run: |
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      # ----------------------------
       # FETCH AUR PKGBUILD
       # ----------------------------
       - name: Clone Ladybird AUR repo
         run: |
           sudo -u builder git clone https://aur.archlinux.org/ladybird.git
-          chown -R builder:builder ladybird
 
       # ----------------------------
       # BUILD PACKAGE
