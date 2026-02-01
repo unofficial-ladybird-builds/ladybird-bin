@@ -76,29 +76,44 @@ jobs:
           sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
       # ----------------------------
-      # BUNDLE Qt6 WITH BINARY
+      # BUNDLE Qt6 DYNAMICALLY
       # ----------------------------
       - name: Bundle Qt6 for portable binary
         run: |
-          cd ladybird/pkg/usr/bin
-          mkdir -p lib
-          # Copy all Qt6 shared libs
-          cp /usr/lib/libQt6*.so* lib/
-          # Also copy Qt6 plugins if needed
-          mkdir -p platforms
-          cp -r /usr/lib/qt/plugins/platforms/* platforms/ || true
-          # Optional: copy multimedia plugins
-          mkdir -p audio
-          cp -r /usr/lib/qt/plugins/audio/* audio/ || true
-          # Make the binary find bundled libs
-          patchelf --set-rpath '$ORIGIN/lib' Ladybird
+          set -e
+          # Find the Ladybird binary
+          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
+          echo "Found binary: $BINARY"
+
+          BIN_DIR=$(dirname "$BINARY")
+          mkdir -p "$BIN_DIR/lib"
+
+          # Find all Qt6 shared libraries needed by the binary
+          echo "Copying Qt6 libraries..."
+          ldd "$BINARY" | grep Qt6 | awk '{print $3}' | while read lib; do
+            cp "$lib" "$BIN_DIR/lib/"
+          done
+
+          # Copy Qt6 plugins (platforms, multimedia)
+          mkdir -p "$BIN_DIR/plugins/platforms"
+          cp -r /usr/lib/qt/plugins/platforms/* "$BIN_DIR/plugins/platforms/" || true
+          mkdir -p "$BIN_DIR/plugins/audio"
+          cp -r /usr/lib/qt/plugins/audio/* "$BIN_DIR/plugins/audio/" || true
+
+          # Set RPATH so binary uses bundled lib
+          patchelf --set-rpath '$ORIGIN/lib' "$BINARY"
+
+          echo "Qt6 libraries bundled successfully."
 
       # ----------------------------
       # CREATE ZIP ARTIFACT
       # ----------------------------
       - name: Package Ladybird portable zip
         run: |
-          cd ladybird/pkg/usr/bin
+          # The binary folder
+          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
+          BIN_DIR=$(dirname "$BINARY")
+          cd "$BIN_DIR"
           zip -r "$GITHUB_WORKSPACE/ladybird-arch-linux.zip" ./*
 
       # ----------------------------
