@@ -786,11 +786,17 @@ NonnullRefPtr<Core::Promise<String>> ViewImplementation::request_internal_page_i
     return promise;
 }
 
-void ViewImplementation::did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, String const& info)
+void ViewImplementation::did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, Optional<Core::AnonymousBuffer> const& info)
 {
     VERIFY(m_pending_info_request);
 
-    m_pending_info_request->resolve(String { info });
+    String info_string;
+    if (!info.has_value()) {
+        info_string = "(no page)"_string;
+    } else {
+        info_string = MUST(String::from_utf8(info->bytes()));
+    }
+    m_pending_info_request->resolve(move(info_string));
     m_pending_info_request = nullptr;
 }
 
@@ -800,10 +806,13 @@ ErrorOr<LexicalPath> ViewImplementation::dump_gc_graph()
     auto gc_graph_json = TRY(promise->await());
 
     LexicalPath path { Core::StandardPaths::tempfile_directory() };
-    path = path.append(TRY(AK::UnixDateTime::now().to_string("gc-graph-%Y-%m-%d-%H-%M-%S.json"sv)));
+    path = path.append(TRY(AK::UnixDateTime::now().to_string("gc-graph-%Y-%m-%d-%H-%M-%S.js"sv)));
 
+    // Write as a .js file so gc-heap-explorer.html can load it via <script> tag (avoiding CORS issues with file:// URLs)
     auto dump_file = TRY(Core::File::open(path.string(), Core::File::OpenMode::Write));
+    TRY(dump_file->write_until_depleted("var GC_GRAPH_DUMP = "sv.bytes()));
     TRY(dump_file->write_until_depleted(gc_graph_json.bytes()));
+    TRY(dump_file->write_until_depleted(";\n"sv.bytes()));
 
     return path;
 }
