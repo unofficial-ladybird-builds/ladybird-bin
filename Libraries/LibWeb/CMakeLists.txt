@@ -169,6 +169,7 @@ set(SOURCES
     CSS/FontFace.cpp
     CSS/FontFaceSet.cpp
     CSS/FontFaceSetLoadEvent.cpp
+    CSS/FontFeatureData.cpp
     CSS/Frequency.cpp
     CSS/GridTrackPlacement.cpp
     CSS/GridTrackSize.cpp
@@ -766,6 +767,8 @@ set(SOURCES
     Layout/TableFormattingContext.cpp
     Layout/TableGrid.cpp
     Layout/TableWrapper.cpp
+    Layout/TextAreaBox.cpp
+    Layout/TextInputBox.cpp
     Layout/TextNode.cpp
     Layout/TreeBuilder.cpp
     Layout/VideoBox.cpp
@@ -1077,6 +1080,7 @@ set(SOURCES
     WebGL/Extensions/EXTRenderSnorm.cpp
     WebGL/Extensions/EXTTextureFilterAnisotropic.cpp
     WebGL/Extensions/EXTTextureNorm16.cpp
+    WebGL/Extensions/OESElementIndexUint.cpp
     WebGL/Extensions/OESStandardDerivatives.cpp
     WebGL/Extensions/OESVertexArrayObject.cpp
     WebGL/Extensions/WebGLCompressedTextureS3tc.cpp
