@@ -208,6 +208,13 @@
     "upper-latin",
     "upper-roman"
   ],
+  "counter-style-system": [
+    "cyclic",
+    "numeric",
+    "alphabetic",
+    "symbolic",
+    "additive"
+  ],
   "cross-origin-modifier-value": [
     "anonymous",
     "use-credentials"
@@ -335,6 +342,10 @@
   "font-kerning": [
     "auto",
     "normal",
+    "none"
+  ],
+  "font-optical-sizing": [
+    "auto",
     "none"
   ],
   "font-style-keyword": [

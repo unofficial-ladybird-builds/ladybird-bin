@@ -89,12 +89,7 @@ public:
     Size size_value(PropertyID) const;
     [[nodiscard]] Variant<LengthPercentage, NormalGap> gap_value(PropertyID) const;
     Length length(PropertyID) const;
-    enum class ClampNegativeLengths {
-        No,
-        Yes,
-    };
-    Optional<LengthPercentage> length_percentage(PropertyID, Layout::NodeWithStyle const&, ClampNegativeLengths) const;
-    LengthBox length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, Layout::NodeWithStyle const&, ClampNegativeLengths, LengthPercentageOrAuto const& default_value) const;
+    LengthBox length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, LengthPercentageOrAuto const& default_value) const;
     Color color_or_fallback(PropertyID, ColorResolutionContext, Color fallback) const;
     HashMap<PropertyID, StyleValueVector> assemble_coordinated_value_list(PropertyID base_property_id, Vector<PropertyID> const& property_ids) const;
     ColorInterpolation color_interpolation() const;
@@ -257,6 +252,7 @@ public:
     double font_weight() const;
     Percentage font_width() const;
     int font_slope() const;
+    FontOpticalSizing font_optical_sizing() const;
 
     bool operator==(ComputedProperties const&) const;
 

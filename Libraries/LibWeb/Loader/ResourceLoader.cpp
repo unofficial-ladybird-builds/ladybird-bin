@@ -13,6 +13,7 @@
 #include <LibGC/Function.h>
 #include <LibRequests/Request.h>
 #include <LibRequests/RequestClient.h>
+#include <LibTextCodec/Decoder.h>
 #include <LibURL/Parser.h>
 #include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
@@ -106,10 +107,10 @@ static ByteString sanitized_url_for_logging(URL::URL const& url)
 
 static void store_response_cookies(Page& page, URL::URL const& url, ByteString const& set_cookie_entry)
 {
-    auto cookie = Cookie::parse_cookie(url, set_cookie_entry);
+    auto cookie = Cookie::parse_cookie(url, TextCodec::isomorphic_decode(set_cookie_entry));
     if (!cookie.has_value())
         return;
-    page.client().page_did_set_cookie(url, cookie.value(), Cookie::Source::Http); // FIXME: Determine cookie source correctly
+    page.client().page_did_set_cookie(url, cookie.value(), Cookie::Source::Http);
 }
 
 static NonnullRefPtr<HTTP::HeaderList> response_headers_for_file(StringView path, Optional<time_t> const& modified_time)

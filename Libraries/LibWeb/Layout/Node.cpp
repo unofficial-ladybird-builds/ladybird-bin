@@ -619,27 +619,17 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
         computed_values.set_font_language_override(maybe_font_language_override.release_value());
     computed_values.set_font_variation_settings(computed_style.font_variation_settings());
 
-    auto border_radius_data_from_style_value = [](CSS::StyleValue const& value) -> Optional<CSS::BorderRadiusData> {
+    auto border_radius_data_from_style_value = [](CSS::StyleValue const& value) -> CSS::BorderRadiusData {
         return CSS::BorderRadiusData {
             CSS::LengthPercentage::from_style_value(value.as_border_radius().horizontal_radius()),
             CSS::LengthPercentage::from_style_value(value.as_border_radius().vertical_radius())
         };
-
-        VERIFY_NOT_REACHED();
     };
 
-    auto const& border_bottom_left_radius = computed_style.property(CSS::PropertyID::BorderBottomLeftRadius);
-    if (auto data = border_radius_data_from_style_value(border_bottom_left_radius); data.has_value())
-        computed_values.set_border_bottom_left_radius(data.release_value());
-    auto const& border_bottom_right_radius = computed_style.property(CSS::PropertyID::BorderBottomRightRadius);
-    if (auto data = border_radius_data_from_style_value(border_bottom_right_radius); data.has_value())
-        computed_values.set_border_bottom_right_radius(data.release_value());
-    auto const& border_top_left_radius = computed_style.property(CSS::PropertyID::BorderTopLeftRadius);
-    if (auto data = border_radius_data_from_style_value(border_top_left_radius); data.has_value())
-        computed_values.set_border_top_left_radius(data.release_value());
-    auto const& border_top_right_radius = computed_style.property(CSS::PropertyID::BorderTopRightRadius);
-    if (auto data = border_radius_data_from_style_value(border_top_right_radius); data.has_value())
-        computed_values.set_border_top_right_radius(data.release_value());
+    computed_values.set_border_bottom_left_radius(border_radius_data_from_style_value(computed_style.property(CSS::PropertyID::BorderBottomLeftRadius)));
+    computed_values.set_border_bottom_right_radius(border_radius_data_from_style_value(computed_style.property(CSS::PropertyID::BorderBottomRightRadius)));
+    computed_values.set_border_top_left_radius(border_radius_data_from_style_value(computed_style.property(CSS::PropertyID::BorderTopLeftRadius)));
+    computed_values.set_border_top_right_radius(border_radius_data_from_style_value(computed_style.property(CSS::PropertyID::BorderTopRightRadius)));
     computed_values.set_display(computed_style.display());
     computed_values.set_display_before_box_type_transformation(computed_style.display_before_box_type_transformation());
 
@@ -737,9 +727,9 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     computed_values.set_min_height(computed_style.size_value(CSS::PropertyID::MinHeight));
     computed_values.set_max_height(computed_style.size_value(CSS::PropertyID::MaxHeight));
 
-    computed_values.set_inset(computed_style.length_box(CSS::PropertyID::Left, CSS::PropertyID::Top, CSS::PropertyID::Right, CSS::PropertyID::Bottom, *this, CSS::ComputedProperties::ClampNegativeLengths::No, CSS::LengthPercentageOrAuto::make_auto()));
-    computed_values.set_margin(computed_style.length_box(CSS::PropertyID::MarginLeft, CSS::PropertyID::MarginTop, CSS::PropertyID::MarginRight, CSS::PropertyID::MarginBottom, *this, CSS::ComputedProperties::ClampNegativeLengths::No, CSS::Length::make_px(0)));
-    computed_values.set_padding(computed_style.length_box(CSS::PropertyID::PaddingLeft, CSS::PropertyID::PaddingTop, CSS::PropertyID::PaddingRight, CSS::PropertyID::PaddingBottom, *this, CSS::ComputedProperties::ClampNegativeLengths::Yes, CSS::Length::make_px(0)));
+    computed_values.set_inset(computed_style.length_box(CSS::PropertyID::Left, CSS::PropertyID::Top, CSS::PropertyID::Right, CSS::PropertyID::Bottom, CSS::LengthPercentageOrAuto::make_auto()));
+    computed_values.set_margin(computed_style.length_box(CSS::PropertyID::MarginLeft, CSS::PropertyID::MarginTop, CSS::PropertyID::MarginRight, CSS::PropertyID::MarginBottom, CSS::Length::make_px(0)));
+    computed_values.set_padding(computed_style.length_box(CSS::PropertyID::PaddingLeft, CSS::PropertyID::PaddingTop, CSS::PropertyID::PaddingRight, CSS::PropertyID::PaddingBottom, CSS::Length::make_px(0)));
 
     computed_values.set_box_shadow(computed_style.box_shadow(*this));
 
@@ -810,20 +800,13 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     computed_values.set_grid_template_areas(computed_style.grid_template_areas());
     computed_values.set_grid_auto_flow(computed_style.grid_auto_flow());
 
-    if (auto cx_value = computed_style.length_percentage(CSS::PropertyID::Cx, *this, CSS::ComputedProperties::ClampNegativeLengths::No); cx_value.has_value())
-        computed_values.set_cx(*cx_value);
-    if (auto cy_value = computed_style.length_percentage(CSS::PropertyID::Cy, *this, CSS::ComputedProperties::ClampNegativeLengths::No); cy_value.has_value())
-        computed_values.set_cy(*cy_value);
-    if (auto r_value = computed_style.length_percentage(CSS::PropertyID::R, *this, CSS::ComputedProperties::ClampNegativeLengths::No); r_value.has_value())
-        computed_values.set_r(*r_value);
-    if (auto rx_value = computed_style.length_percentage(CSS::PropertyID::Rx, *this, CSS::ComputedProperties::ClampNegativeLengths::No); rx_value.has_value())
-        computed_values.set_rx(*rx_value);
-    if (auto ry_value = computed_style.length_percentage(CSS::PropertyID::Ry, *this, CSS::ComputedProperties::ClampNegativeLengths::No); ry_value.has_value())
-        computed_values.set_ry(*ry_value);
-    if (auto x_value = computed_style.length_percentage(CSS::PropertyID::X, *this, CSS::ComputedProperties::ClampNegativeLengths::No); x_value.has_value())
-        computed_values.set_x(*x_value);
-    if (auto y_value = computed_style.length_percentage(CSS::PropertyID::Y, *this, CSS::ComputedProperties::ClampNegativeLengths::No); y_value.has_value())
-        computed_values.set_y(*y_value);
+    computed_values.set_cx(CSS::LengthPercentage::from_style_value(computed_style.property(CSS::PropertyID::Cx)));
+    computed_values.set_cy(CSS::LengthPercentage::from_style_value(computed_style.property(CSS::PropertyID::Cy)));
+    computed_values.set_r(CSS::LengthPercentage::from_style_value(computed_style.property(CSS::PropertyID::R)));
+    computed_values.set_rx(CSS::LengthPercentageOrAuto::from_style_value(computed_style.property(CSS::PropertyID::Rx)));
+    computed_values.set_ry(CSS::LengthPercentageOrAuto::from_style_value(computed_style.property(CSS::PropertyID::Ry)));
+    computed_values.set_x(CSS::LengthPercentage::from_style_value(computed_style.property(CSS::PropertyID::X)));
+    computed_values.set_y(CSS::LengthPercentage::from_style_value(computed_style.property(CSS::PropertyID::Y)));
 
     auto const& fill = computed_style.property(CSS::PropertyID::Fill);
     if (fill.has_color())

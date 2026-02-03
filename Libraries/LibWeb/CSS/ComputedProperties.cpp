@@ -267,76 +267,20 @@ Size ComputedProperties::size_value(PropertyID id) const
     return Size::make_auto();
 }
 
-Optional<LengthPercentage> ComputedProperties::length_percentage(PropertyID id, Layout::NodeWithStyle const& layout_node, ClampNegativeLengths disallow_negative_lengths) const
-{
-    auto const& value = property(id);
-
-    if (value.is_calculated())
-        return LengthPercentage { value.as_calculated() };
-
-    if (value.is_percentage()) {
-        auto percentage = value.as_percentage().percentage();
-
-        // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-        //        once we do that.
-        if (disallow_negative_lengths == ClampNegativeLengths::Yes && percentage.as_fraction() < 0)
-            return {};
-
-        return percentage;
-    }
-
-    if (value.is_length()) {
-        auto length = value.as_length().length();
-
-        // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-        //        once we do that.
-        if (disallow_negative_lengths == ClampNegativeLengths::Yes && length.to_px(layout_node) < 0)
-            return {};
-
-        return length;
-    }
-
-    return {};
-}
-
 Length ComputedProperties::length(PropertyID property_id) const
 {
     return property(property_id).as_length().length();
 }
 
-LengthBox ComputedProperties::length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, Layout::NodeWithStyle const& layout_node, ClampNegativeLengths disallow_negative_lengths, LengthPercentageOrAuto const& default_value) const
+LengthBox ComputedProperties::length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, LengthPercentageOrAuto const& default_value) const
 {
     auto length_box_side = [&](PropertyID id) -> LengthPercentageOrAuto {
         auto const& value = property(id);
 
-        if (value.is_calculated())
-            return LengthPercentage { value.as_calculated() };
+        if (value.is_calculated() || value.is_percentage() || value.is_length() || value.has_auto())
+            return LengthPercentageOrAuto::from_style_value(value);
 
-        if (value.is_percentage()) {
-            auto percentage = value.as_percentage().percentage();
-
-            // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-            //        once we do that.
-            if (disallow_negative_lengths == ClampNegativeLengths::Yes && percentage.as_fraction() < 0)
-                return default_value;
-
-            return percentage;
-        }
-
-        if (value.is_length()) {
-            auto length = value.as_length().length();
-
-            // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-            //        once we do that.
-            if (disallow_negative_lengths == ClampNegativeLengths::Yes && length.to_px(layout_node) < 0)
-                return default_value;
-
-            return value.as_length().length();
-        }
-
-        if (value.has_auto())
-            return LengthPercentageOrAuto::make_auto();
-
+        // FIXME: Handle anchor sizes
         return default_value;
     };
 
@@ -2461,7 +2405,7 @@ WillChange ComputedProperties::will_change() const
 ValueComparingNonnullRefPtr<Gfx::FontCascadeList const> ComputedProperties::computed_font_list(FontComputer const& font_computer) const
 {
     if (!m_cached_computed_font_list) {
-        const_cast<ComputedProperties*>(this)->m_cached_computed_font_list = font_computer.compute_font_for_style_values(property(PropertyID::FontFamily), font_size(), font_slope(), font_weight(), font_width(), font_variation_settings(), font_feature_data());
+        const_cast<ComputedProperties*>(this)->m_cached_computed_font_list = font_computer.compute_font_for_style_values(property(PropertyID::FontFamily), font_size(), font_slope(), font_weight(), font_width(), font_optical_sizing(), font_variation_settings(), font_feature_data());
         VERIFY(!m_cached_computed_font_list->is_empty());
     }
 
@@ -2507,6 +2451,12 @@ Percentage ComputedProperties::font_width() const
 int ComputedProperties::font_slope() const
 {
     return property(PropertyID::FontStyle).as_font_style().to_font_slope();
+}
+
+FontOpticalSizing ComputedProperties::font_optical_sizing() const
+{
+    auto const& value = property(PropertyID::FontOpticalSizing);
+    return keyword_to_font_optical_sizing(value.to_keyword()).release_value();
 }
 
 }
