@@ -1697,7 +1697,7 @@ void Node::set_needs_layout_tree_update(bool value, SetNeedsLayoutTreeUpdateReas
             // NOTE: We check some conditions here to avoid debug spam in documents that don't do layout.
             auto navigable = this->navigable();
             bool any_ancestor_needs_layout_tree_update = false;
-            for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+            for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
                 if (ancestor->needs_layout_tree_update()) {
                     any_ancestor_needs_layout_tree_update = true;
                     break;
@@ -1717,7 +1717,7 @@ void Node::set_needs_layout_tree_update(bool value, SetNeedsLayoutTreeUpdateReas
     }
 
     if (m_needs_layout_tree_update) {
-        for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+        for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
             if (ancestor->m_child_needs_layout_tree_update)
                 break;
             ancestor->m_child_needs_layout_tree_update = true;
@@ -1800,6 +1800,28 @@ Element* Node::parent_or_shadow_host_element()
         return static_cast<Element*>(parent());
     if (is<ShadowRoot>(*parent()))
         return static_cast<ShadowRoot&>(*parent()).host();
+    return nullptr;
+}
+
+ParentNode* Node::flat_tree_parent()
+{
+    // If we're assigned to a slot, that slot is our flat tree parent.
+    if (is_slottable()) {
+        auto& slottable = as_slottable().visit([](auto& node) -> SlottableMixin& { return *node; });
+        if (auto slot = slottable.assigned_slot())
+            return slot;
+    }
+
+    // Otherwise, this is the parent or shadow host.
+    return parent_or_shadow_host();
+}
+
+Element* Node::flat_tree_parent_element()
+{
+    for (auto* parent = flat_tree_parent(); parent; parent = parent->flat_tree_parent()) {
+        if (auto* element = as_if<Element>(parent))
+            return element;
+    }
     return nullptr;
 }
 
