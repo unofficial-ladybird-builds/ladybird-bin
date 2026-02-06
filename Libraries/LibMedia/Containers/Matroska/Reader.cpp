@@ -1099,8 +1099,14 @@ static DecoderErrorOr<void> search_clusters_for_keyframe_before_timestamp(Sample
 
     while (true) {
         SampleIterator rewind_iterator = iterator;
-        auto block = TRY(iterator.next_block());
+        auto block_result = iterator.next_block();
+        if (block_result.is_error()) {
+            if (block_result.error().category() == DecoderErrorCategory::EndOfStream)
+                break;
+            return block_result.release_error();
+        }
 
+        auto block = block_result.release_value();
         if (block.timestamp() > timestamp)
             break;
 
@@ -1170,6 +1176,10 @@ DecoderErrorOr<Block> SampleIterator::next_block()
 {
     Streamer streamer { m_stream_cursor };
     TRY(streamer.seek_to_position(m_position));
+
+    // Remove the last timestamp from this iterator so that if we encounter an error, especially EOS,
+    // we will always seek the sample iterator, ensuring that we will decode the last block again.
+    m_last_timestamp = {};
 
     Optional<Block> block;
 
