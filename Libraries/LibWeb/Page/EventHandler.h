@@ -35,6 +35,7 @@ public:
     EventResult handle_mouseleave();
     EventResult handle_mousewheel(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, int wheel_delta_x, int wheel_delta_y);
     EventResult handle_doubleclick(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers);
+    EventResult handle_tripleclick(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers);
 
     EventResult handle_drag_and_drop_event(DragEvent::Type, CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, Vector<HTML::SelectedFile> files);
 
@@ -70,6 +71,7 @@ private:
         Optional<CSS::CursorPredefined> cursor_override;
     };
     Optional<Target> target_for_mouse_position(CSSPixelPoint position);
+    void update_mouse_selection(CSSPixelPoint visual_viewport_position);
 
     GC::Ptr<Painting::PaintableBox> paint_root();
     GC::Ptr<Painting::PaintableBox const> paint_root() const;
@@ -82,8 +84,16 @@ private:
 
     GC::Ref<HTML::Navigable> m_navigable;
 
-    bool m_in_mouse_selection { false };
+    enum class SelectionMode : u8 {
+        None,
+        Character,
+        Word,
+        Paragraph,
+    };
+
+    SelectionMode m_selection_mode { SelectionMode::None };
     InputEventsTarget* m_mouse_selection_target { nullptr };
+    GC::Ptr<DOM::Range> m_selection_origin;
 
     GC::Ptr<Painting::Paintable> m_mouse_event_tracking_paintable;
 

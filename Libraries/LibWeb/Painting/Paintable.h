@@ -164,15 +164,11 @@ public:
     };
     [[nodiscard]] SelectionStyle selection_style() const;
 
-    virtual void resolve_paint_properties();
+    MUST_UPCALL virtual void resolve_paint_properties();
 
     [[nodiscard]] String debug_description() const;
 
-    virtual void finalize() override
-    {
-        if (m_list_node.is_in_list())
-            m_list_node.remove();
-    }
+    virtual void finalize() override;
 
     friend class Layout::Node;
 
