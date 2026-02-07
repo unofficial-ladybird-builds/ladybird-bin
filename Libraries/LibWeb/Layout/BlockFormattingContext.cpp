@@ -783,6 +783,7 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
     auto introduce_clearance = clear_floating_boxes(box, {});
     if (introduce_clearance == DidIntroduceClearance::Yes)
         m_margin_state.reset();
+    m_margin_state.update_block_waiting_for_final_y_position();
 
     auto const y = m_y_offset_of_current_block_container.value();
 
@@ -807,17 +808,11 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
         return;
     }
 
-    m_margin_state.update_block_waiting_for_final_y_position();
     CSSPixels margin_top = m_margin_state.current_collapsed_margin();
 
     if (m_margin_state.has_block_container_waiting_for_final_y_position()) {
         // If first child margin top will collapse with margin-top of containing block then margin-top of child is 0
         margin_top = 0;
-    }
-
-    if (independent_formatting_context) {
-        // Margins of elements that establish new formatting contexts do not collapse with their in-flow children
-        m_margin_state.reset();
     }
 
     place_block_level_element_in_normal_flow_vertically(box, y + margin_top);
@@ -879,6 +874,9 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
     }
 
     if (independent_formatting_context) {
+        // Margins of elements that establish new formatting contexts do not collapse with their in-flow children
+        m_margin_state.reset();
+
         // This box establishes a new formatting context. Pass control to it.
         auto inner_available_space = box_state.available_inner_space_or_constraints_from(available_space);
 
@@ -902,6 +900,7 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
         if (box.children_are_inline()) {
             layout_inline_children(as<BlockContainer>(box), space_available_for_children);
         } else {
+            auto registered_block_container_y_position_update_callback = false;
             if (box_state.border_top > 0 || box_state.padding_top > 0) {
                 // margin-top of block container can't collapse with it's children if it has non zero border or padding
                 m_margin_state.reset();
@@ -912,8 +911,14 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
                         place_block_level_element_in_normal_flow_vertically(box, margin_top + y);
                     }
                 });
+                registered_block_container_y_position_update_callback = true;
             }
+
             layout_block_level_children(as<BlockContainer>(box), space_available_for_children);
+
+            if (registered_block_container_y_position_update_callback) {
+                m_margin_state.unregister_block_container_y_position_update_callback();
+            }
         }
     }
 
