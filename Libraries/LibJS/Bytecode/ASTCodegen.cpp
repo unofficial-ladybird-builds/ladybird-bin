@@ -688,12 +688,11 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> AssignmentExpression::g
                     (void)TRY(lhs->generate_bytecode(generator));
                 }
 
-                // FIXME: c. If IsAnonymousFunctionDefinition(AssignmentExpression) and IsIdentifierRef of LeftHandSideExpression are both true, then
-                //           i. Let rval be ? NamedEvaluation of AssignmentExpression with argument lref.[[ReferencedName]].
-
+                // c. If IsAnonymousFunctionDefinition(AssignmentExpression) and IsIdentifierRef of LeftHandSideExpression are both true, then
+                //    i. Let rval be ? NamedEvaluation of AssignmentExpression with argument lref.[[ReferencedName]].
                 // d. Else,
-                // i. Let rref be the result of evaluating AssignmentExpression.
-                // ii. Let rval be ? GetValue(rref).
+                //    i. Let rref be the result of evaluating AssignmentExpression.
+                //    ii. Let rval be ? GetValue(rref).
                 auto rval = TRY([&]() -> Bytecode::CodeGenerationErrorOr<ScopedOperand> {
                     if (lhs->is_identifier()) {
                         return TRY(generator.emit_named_evaluation_if_anonymous_function(*m_rhs, generator.intern_identifier(static_cast<Identifier const&>(*lhs).string())));
@@ -1315,6 +1314,16 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ObjectExpression::gener
             }
         } else {
             auto property_name = TRY(property->key().generate_bytecode(generator)).value();
+
+            // ComputedPropertyName evaluation calls ToPropertyKey, which includes ToPrimitive(hint: string).
+            // This must happen before the value expression is evaluated per the spec for
+            // PropertyDefinitionEvaluation (PropertyDefinition : PropertyName : AssignmentExpression):
+            //   1. Let propKey be ? Evaluation of PropertyName.
+            //   [then] 5/6. Evaluate the AssignmentExpression.
+            // ToPrimitive is the only step in ToPropertyKey with user-observable side effects.
+            // After this, the ToPrimitive inside put_by_value's to_property_key is a no-op.
+            generator.emit<Bytecode::Op::ToPrimitiveWithStringHint>(property_name, property_name);
+
             auto value = TRY(generator.emit_named_evaluation_if_anonymous_function(property->value(), {}, {}, property->is_method()));
 
             generator.emit_put_by_value(object, property_name, value, property_kind, {});
@@ -1462,7 +1471,7 @@ static Bytecode::CodeGenerationErrorOr<void> generate_object_binding_pattern_byt
                 auto copy = generator.allocate_register();
                 generator.emit_with_extra_operand_slots<Bytecode::Op::CopyObjectExcludingProperties>(
                     excluded_property_names.size(), copy, object, excluded_property_names);
-                (void)TRY(generator.emit_store_to_reference(alias.get<NonnullRefPtr<MemberExpression const>>(), object));
+                (void)TRY(generator.emit_store_to_reference(alias.get<NonnullRefPtr<MemberExpression const>>(), copy));
                 return {};
             }
             VERIFY_NOT_REACHED();
@@ -1807,7 +1816,6 @@ static Bytecode::CodeGenerationErrorOr<BaseAndValue> get_base_and_value_from_mem
         // 4. Return the Reference Record { [[Base]]: baseValue, [[ReferencedName]]: propertyKey, [[Strict]]: strict, [[ThisValue]]: actualThis }.
         if (computed_property.has_value()) {
             // 5. Let propertyKey be ? ToPropertyKey(propertyNameValue).
-            // FIXME: This does ToPropertyKey out of order, which is observable by Symbol.toPrimitive!
             generator.emit_get_by_value_with_this(value, super_base, *computed_property, this_value);
         } else {
             // 3. Let propertyKey be StringValue of IdentifierName.
@@ -1895,7 +1903,8 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> CallExpression::generat
                 generator.intern_identifier(identifier.string()));
         }
     } else {
-        // FIXME: this = global object in sloppy mode.
+        // NB: For non-Reference calls, EvaluateCall sets thisValue to undefined.
+        //     OrdinaryCallBindThis coerces undefined to the global object in sloppy mode at runtime.
         original_callee = TRY(m_callee->generate_bytecode(generator)).value();
     }
 
@@ -2655,6 +2664,25 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TaggedTemplateLiteral::
             auto& member_expression = static_cast<MemberExpression const&>(*m_tag);
             auto base_and_value = TRY(get_base_and_value_from_member_expression(generator, member_expression));
             return TagAndThisValue { .tag = base_and_value.value, .this_value = base_and_value.base };
+        }
+
+        if (is<Identifier>(*m_tag)) {
+            auto& identifier = static_cast<Identifier const&>(*m_tag);
+            if (identifier.is_local() || identifier.is_global()) {
+                // Keep the normal Identifier path so local/global tags preserve
+                // TDZ behavior; only non-local identifiers need with-aware
+                // callee/this extraction.
+                auto tag = TRY(m_tag->generate_bytecode(generator)).value();
+                return TagAndThisValue { .tag = tag, .this_value = generator.add_constant(js_undefined()) };
+            }
+
+            auto tag = generator.allocate_register();
+            auto this_value = generator.allocate_register();
+            generator.emit<Bytecode::Op::GetCalleeAndThisFromEnvironment>(
+                tag,
+                this_value,
+                generator.intern_identifier(identifier.string()));
+            return TagAndThisValue { .tag = tag, .this_value = this_value };
         }
 
         auto tag = TRY(m_tag->generate_bytecode(generator)).value();
