@@ -64,11 +64,7 @@ public:
         reg(Register::exception()) = js_special_empty_value();
     }
 
-    void enter_unwind_context();
-    void leave_unwind_context();
     void catch_exception(Operand dst);
-
-    void enter_object_environment(Object&);
 
     Executable& current_executable() { return *m_running_execution_context->executable; }
     Executable const& current_executable() const { return *m_running_execution_context->executable; }

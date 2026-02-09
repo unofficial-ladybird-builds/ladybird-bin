@@ -5395,9 +5395,8 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
             return nullptr;
 
         auto grid_auto_rows = parse_grid_auto_track_sizes(tokens);
-        if (!grid_auto_rows) {
-            grid_auto_rows = GridTrackSizeListStyleValue::create({});
-        }
+        if (grid_auto_rows->as_grid_track_size_list().grid_track_size_list().is_empty())
+            grid_auto_rows = property_initial_value(PropertyID::GridAutoRows);
 
         tokens.discard_whitespace();
         if (!tokens.has_next_token() || !tokens.next_token().is_delim('/'))
@@ -5411,8 +5410,8 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
 
         transaction.commit();
         return ShorthandStyleValue::create(PropertyID::Grid,
-            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridTemplateColumns },
-            { grid_auto_flow.release_nonnull(), grid_auto_rows.release_nonnull(), grid_template_columns.release_nonnull() });
+            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridAutoColumns, PropertyID::GridTemplateAreas, PropertyID::GridTemplateRows, PropertyID::GridTemplateColumns },
+            { grid_auto_flow.release_nonnull(), grid_auto_rows.release_nonnull(), property_initial_value(PropertyID::GridAutoColumns), property_initial_value(PropertyID::GridTemplateAreas), property_initial_value(PropertyID::GridTemplateRows), grid_template_columns.release_nonnull() });
     };
 
     // <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>?
@@ -5435,14 +5434,13 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
             return nullptr;
 
         auto grid_auto_columns = parse_grid_auto_track_sizes(tokens);
-        if (!grid_auto_columns) {
-            grid_auto_columns = GridTrackSizeListStyleValue::create({});
-        }
+        if (grid_auto_columns->as_grid_track_size_list().grid_track_size_list().is_empty())
+            grid_auto_columns = property_initial_value(PropertyID::GridAutoColumns);
 
         transaction.commit();
         return ShorthandStyleValue::create(PropertyID::Grid,
-            { PropertyID::GridTemplateRows, PropertyID::GridAutoFlow, PropertyID::GridAutoColumns },
-            { grid_template_rows.release_nonnull(), grid_auto_flow.release_nonnull(), grid_auto_columns.release_nonnull() });
+            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridAutoColumns, PropertyID::GridTemplateAreas, PropertyID::GridTemplateRows, PropertyID::GridTemplateColumns },
+            { grid_auto_flow.release_nonnull(), property_initial_value(PropertyID::GridAutoRows), grid_auto_columns.release_nonnull(), property_initial_value(PropertyID::GridTemplateAreas), grid_template_rows.release_nonnull(), property_initial_value(PropertyID::GridTemplateColumns) });
     };
 
     if (auto grid = parse_shorthand_branch_1()) {

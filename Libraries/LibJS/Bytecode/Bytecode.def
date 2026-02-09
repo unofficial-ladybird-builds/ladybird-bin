@@ -178,7 +178,8 @@ endop
 
 op CreateLexicalEnvironment < Instruction
     @nothrow
-    m_dst: Optional<Operand>
+    m_dst: Operand
+    m_parent: Operand
     m_capacity: u32
 endop
 
@@ -265,13 +266,8 @@ op End < Instruction
 endop
 
 op EnterObjectEnvironment < Instruction
+    m_dst: Operand
     m_object: Operand
-endop
-
-op EnterUnwindContext < Instruction
-    @terminator
-    @nothrow
-    m_entry_point: Label
 endop
 
 op Exp < Instruction
@@ -331,6 +327,11 @@ op GetGlobal < Instruction
 endop
 
 op GetImportMeta < Instruction
+    @nothrow
+    m_dst: Operand
+endop
+
+op GetLexicalEnvironment < Instruction
     @nothrow
     m_dst: Operand
 endop
@@ -612,15 +613,7 @@ op JumpUndefined < Instruction
     m_false_target: Label
 endop
 
-op LeaveLexicalEnvironment < Instruction
-    @nothrow
-endop
-
 op LeavePrivateEnvironment < Instruction
-    @nothrow
-endop
-
-op LeaveUnwindContext < Instruction
     @nothrow
 endop
 
@@ -689,6 +682,7 @@ op NewClass < Instruction
     m_length: u32
     m_dst: Operand
     m_super_class: Optional<Operand>
+    m_class_environment: Operand
     m_class_expression: ClassExpression const&
     m_lhs_name: Optional<IdentifierTableIndex>
     m_element_keys_count: u32
@@ -942,6 +936,11 @@ op SetGlobal < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
     m_cache_index: u32
+endop
+
+op SetLexicalEnvironment < Instruction
+    @nothrow
+    m_environment: Operand
 endop
 
 op SetLexicalBinding < Instruction

@@ -81,11 +81,10 @@ void Executable::dump() const
         warnln("");
         warnln("Exception handlers:");
         for (auto& handlers : exception_handlers) {
-            warnln("    from {:4x} to {:4x} handler {:4x} finalizer {:4x}",
+            warnln("    from {:4x} to {:4x} handler {:4x}",
                 handlers.start_offset,
                 handlers.end_offset,
-                handlers.handler_offset.value_or(0),
-                handlers.finalizer_offset.value_or(0));
+                handlers.handler_offset);
         }
     }
 
@@ -103,11 +102,17 @@ void Executable::visit_edges(Visitor& visitor)
 
 Optional<Executable::ExceptionHandlers const&> Executable::exception_handlers_for_offset(size_t offset) const
 {
-    for (auto& handlers : exception_handlers) {
-        if (handlers.start_offset <= offset && offset < handlers.end_offset)
-            return handlers;
-    }
-    return {};
+    // NB: exception_handlers is sorted by start_offset.
+    auto* entry = binary_search(exception_handlers, offset, nullptr, [](size_t needle, ExceptionHandlers const& entry) -> int {
+        if (needle < entry.start_offset)
+            return -1;
+        if (needle >= entry.end_offset)
+            return 1;
+        return 0;
+    });
+    if (!entry)
+        return {};
+    return *entry;
 }
 
 UnrealizedSourceRange Executable::source_range_at(size_t offset) const

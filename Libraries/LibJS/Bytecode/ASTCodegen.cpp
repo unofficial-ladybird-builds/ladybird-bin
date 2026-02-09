@@ -2822,6 +2822,10 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
     Optional<Bytecode::Generator::FinallyContext> finally_context;
     Bytecode::BasicBlock* finally_body_block_ptr { nullptr };
 
+    // Capture the lexical environment at try entry for restoration on catch/exception.
+    Optional<ScopedOperand> lexical_environment_at_entry;
+    lexical_environment_at_entry = generator.current_lexical_environment_register();
+
     if (m_finalizer) {
         // Allocate completion record registers.
         auto completion_type = generator.allocate_register();
@@ -2843,18 +2847,19 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
             .parent = generator.current_finally_context(),
             .registered_jumps = {},
             .next_jump_index = Bytecode::Generator::FinallyContext::FIRST_JUMP_INDEX,
+            .lexical_environment_at_entry = lexical_environment_at_entry,
         });
         generator.set_current_finally_context(&*finally_context);
 
         // Generate exception preamble:
         //   Catch completion_value
+        //   SetLexicalEnvironment (restore to try entry)
         //   Mov completion_type, 1 (Throw)
-        //   LeaveUnwindContext
         //   Jump finally_body
         generator.switch_to_basic_block(exception_preamble_block);
         generator.emit<Bytecode::Op::Catch>(completion_value);
+        generator.emit<Bytecode::Op::SetLexicalEnvironment>(*lexical_environment_at_entry);
         generator.emit_mov(completion_type, generator.add_constant(Value(Bytecode::Generator::FinallyContext::THROW)));
-        generator.emit<Bytecode::Op::LeaveUnwindContext>();
         generator.emit<Bytecode::Op::Jump>(Bytecode::Label { finally_body_block });
 
         // Set up unwind context with exception_preamble as finalizer.
@@ -2868,10 +2873,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
 
         auto caught_value = generator.allocate_register();
         generator.emit<Bytecode::Op::Catch>(caught_value);
-
-        if (!m_finalizer) {
-            generator.emit<Bytecode::Op::LeaveUnwindContext>();
-        }
+        generator.emit<Bytecode::Op::SetLexicalEnvironment>(*lexical_environment_at_entry);
 
         // OPTIMIZATION: We avoid creating a lexical environment if the catch clause has no parameter.
         bool did_create_variable_scope_for_catch_clause = false;
@@ -2930,7 +2932,6 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
             if (m_finalizer) {
                 // Normal exit from catch → set completion_type=Normal, jump to finally.
                 generator.emit_mov(finally_context->completion_type, generator.add_constant(Value(Bytecode::Generator::FinallyContext::NORMAL)));
-                generator.emit<Bytecode::Op::LeaveUnwindContext>();
                 generator.emit<Bytecode::Op::Jump>(finally_context->finally_body);
             } else {
                 VERIFY(!next_block);
@@ -2947,7 +2948,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
         if (!m_finalizer) {
             auto const* parent_unwind_context = generator.current_unwind_context();
             if (parent_unwind_context)
-                unwind_context.emplace(generator, parent_unwind_context->finalizer());
+                unwind_context.emplace(generator, parent_unwind_context->handler());
             else
                 unwind_context.emplace(generator, OptionalNone());
         }
@@ -2956,8 +2957,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
 
     auto& target_block = generator.make_block();
     generator.switch_to_basic_block(saved_block);
-    generator.emit<Bytecode::Op::EnterUnwindContext>(Bytecode::Label { target_block });
-    generator.start_boundary(Bytecode::Generator::BlockBoundaryType::Unwind);
+    generator.emit<Bytecode::Op::Jump>(Bytecode::Label { target_block });
     if (m_finalizer)
         generator.start_boundary(Bytecode::Generator::BlockBoundaryType::ReturnToFinally);
 
@@ -2972,23 +2972,20 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
         }
 
         if (m_finalizer) {
-            // Normal exit from try → set completion_type=Normal, leave unwind, jump to finally.
+            // Normal exit from try → set completion_type=Normal, jump to finally.
             generator.emit_mov(finally_context->completion_type, generator.add_constant(Value(Bytecode::Generator::FinallyContext::NORMAL)));
-            generator.emit<Bytecode::Op::LeaveUnwindContext>();
             generator.emit<Bytecode::Op::Jump>(finally_context->finally_body);
         } else {
             VERIFY(unwind_context.has_value());
             unwind_context.clear();
             if (!next_block)
                 next_block = &generator.make_block();
-            generator.emit<Bytecode::Op::LeaveUnwindContext>();
             generator.emit<Bytecode::Op::Jump>(Bytecode::Label { *next_block });
         }
     }
 
     if (m_finalizer)
         generator.end_boundary(Bytecode::Generator::BlockBoundaryType::ReturnToFinally);
-    generator.end_boundary(Bytecode::Generator::BlockBoundaryType::Unwind);
 
     // Now generate the finally body and after-finally dispatch.
     // We deferred this so that registered_jumps from break/continue in the try body are available.
@@ -3184,7 +3181,10 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ClassDeclaration::gener
 Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ClassExpression::generate_bytecode_with_lhs_name(Bytecode::Generator& generator, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst) const
 {
     // NOTE: Step 2 is not a part of NewClass instruction because it is assumed to be done before super class expression evaluation
-    generator.emit<Bytecode::Op::CreateLexicalEnvironment>(OptionalNone {}, 0);
+    auto parent_environment = generator.current_lexical_environment_register();
+    auto class_environment = generator.allocate_register();
+    generator.emit<Bytecode::Op::CreateLexicalEnvironment>(class_environment, parent_environment, 0);
+    generator.push_lexical_environment_register(class_environment);
 
     if (has_name() || !lhs_name.has_value()) {
         // NOTE: Step 3.a is not a part of NewClass instruction because it is assumed to be done before super class expression evaluation
@@ -3224,8 +3224,12 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ClassExpression::genera
         elements.append({ key });
     }
 
+    // Restore parent environment before emitting NewClass.
+    generator.emit<Bytecode::Op::SetLexicalEnvironment>(parent_environment);
+    generator.pop_lexical_environment_register();
+
     auto dst = choose_dst(generator, preferred_dst);
-    generator.emit_with_extra_slots<Op::NewClass, Optional<Operand>>(elements.size(), dst, super_class.has_value() ? super_class->operand() : Optional<Operand> {}, *this, lhs_name, elements);
+    generator.emit_with_extra_slots<Op::NewClass, Optional<Operand>>(elements.size(), dst, super_class.has_value() ? super_class->operand() : Optional<Operand> {}, class_environment, *this, lhs_name, elements);
 
     if (did_emit_private_environment_allocation) {
         generator.emit<Op::LeavePrivateEnvironment>();
@@ -3313,7 +3317,10 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> WithStatement::generate
 {
     Bytecode::Generator::SourceLocationScope scope(generator, *this);
     auto object = TRY(m_object->generate_bytecode(generator)).value();
-    generator.emit<Bytecode::Op::EnterObjectEnvironment>(object);
+
+    auto object_environment = generator.allocate_register();
+    generator.emit<Bytecode::Op::EnterObjectEnvironment>(object_environment, object);
+    generator.push_lexical_environment_register(object_environment);
 
     // EnterObjectEnvironment sets the running execution context's lexical_environment to a new Object Environment.
     generator.start_boundary(Bytecode::Generator::BlockBoundaryType::LeaveLexicalEnvironment);
@@ -3322,9 +3329,10 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> WithStatement::generate
     if (!body_result.has_value())
         body_result = generator.add_constant(js_undefined());
     generator.end_boundary(Bytecode::Generator::BlockBoundaryType::LeaveLexicalEnvironment);
+    generator.pop_lexical_environment_register();
 
     if (!generator.is_current_block_terminated())
-        generator.emit<Bytecode::Op::LeaveLexicalEnvironment>();
+        generator.emit<Bytecode::Op::SetLexicalEnvironment>(generator.current_lexical_environment_register());
 
     return body_result;
 }
