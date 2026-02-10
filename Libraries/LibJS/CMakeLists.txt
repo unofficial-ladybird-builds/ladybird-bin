@@ -2,6 +2,7 @@ include(libjs_generators)
 
 set(SOURCES
     AST.cpp
+    ASTDump.cpp
     Bytecode/ASTCodegen.cpp
     Bytecode/BasicBlock.cpp
     Bytecode/Builtins.cpp
@@ -263,6 +264,7 @@ set(SOURCES
     Runtime/WeakSetPrototype.cpp
     Runtime/WrapForValidIteratorPrototype.cpp
     Runtime/WrappedFunction.cpp
+    ScopeCollector.cpp
     Script.cpp
     SourceCode.cpp
     SourceTextModule.cpp
