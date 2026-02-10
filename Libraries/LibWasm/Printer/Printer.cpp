@@ -732,7 +732,8 @@ void Printer::print(Wasm::TypeSection::Type const& type)
 {
     type.description().visit(
         [&](Wasm::FunctionType const& func) { print(func); },
-        [&](Wasm::StructType const& struct_) { print(struct_); });
+        [&](Wasm::StructType const& struct_) { print(struct_); },
+        [&](Wasm::ArrayType const& array) { print(array); });
 }
 
 void Printer::print(Wasm::StructType const& struct_)
@@ -755,6 +756,18 @@ void Printer::print(Wasm::StructType const& struct_)
     print(")\n");
 }
 
+void Printer::print(Wasm::ArrayType const& array)
+{
+    print_indent();
+    print("(type array \n");
+    {
+        TemporaryChange change { m_indent, m_indent + 1 };
+        print(array.type());
+    }
+    print_indent();
+    print(")\n");
+}
+
 void Printer::print(Wasm::FieldType const& type)
 {
     print_indent();
@@ -770,7 +783,7 @@ void Printer::print(Wasm::FieldType const& type)
 void Printer::print(Wasm::ValueType const& type)
 {
     print_indent();
-    print("(type {})\n", ValueType::kind_name(type.kind()));
+    print("(type {})\n", type.kind_name());
 }
 
 void Printer::print(Wasm::Value const& value, Wasm::ValueType const& type)
@@ -800,6 +813,9 @@ void Printer::print(Wasm::Value const& value, Wasm::ValueType const& type)
                 [](Wasm::Reference::Null const&) { return ByteString("null"); },
                 [](Wasm::Reference::Exception const&) { return ByteString("exception"); },
                 [](auto const& ref) { return ByteString::number(ref.address.value()); }));
+        break;
+    case ValueType::TypeUseReference:
+        print("unsupported-type-use-ref({})", type.unsafe_typeindex());
         break;
     case ValueType::UnsupportedHeapReference:
         print("unsupported-heap-ref");

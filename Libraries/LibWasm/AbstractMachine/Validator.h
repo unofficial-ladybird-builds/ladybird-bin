@@ -25,6 +25,7 @@ struct Context {
     COWVector<TypeSection::Type> types;
     COWVector<FunctionType> functions;
     COWVector<StructType> structs;
+    COWVector<ArrayType> arrays;
     COWVector<TableType> tables;
     COWVector<MemoryType> memories;
     COWVector<GlobalType> globals;
@@ -75,7 +76,7 @@ public:
     ErrorOr<void, ValidationError> validate(TagSection const&);
     ErrorOr<void, ValidationError> validate(FunctionSection const&) { return {}; }
     ErrorOr<void, ValidationError> validate(DataCountSection const&) { return {}; }
-    ErrorOr<void, ValidationError> validate(TypeSection const&) { return {}; }
+    ErrorOr<void, ValidationError> validate(TypeSection const&);
     ErrorOr<void, ValidationError> validate(CustomSection const&) { return {}; }
 
     ErrorOr<void, ValidationError> validate(TypeIndex index) const
@@ -302,11 +303,15 @@ public:
     // Types
     ErrorOr<void, ValidationError> validate(Limits const&, Optional<u64> bound); // n <= bound && m? <= bound
     ErrorOr<FunctionType, ValidationError> validate(BlockType const&);
-    ErrorOr<void, ValidationError> validate(FunctionType const&) { return {}; }
+    ErrorOr<void, ValidationError> validate(FunctionType const&);
+    ErrorOr<void, ValidationError> validate(StructType const&);
+    ErrorOr<void, ValidationError> validate(ArrayType const&);
     ErrorOr<void, ValidationError> validate(TableType const&);
     ErrorOr<void, ValidationError> validate(MemoryType const&);
-    ErrorOr<void, ValidationError> validate(GlobalType const&) { return {}; }
+    ErrorOr<void, ValidationError> validate(GlobalType const&);
     ErrorOr<void, ValidationError> validate(TagType const&);
+    ErrorOr<void, ValidationError> validate(ValueType const&);
+    ErrorOr<void, ValidationError> validate(TypeSection::Type const&);
 
     // Proposal 'memory64'
     ErrorOr<void, ValidationError> take_memory_address(Stack& stack, MemoryType const& memory, Instruction::MemoryArgument const& arg)
@@ -407,7 +412,7 @@ struct AK::Formatter<Wasm::Validator::StackEntry> : public AK::Formatter<StringV
     ErrorOr<void> format(FormatBuilder& builder, Wasm::Validator::StackEntry const& value)
     {
         if (value.is_known)
-            return Formatter<StringView>::format(builder, Wasm::ValueType::kind_name(value.concrete_type.kind()));
+            return Formatter<StringView>::format(builder, value.concrete_type.kind_name());
 
         return Formatter<StringView>::format(builder, "<unknown>"sv);
     }
@@ -425,7 +430,7 @@ template<>
 struct AK::Formatter<Wasm::ValueType> : public AK::Formatter<StringView> {
     ErrorOr<void> format(FormatBuilder& builder, Wasm::ValueType const& value)
     {
-        return Formatter<StringView>::format(builder, Wasm::ValueType::kind_name(value.kind()));
+        return Formatter<StringView>::format(builder, value.kind_name());
     }
 };
 

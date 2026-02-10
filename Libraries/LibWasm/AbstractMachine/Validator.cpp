@@ -43,6 +43,9 @@ ErrorOr<void, ValidationError> Validator::validate(Module& module)
                         },
                         [&](StructType const& struct_) {
                             m_context.structs.append(struct_);
+                        },
+                        [&](ArrayType const& array) {
+                            m_context.arrays.append(array);
                         });
                 } else {
                     return Errors::invalid("TypeIndex"sv);
@@ -142,6 +145,7 @@ ErrorOr<void, ValidationError> Validator::validate(Module& module)
     TRY(validate(module.table_section()));
     TRY(validate(module.code_section()));
     TRY(validate(module.tag_section()));
+    TRY(validate(module.type_section()));
 
     for (auto& entry : module.code_section().functions())
         module.set_minimum_call_record_allocation_size(max(entry.func().body().compiled_instructions.max_call_rec_size, module.minimum_call_record_allocation_size()));
@@ -311,8 +315,18 @@ ErrorOr<void, ValidationError> Validator::validate(TagSection const& section)
     return {};
 }
 
+ErrorOr<void, ValidationError> Validator::validate(TypeSection const& section)
+{
+    for (auto& type : section.types()) {
+        TRY(validate(type));
+    }
+
+    return {};
+}
+
 ErrorOr<void, ValidationError> Validator::validate(TableType const& type)
 {
+    TRY(validate(type.element_type()));
     Optional<u64> bound = type.limits().address_type() == AddressType::I64 ? Optional<u64> {} : (1ull << 32) - 1;
     return validate(type.limits(), bound);
 }
@@ -337,6 +351,55 @@ ErrorOr<void, ValidationError> Validator::validate(Wasm::TagType const& tag_type
     if (!func.results().is_empty())
         return Errors::invalid("TagType"sv);
     return {};
+}
+
+ErrorOr<void, ValidationError> Validator::validate(ValueType const& type)
+{
+    if (type.is_typeuse()) {
+        TRY(validate(type.unsafe_typeindex()));
+    }
+
+    return {};
+}
+
+ErrorOr<void, ValidationError> Validator::validate(TypeSection::Type const& type)
+{
+    return type.description().visit(
+        [&](FunctionType const& function) { return validate(function); },
+        [&](StructType const& struct_) { return validate(struct_); },
+        [&](ArrayType const& array) { return validate(array); });
+}
+
+ErrorOr<void, ValidationError> Validator::validate(FunctionType const& type)
+{
+    for (auto param : type.parameters()) {
+        TRY(validate(param));
+    }
+
+    for (auto param : type.results()) {
+        TRY(validate(param));
+    }
+
+    return {};
+}
+
+ErrorOr<void, ValidationError> Validator::validate(StructType const& type)
+{
+    for (auto field : type.fields()) {
+        TRY(validate(field.type()));
+    }
+
+    return {};
+}
+
+ErrorOr<void, ValidationError> Validator::validate(ArrayType const& array)
+{
+    return validate(array.type().type());
+}
+
+ErrorOr<void, ValidationError> Validator::validate(GlobalType const& type)
+{
+    return validate(type.type());
 }
 
 ErrorOr<FunctionType, ValidationError> Validator::validate(BlockType const& type)

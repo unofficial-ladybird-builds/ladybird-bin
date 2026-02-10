@@ -173,6 +173,7 @@ public:
         FunctionReference,
         ExternReference,
         ExceptionReference,
+        TypeUseReference,
         UnsupportedHeapReference, // Stub for wasm-gc proposal's reference types.
     };
 
@@ -181,18 +182,28 @@ public:
     {
     }
 
+    template<typename T>
+    explicit ValueType(Kind kind, T argument)
+        : m_kind(kind)
+        , m_argument(move(argument))
+    {
+    }
+
     bool operator==(ValueType const&) const = default;
 
-    auto is_reference() const { return m_kind == ExternReference || m_kind == FunctionReference || m_kind == UnsupportedHeapReference; }
+    auto is_reference() const { return m_kind == ExternReference || m_kind == FunctionReference || m_kind == TypeUseReference || m_kind == UnsupportedHeapReference; }
     auto is_vector() const { return m_kind == V128; }
     auto is_numeric() const { return !is_reference() && !is_vector(); }
+    auto is_typeuse() const { return m_kind == TypeUseReference; }
     auto kind() const { return m_kind; }
+
+    auto unsafe_typeindex() const { return m_argument.unsafe_get<TypeIndex>(); }
 
     static ParseResult<ValueType> parse(Stream& stream);
 
-    static ByteString kind_name(Kind kind)
+    ByteString kind_name() const
     {
-        switch (kind) {
+        switch (m_kind) {
         case I32:
             return "i32";
         case I64:
@@ -209,6 +220,8 @@ public:
             return "externref";
         case ExceptionReference:
             return "exnref";
+        case TypeUseReference:
+            return ByteString::formatted("ref null {}", unsafe_typeindex().value());
         case UnsupportedHeapReference:
             return "todo.heapref";
         }
@@ -217,6 +230,7 @@ public:
 
 private:
     Kind m_kind;
+    Variant<TypeIndex, Empty> m_argument;
 };
 
 // https://webassembly.github.io/spec/core/bikeshed/#result-types%E2%91%A2
@@ -287,6 +301,22 @@ public:
 
 private:
     Vector<FieldType> m_fields;
+};
+
+// https://webassembly.github.io/spec/core/bikeshed/#composite-types%E2%91%A0
+class ArrayType {
+public:
+    ArrayType(FieldType type)
+        : m_type(type)
+    {
+    }
+
+    auto& type() const { return m_type; }
+
+    static ParseResult<ArrayType> parse(ConstrainedStream& stream);
+
+private:
+    FieldType m_type;
 };
 
 // https://webassembly.github.io/memory64/core/bikeshed/#address-type%E2%91%A0
@@ -791,7 +821,7 @@ class TypeSection {
 public:
     class Type {
     private:
-        using TypeDesc = Variant<FunctionType, StructType>;
+        using TypeDesc = Variant<FunctionType, StructType, ArrayType>;
 
     public:
         Type(TypeDesc type)
@@ -812,7 +842,8 @@ public:
         {
             return m_description.visit(
                 [](FunctionType const&) -> ByteString { return "function type"; },
-                [](StructType const&) -> ByteString { return "struct type"; });
+                [](StructType const&) -> ByteString { return "struct type"; },
+                [](ArrayType const&) -> ByteString { return "array type"; });
         }
 
         static ParseResult<Type> parse(ConstrainedStream& stream);

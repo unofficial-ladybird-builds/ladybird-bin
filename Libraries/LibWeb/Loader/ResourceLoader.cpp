@@ -11,11 +11,11 @@
 #include <LibCore/Resource.h>
 #include <LibCore/System.h>
 #include <LibGC/Function.h>
+#include <LibHTTP/Cookie/Cookie.h>
+#include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibRequests/Request.h>
 #include <LibRequests/RequestClient.h>
 #include <LibURL/Parser.h>
-#include <LibWeb/Cookie/Cookie.h>
-#include <LibWeb/Cookie/ParsedCookie.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
 #include <LibWeb/Loader/ContentFilter.h>
@@ -110,11 +110,11 @@ static void store_response_cookies(Page& page, URL::URL const& url, StringView s
     if (decoded_cookie.is_error())
         return;
 
-    auto cookie = Cookie::parse_cookie(url, decoded_cookie.value());
+    auto cookie = HTTP::Cookie::parse_cookie(url, decoded_cookie.value());
     if (!cookie.has_value())
         return;
 
-    page.client().page_did_set_cookie(url, cookie.value(), Cookie::Source::Http);
+    page.client().page_did_set_cookie(url, cookie.value(), HTTP::Cookie::Source::Http);
 }
 
 static NonnullRefPtr<HTTP::HeaderList> response_headers_for_file(StringView path, Optional<time_t> const& modified_time)
@@ -471,7 +471,7 @@ RefPtr<Requests::Request> ResourceLoader::start_network_request(LoadRequest cons
         return nullptr;
     }
 
-    auto protocol_request = m_request_client->start_request(request.method(), request.url().value(), request.headers(), request.body(), request.cache_mode(), proxy);
+    auto protocol_request = m_request_client->start_request(request.method(), request.url().value(), request.headers(), request.body(), request.cache_mode(), request.include_credentials(), proxy);
     if (!protocol_request) {
         log_failure(request, "Failed to initiate load"sv);
         return nullptr;
@@ -501,7 +501,7 @@ void ResourceLoader::handle_network_response_headers(LoadRequest const& request,
     if (!request.page())
         return;
 
-    if (request.store_set_cookie_headers()) {
+    if (request.include_credentials() == HTTP::Cookie::IncludeCredentials::Yes) {
         // From https://fetch.spec.whatwg.org/#concept-http-network-fetch:
         // 15. If includeCredentials is true, then the user agent should parse and store response
         //     `Set-Cookie` headers given request and response.
