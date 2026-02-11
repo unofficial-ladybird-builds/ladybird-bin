@@ -412,6 +412,7 @@ void HTMLTextAreaElement::form_associated_element_attribute_changed(FlyString co
     if (name == HTML::AttributeNames::placeholder) {
         if (m_placeholder_text_node)
             m_placeholder_text_node->set_data(Utf16String::from_utf8(value.value_or(String {})));
+        update_placeholder_visibility();
     } else if (name == HTML::AttributeNames::maxlength) {
         handle_maxlength_attribute();
     }
@@ -475,6 +476,16 @@ bool HTMLTextAreaElement::is_mutable() const
 {
     // A textarea element is mutable if it is neither disabled nor has a readonly attribute specified.
     return enabled() && !has_attribute(AttributeNames::readonly);
+}
+
+// https://html.spec.whatwg.org/multipage/form-elements.html#attr-textarea-placeholder
+Optional<String> HTMLTextAreaElement::placeholder_value() const
+{
+    if (!m_text_node || !m_text_node->data().is_empty())
+        return {};
+    if (!has_attribute(HTML::AttributeNames::placeholder))
+        return {};
+    return get_attribute_value(HTML::AttributeNames::placeholder);
 }
 
 GC::Ptr<Layout::Node> HTMLTextAreaElement::create_layout_node(GC::Ref<CSS::ComputedProperties> style)
