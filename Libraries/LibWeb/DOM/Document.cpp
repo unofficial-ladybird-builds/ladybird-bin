@@ -2627,6 +2627,8 @@ void Document::set_focused_area(GC::Ptr<Node> node)
     if (new_focused_element)
         new_focused_element->did_receive_focus();
 
+    reset_cursor_blink_cycle();
+
     if (paintable())
         paintable()->set_needs_display();
 
@@ -6726,7 +6728,10 @@ GC::Ptr<DOM::Position> Document::cursor_position() const
 void Document::reset_cursor_blink_cycle()
 {
     m_cursor_blink_state = true;
-    m_cursor_blink_timer->restart();
+
+    // In testing mode, disable timed blinking so we can deterministically generate display lists.
+    if (!HTML::Window::in_test_mode())
+        m_cursor_blink_timer->restart();
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#doc-container-document

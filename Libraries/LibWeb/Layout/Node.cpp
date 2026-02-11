@@ -1146,7 +1146,7 @@ bool NodeWithStyle::is_body() const
     return dom_node() && dom_node() == document().body();
 }
 
-static bool overflow_value_makes_box_a_scroll_container(CSS::Overflow overflow)
+bool overflow_value_makes_box_a_scroll_container(CSS::Overflow overflow)
 {
     switch (overflow) {
     case CSS::Overflow::Clip:
@@ -1421,6 +1421,10 @@ bool NodeWithStyleAndBoxModelMetrics::should_create_inline_continuation() const
 
     // This node must not have `display: contents`; inline continuation gets handled by its children.
     if (display().is_contents())
+        return false;
+
+    // Internal table display types and table captions are handled by the table fixup algorithm.
+    if (display().is_internal_table() || display().is_table_caption())
         return false;
 
     // Parent element must not be <foreignObject>

@@ -369,6 +369,7 @@ ResizeObserverSize
 Response
 SVGAElement
 SVGAnimatedEnumeration
+SVGAnimatedInteger
 SVGAnimatedLength
 SVGAnimatedLengthList
 SVGAnimatedNumber
@@ -400,6 +401,7 @@ SVGFEMergeElement
 SVGFEMergeNodeElement
 SVGFEMorphologyElement
 SVGFEOffsetElement
+SVGFETurbulenceElement
 SVGFilterElement
 SVGForeignObjectElement
 SVGGElement

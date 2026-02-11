@@ -70,8 +70,9 @@ public:
     };
 
     CSSPixelPoint scroll_offset() const;
-    [[nodiscard]] ScrollHandled set_scroll_offset(CSSPixelPoint);
-    [[nodiscard]] ScrollHandled scroll_by(int delta_x, int delta_y);
+    ScrollHandled set_scroll_offset(CSSPixelPoint);
+    ScrollHandled scroll_by(int delta_x, int delta_y);
+    void scroll_into_view(CSSPixelRect);
 
     void set_offset(CSSPixelPoint);
     void set_offset(float x, float y) { set_offset({ x, y }); }

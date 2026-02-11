@@ -18,10 +18,10 @@
 #include <LibURL/Parser.h>
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Locale.h>
-#include <LibWeb/Animations/Animation.h>
 #include <LibWeb/Bindings/ElementPrototype.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/CSS/CSSAnimation.h>
 #include <LibWeb/CSS/CSSStyleProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/CountersSet.h>
@@ -1922,6 +1922,18 @@ bool Element::is_potentially_scrollable(TreatOverflowClipOnBodyParentAsOverflowH
     return true;
 }
 
+bool Element::is_scroll_container() const
+{
+    // NB: We should only call this if we know that computed_properties has already been computed
+    VERIFY(computed_properties());
+
+    if (is_document_element())
+        return true;
+
+    return Layout::overflow_value_makes_box_a_scroll_container(computed_properties()->overflow_x())
+        || Layout::overflow_value_makes_box_a_scroll_container(computed_properties()->overflow_y());
+}
+
 // https://drafts.csswg.org/cssom-view/#dom-element-scrolltop
 double Element::scroll_top() const
 {
@@ -2061,7 +2073,7 @@ void Element::set_scroll_left(double x)
     // FIXME: Implement this in terms of calling "scroll the element".
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_x(CSSPixels::nearest_value_for(x));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
 }
 
 void Element::set_scroll_top(double y)
@@ -2118,7 +2130,7 @@ void Element::set_scroll_top(double y)
     // FIXME: Implement this in terms of calling "scroll the element".
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_y(CSSPixels::nearest_value_for(y));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scrollwidth
@@ -3380,7 +3392,7 @@ GC::Ref<WebIDL::Promise> Element::scroll(double x, double y)
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_x(CSSPixels::nearest_value_for(x));
     scroll_offset.set_y(CSSPixels::nearest_value_for(y));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
     auto scroll_promise = WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
     // 12. Return scrollPromise.
@@ -4395,7 +4407,7 @@ void Element::play_or_cancel_animations_after_display_property_change()
 
     auto has_display_none_inclusive_ancestor = this->has_inclusive_ancestor_with_display_none();
 
-    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<Animations::Animation>>& animations) {
+    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<CSS::CSSAnimation>>& animations) {
         for (auto& [_, animation] : animations) {
             if (has_display_none_inclusive_ancestor) {
                 animation->cancel();

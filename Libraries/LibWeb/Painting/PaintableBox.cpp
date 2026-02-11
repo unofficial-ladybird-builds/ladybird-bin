@@ -136,8 +136,6 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     if (!scrollable_overflow_rect.has_value())
         return ScrollHandled::No;
 
-    document().set_needs_to_refresh_scroll_state(true);
-
     auto padding_rect = absolute_padding_box_rect();
     auto max_x_offset = max(scrollable_overflow_rect->width() - padding_rect.width(), 0);
     auto max_y_offset = max(scrollable_overflow_rect->height() - padding_rect.height(), 0);
@@ -148,6 +146,15 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     // FIXME: If there is horizontal and vertical scroll ignore only part of the new offset
     if (offset.y() < 0 || scroll_offset() == offset)
         return ScrollHandled::No;
+
+    if (is_viewport_paintable()) {
+        auto navigable = document().navigable();
+        VERIFY(navigable);
+        navigable->perform_scroll_of_viewport_scrolling_box(offset);
+        return ScrollHandled::Yes;
+    }
+
+    document().set_needs_to_refresh_scroll_state(true);
 
     auto& node = layout_node();
     if (auto pseudo_element = node.generated_for_pseudo_element(); pseudo_element.has_value()) {
@@ -192,6 +199,28 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
 PaintableBox::ScrollHandled PaintableBox::scroll_by(int delta_x, int delta_y)
 {
     return set_scroll_offset(scroll_offset().translated(delta_x, delta_y));
+}
+
+void PaintableBox::scroll_into_view(CSSPixelRect rect)
+{
+    auto scrollport = absolute_padding_box_rect();
+    auto current_offset = scroll_offset();
+
+    // Both rect and scrollport are in layout coordinate space (not scroll-adjusted).
+    auto content_rect = rect.translated(-scrollport.x(), -scrollport.y());
+    auto new_offset = current_offset;
+
+    if (content_rect.right() > current_offset.x() + scrollport.width())
+        new_offset.set_x(content_rect.right() - scrollport.width());
+    else if (content_rect.left() < current_offset.x())
+        new_offset.set_x(content_rect.left());
+
+    if (content_rect.bottom() > current_offset.y() + scrollport.height())
+        new_offset.set_y(content_rect.bottom() - scrollport.height());
+    else if (content_rect.top() < current_offset.y())
+        new_offset.set_y(content_rect.top());
+
+    set_scroll_offset(new_offset);
 }
 
 void PaintableBox::set_offset(CSSPixelPoint offset)
@@ -392,6 +421,9 @@ CSSPixels PaintableBox::available_scrollbar_length(ScrollDirection direction, Ch
 Optional<CSSPixelRect> PaintableBox::absolute_scrollbar_rect(ScrollDirection direction, bool with_gutter, ChromeMetrics const& metrics) const
 {
     if (!could_be_scrolled_by_wheel_event(direction))
+        return {};
+
+    if (computed_values().scrollbar_width() == CSS::ScrollbarWidth::None)
         return {};
 
     bool is_horizontal = direction == ScrollDirection::Horizontal;
@@ -888,13 +920,9 @@ void PaintableBox::scroll_to_mouse_position(CSSPixelPoint position, ChromeMetric
     auto scroll_position_in_pixels = CSSPixels::nearest_value_for(scroll_position * (scrollable_overflow_size - padding_size));
 
     // Set the new scroll offset.
-    auto new_scroll_offset = is_viewport_paintable() ? document().navigable()->viewport_scroll_offset() : scroll_offset();
+    auto new_scroll_offset = scroll_offset();
     new_scroll_offset.set_primary_offset_for_orientation(orientation, scroll_position_in_pixels);
-
-    if (is_viewport_paintable())
-        document().navigable()->perform_scroll_of_viewport_scrolling_box(new_scroll_offset);
-    else
-        (void)set_scroll_offset(new_scroll_offset);
+    set_scroll_offset(new_scroll_offset);
 }
 
 bool PaintableBox::handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned, unsigned, int wheel_delta_x, int wheel_delta_y)

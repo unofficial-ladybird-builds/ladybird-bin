@@ -806,6 +806,8 @@ static GC::Ref<CSS::CSSStyleProperties> inner_text_style_when_visible()
                 width: 100%;
                 height: 1lh;
                 align-items: center;
+                overflow: auto;
+                scrollbar-width: none;
                 text-overflow: clip;
                 white-space: nowrap;
             )~~~"sv);
@@ -1143,6 +1145,8 @@ void HTMLInputElement::create_text_input_shadow_tree()
                 width: 100%;
                 height: 1lh;
                 align-items: center;
+                overflow: auto;
+                scrollbar-width: none;
                 text-overflow: clip;
                 white-space: nowrap;
             )~~~"sv);
@@ -1468,8 +1472,12 @@ void HTMLInputElement::did_receive_focus()
     if (m_placeholder_text_node)
         m_placeholder_text_node->invalidate_style(DOM::StyleInvalidationReason::DidReceiveFocus);
 
-    if (has_selectable_text())
-        document().get_selection()->remove_all_ranges();
+    if (has_selectable_text()) {
+        if (document().last_focus_trigger() == FocusTrigger::Key)
+            MUST(select());
+        else
+            document().get_selection()->remove_all_ranges();
+    }
 }
 
 void HTMLInputElement::did_lose_focus()

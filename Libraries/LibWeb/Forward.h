@@ -17,6 +17,7 @@
 
 namespace Web {
 
+class AutoScrollHandler;
 class CSSPixels;
 class DisplayListRecordingContext;
 class DragAndDropEventHandler;
@@ -1125,6 +1126,7 @@ namespace Web::SVG {
 
 class Path;
 class SVGAnimatedEnumeration;
+class SVGAnimatedInteger;
 class SVGAnimatedLength;
 class SVGAnimatedLengthList;
 class SVGAnimatedNumber;
@@ -1151,6 +1153,7 @@ class SVGFEFuncRElement;
 class SVGFEGaussianBlurElement;
 class SVGFEImageElement;
 class SVGFEMorphologyElement;
+class SVGFETurbulenceElement;
 class SVGFilterElement;
 class SVGFitToViewBox;
 class SVGForeignObjectElement;

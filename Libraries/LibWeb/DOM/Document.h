@@ -75,6 +75,7 @@ enum class InvalidateLayoutTreeReason {
 [[nodiscard]] StringView to_string(InvalidateLayoutTreeReason);
 
 #define ENUMERATE_UPDATE_LAYOUT_REASONS(X)    \
+    X(AutoScrollSelection)                    \
     X(CanvasRenderingContext2DSetFilter)      \
     X(CanvasRenderingContext2DSetFillStyle)   \
     X(CanvasRenderingContext2DSetShadowColor) \
@@ -131,6 +132,7 @@ enum class InvalidateLayoutTreeReason {
     X(ResolvedCSSStyleDeclarationProperty)    \
     X(SVGDecodedImageDataRender)              \
     X(SVGGraphicsElementGetBBox)              \
+    X(ScrollFocusIntoView)                    \
     X(SourceSetNormalizeSourceDensities)      \
     X(WindowScroll)
 
