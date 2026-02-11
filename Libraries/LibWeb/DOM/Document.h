@@ -813,6 +813,8 @@ public:
     void set_needs_to_resolve_paint_only_properties() { m_needs_to_resolve_paint_only_properties = true; }
     void set_needs_animated_style_update() { m_needs_animated_style_update = true; }
 
+    void set_needs_invalidation_of_elements_affected_by_has() { m_needs_invalidation_of_elements_affected_by_has = true; }
+
     void set_needs_accumulated_visual_contexts_update(bool value) { m_needs_accumulated_visual_contexts_update = value; }
     bool needs_accumulated_visual_contexts_update() const { return m_needs_accumulated_visual_contexts_update; }
 
@@ -830,8 +832,19 @@ public:
 
     void register_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot&);
     void unregister_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot&);
-    void for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback);
-    void for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback) const;
+    template<typename Callback>
+    void for_each_shadow_root(Callback&& callback)
+    {
+        for (auto& shadow_root : m_shadow_roots)
+            callback(shadow_root);
+    }
+
+    template<typename Callback>
+    void for_each_shadow_root(Callback&& callback) const
+    {
+        for (auto& shadow_root : m_shadow_roots)
+            callback(const_cast<ShadowRoot&>(shadow_root));
+    }
 
     void add_an_element_to_the_top_layer(GC::Ref<Element>);
     void request_an_element_to_be_remove_from_the_top_layer(GC::Ref<Element>);
@@ -1072,6 +1085,7 @@ private:
     bool m_active_parser_was_aborted { false };
 
     bool m_has_been_destroyed { false };
+    bool m_has_fired_document_became_inactive { false };
 
     bool m_has_been_browsing_context_associated { false };
 
@@ -1296,6 +1310,7 @@ private:
 
     bool m_needs_to_resolve_paint_only_properties { true };
     bool m_needs_accumulated_visual_contexts_update { false };
+    bool m_needs_invalidation_of_elements_affected_by_has { false };
 
     mutable GC::Ptr<WebIDL::ObservableArray> m_adopted_style_sheets;
 

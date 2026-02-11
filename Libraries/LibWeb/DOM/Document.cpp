@@ -1454,6 +1454,8 @@ void Document::update_layout(UpdateLayoutReason reason)
 
     update_style();
 
+    auto const needs_layout_tree_rebuild = !m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update();
+
     auto svg_roots_to_relayout = move(m_svg_roots_needing_relayout);
 
     if (m_layout_root && !m_layout_root->needs_layout_update() && svg_roots_to_relayout.is_empty())
@@ -1464,7 +1466,7 @@ void Document::update_layout(UpdateLayoutReason reason)
         return;
 
     // Partial SVG relayout
-    if (m_layout_root && !svg_roots_to_relayout.is_empty() && !m_layout_root->needs_layout_update() && !needs_layout_tree_update() && !child_needs_layout_tree_update() && !needs_full_layout_tree_update()) {
+    if (!needs_layout_tree_rebuild && !svg_roots_to_relayout.is_empty() && !m_layout_root->needs_layout_update()) {
         for (auto const& svg_root : svg_roots_to_relayout)
             relayout_svg_root(*svg_root);
 
@@ -1487,7 +1489,7 @@ void Document::update_layout(UpdateLayoutReason reason)
 
     auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
 
-    if (!m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update()) {
+    if (needs_layout_tree_rebuild) {
         Layout::TreeBuilder tree_builder;
         m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
 
@@ -1688,10 +1690,13 @@ void Document::update_style()
     // style change event. [CSS-Transitions-2]
     m_transition_generation++;
 
-    style_scope().invalidate_style_of_elements_affected_by_has();
-    for_each_shadow_root([&](auto& shadow_root) {
-        shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
-    });
+    if (m_needs_invalidation_of_elements_affected_by_has) {
+        m_needs_invalidation_of_elements_affected_by_has = false;
+        style_scope().invalidate_style_of_elements_affected_by_has();
+        for_each_shadow_root([&](auto& shadow_root) {
+            shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
+        });
+    }
 
     if (!m_style_invalidator->has_pending_invalidations() && !needs_full_style_update() && !needs_style_update() && !child_needs_style_update())
         return;
@@ -4315,6 +4320,21 @@ void Document::destroy()
     // 2. Abort document.
     abort();
 
+    // AD-HOC: Notify document observers that this document became inactive.
+    //         This allows observers (e.g. HTMLImageElement) to clear resources like
+    //         DocumentLoadEventDelayers that would otherwise block the parent
+    //         document's load event forever.
+    //         Note: did_stop_being_active_document_in_navigable() handles the navigation case,
+    //         but document destruction (e.g. iframe removal) takes a different path.
+    //         The flag ensures we don't fire the callback twice for the same document
+    //         (once from navigation, then again from destruction).
+    if (!m_has_fired_document_became_inactive) {
+        m_has_fired_document_became_inactive = true;
+        notify_each_document_observer([&](auto const& document_observer) {
+            return document_observer.document_became_inactive();
+        });
+    }
+
     // 3. Set document's salvageable state to false.
     m_salvageable = false;
 
@@ -4668,6 +4688,15 @@ void Document::unload_a_document_and_its_descendants(GC::Ptr<Document> new_docum
 
     Vector<GC::Root<HTML::Navigable>> descendant_navigables;
     for (auto& other_navigable : HTML::all_navigables()) {
+        // AD-HOC: Skip destroyed navigables. When an iframe is removed,
+        //         destroy_the_child_navigable() marks its navigable as destroyed
+        //         synchronously, but removal from all_navigables() happens later
+        //         in an async callback. If we count destroyed navigables here,
+        //         the unload tasks we queue for them can be removed by
+        //         Document::destroy() (which clears tasks for its document),
+        //         causing the spin_until below to wait forever.
+        if (other_navigable->has_been_destroyed())
+            continue;
         if (navigable->is_ancestor_of(*other_navigable))
             descendant_navigables.append(other_navigable);
     }
@@ -4732,9 +4761,12 @@ void Document::did_stop_being_active_document_in_navigable()
 {
     tear_down_layout_tree();
 
-    notify_each_document_observer([&](auto const& document_observer) {
-        return document_observer.document_became_inactive();
-    });
+    if (!m_has_fired_document_became_inactive) {
+        m_has_fired_document_became_inactive = true;
+        notify_each_document_observer([&](auto const& document_observer) {
+            return document_observer.document_became_inactive();
+        });
+    }
 }
 
 void Document::increment_throw_on_dynamic_markup_insertion_counter(Badge<HTML::HTMLParser>)
@@ -6377,18 +6409,6 @@ void Document::register_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot& sha
 void Document::unregister_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot& shadow_root)
 {
     m_shadow_roots.remove(shadow_root);
-}
-
-void Document::for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback)
-{
-    for (auto& shadow_root : m_shadow_roots)
-        callback(shadow_root);
-}
-
-void Document::for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback) const
-{
-    for (auto& shadow_root : m_shadow_roots)
-        callback(const_cast<ShadowRoot&>(shadow_root));
 }
 
 bool Document::is_decoded_svg() const
