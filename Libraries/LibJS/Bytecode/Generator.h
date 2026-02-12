@@ -21,6 +21,7 @@
 #include <LibJS/Bytecode/StringTable.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/FunctionKind.h>
+#include <LibJS/Runtime/SharedFunctionInstanceData.h>
 #include <LibRegex/Regex.h>
 
 namespace JS::Bytecode {
@@ -47,12 +48,14 @@ public:
 
     [[nodiscard]] ScopedOperand allocate_register();
     [[nodiscard]] ScopedOperand local(Identifier::Local const&);
+    [[nodiscard]] ScopedOperand local(FunctionLocal const&);
     [[nodiscard]] ScopedOperand accumulator();
     [[nodiscard]] ScopedOperand this_value();
 
     void free_register(Register);
 
     void set_local_initialized(Identifier::Local const&);
+    void set_local_initialized(FunctionLocal const&);
     [[nodiscard]] bool is_local_initialized(u32 local_index) const;
     [[nodiscard]] bool is_local_initialized(Identifier::Local const&) const;
     [[nodiscard]] bool is_local_lexically_declared(Identifier::Local const& local) const;
@@ -206,6 +209,9 @@ public:
     void push_home_object(ScopedOperand);
     void pop_home_object();
     void emit_new_function(ScopedOperand dst, JS::FunctionExpression const&, Optional<IdentifierTableIndex> lhs_name, bool is_method);
+
+    u32 register_shared_function_data(GC::Ref<SharedFunctionInstanceData>);
+    u32 register_class_blueprint(ClassBlueprint);
 
     CodeGenerationErrorOr<ScopedOperand> emit_named_evaluation_if_anonymous_function(Expression const&, Optional<IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst = {}, bool is_method = false);
 
@@ -510,6 +516,9 @@ private:
     bool m_builtin_abstract_operations_enabled { false };
 
     GC::Ptr<SharedFunctionInstanceData const> m_shared_function_instance_data;
+
+    Vector<GC::Root<SharedFunctionInstanceData>> m_shared_function_data;
+    Vector<ClassBlueprint> m_class_blueprints;
 
     Optional<PropertyKeyTableIndex> m_length_identifier;
 };

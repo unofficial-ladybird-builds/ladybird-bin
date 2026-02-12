@@ -25,6 +25,7 @@
 #include <LibJS/Runtime/AsyncFromSyncIterator.h>
 #include <LibJS/Runtime/AsyncFromSyncIteratorPrototype.h>
 #include <LibJS/Runtime/BigInt.h>
+#include <LibJS/Runtime/ClassConstruction.h>
 #include <LibJS/Runtime/CompletionCell.h>
 #include <LibJS/Runtime/DeclarativeEnvironment.h>
 #include <LibJS/Runtime/ECMAScriptFunctionObject.h>
@@ -119,16 +120,14 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
 
     // NOTE: Spec steps are rearranged in order to compute number of registers+constants+locals before construction of the execution context.
 
-    // 11. Let script be scriptRecord.[[ECMAScriptCode]].
-    auto& script = script_record.parse_node();
-
     // 12. Let result be Completion(GlobalDeclarationInstantiation(script, globalEnv)).
-    auto instantiation_result = script.global_declaration_instantiation(vm, global_environment);
+    auto instantiation_result = script_record.global_declaration_instantiation(vm, global_environment);
     Completion result = instantiation_result.is_throw_completion() ? instantiation_result.throw_completion() : normal_completion(js_undefined());
 
-    GC::Ptr<Executable> executable;
-    if (result.type() == Completion::Type::Normal) {
-        auto executable_result = JS::Bytecode::Generator::generate_from_ast_node(vm, script, {});
+    // 11. Let script be scriptRecord.[[ECMAScriptCode]].
+    GC::Ptr<Executable> executable = script_record.cached_executable();
+    if (!executable && result.type() == Completion::Type::Normal) {
+        auto executable_result = JS::Bytecode::Generator::generate_from_ast_node(vm, *script_record.parse_node(), {});
 
         if (executable_result.is_error()) {
             if (auto error_string = executable_result.error().to_string(); error_string.is_error())
@@ -139,6 +138,10 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
                 result = vm.template throw_completion<JS::InternalError>(error_string.release_value());
         } else {
             executable = executable_result.release_value();
+            script_record.cache_executable(*executable);
+
+            // Drop the AST now that we have compiled bytecode.
+            script_record.drop_ast();
 
             if (g_dump_bytecode)
                 executable->dump();
@@ -910,56 +913,38 @@ inline ThrowCompletionOr<void> throw_if_needed_for_call(Interpreter& interpreter
     return {};
 }
 
-// 15.2.5 Runtime Semantics: InstantiateOrdinaryFunctionExpression, https://tc39.es/ecma262/#sec-runtime-semantics-instantiateordinaryfunctionexpression
-static Value instantiate_ordinary_function_expression(Interpreter& interpreter, FunctionNode const& function_node, Utf16FlyString const& given_name)
-{
-    auto own_name = function_node.name();
-    auto has_own_name = !own_name.is_empty();
-
-    auto const& used_name = has_own_name ? own_name : given_name;
-
-    auto environment = GC::Ref { *interpreter.running_execution_context().lexical_environment };
-    if (has_own_name) {
-        environment = new_declarative_environment(*environment);
-        MUST(environment->create_immutable_binding(interpreter.vm(), own_name, false));
-    }
-
-    auto private_environment = interpreter.running_execution_context().private_environment;
-
-    // NB: SetFunctionName and MakeConstructor are performed by ECMAScriptFunctionObject::initialize().
-    auto closure = ECMAScriptFunctionObject::create_from_function_node(function_node, used_name, interpreter.realm(), environment, private_environment);
-
-    if (has_own_name)
-        MUST(environment->initialize_binding(interpreter.vm(), own_name, closure, Environment::InitializeBindingHint::Normal));
-
-    return closure;
-}
-
-inline Value new_function(Interpreter& interpreter, FunctionNode const& function_node, Optional<IdentifierTableIndex> const lhs_name, Optional<Operand> const home_object)
+inline Value new_function(Interpreter& interpreter, u32 shared_function_data_index, Optional<Operand> const home_object)
 {
     auto& vm = interpreter.vm();
-    Value value;
+    auto& shared_data = *interpreter.current_executable().shared_function_data[shared_function_data_index];
+    auto& realm = *vm.current_realm();
 
-    if (!function_node.has_name()) {
-        if (lhs_name.has_value())
-            value = instantiate_ordinary_function_expression(interpreter, function_node, interpreter.get_identifier(lhs_name.value()));
-        else
-            value = instantiate_ordinary_function_expression(interpreter, function_node, {});
-    } else {
-        value = ECMAScriptFunctionObject::create_from_function_node(
-            function_node,
-            function_node.name(),
-            *vm.current_realm(),
-            vm.lexical_environment(),
-            vm.running_execution_context().private_environment);
-    }
+    GC::Ref<Object> prototype = [&]() -> GC::Ref<Object> {
+        switch (shared_data.m_kind) {
+        case FunctionKind::Normal:
+            return realm.intrinsics().function_prototype();
+        case FunctionKind::Generator:
+            return realm.intrinsics().generator_function_prototype();
+        case FunctionKind::Async:
+            return realm.intrinsics().async_function_prototype();
+        case FunctionKind::AsyncGenerator:
+            return realm.intrinsics().async_generator_function_prototype();
+        }
+        VERIFY_NOT_REACHED();
+    }();
+
+    auto function = ECMAScriptFunctionObject::create_from_function_data(
+        realm, shared_data,
+        vm.lexical_environment(),
+        vm.running_execution_context().private_environment,
+        *prototype);
 
     if (home_object.has_value()) {
         auto home_object_value = interpreter.get(home_object.value());
-        as<ECMAScriptFunctionObject>(value.as_function()).set_home_object(&home_object_value.as_object());
+        function->set_home_object(&home_object_value.as_object());
     }
 
-    return value;
+    return function;
 }
 
 template<PutKind kind>
@@ -2232,7 +2217,8 @@ void CreateArguments::execute_impl(Bytecode::Interpreter& interpreter) const
     auto passed_arguments = ReadonlySpan<Value> { arguments.data(), interpreter.running_execution_context().passed_argument_count };
     Object* arguments_object;
     if (m_kind == ArgumentsKind::Mapped) {
-        arguments_object = create_mapped_arguments_object(interpreter.vm(), *function, function->formal_parameters(), passed_arguments, *environment);
+        auto const& ecma_function = static_cast<ECMAScriptFunctionObject const&>(*function);
+        arguments_object = create_mapped_arguments_object(interpreter.vm(), *function, ecma_function.parameter_names_for_mapped_arguments(), passed_arguments, *environment);
     } else {
         arguments_object = create_unmapped_arguments_object(interpreter.vm(), passed_arguments);
     }
@@ -2751,7 +2737,7 @@ ThrowCompletionOr<void> SuperCallWithArgumentArray::execute_impl(Bytecode::Inter
 
 void NewFunction::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    interpreter.set(dst(), new_function(interpreter, m_function_node, m_lhs_name, m_home_object));
+    interpreter.set(dst(), new_function(interpreter, m_shared_function_data_index, m_home_object));
 }
 
 void Return::execute_impl(Bytecode::Interpreter& interpreter) const
@@ -3052,19 +3038,21 @@ NEVER_INLINE ThrowCompletionOr<void> NewClass::execute_impl(Bytecode::Interprete
     }
 
     auto& running_execution_context = interpreter.running_execution_context();
-    auto class_environment = &as<Environment>(interpreter.get(m_class_environment).as_cell());
+    auto* class_environment = &as<Environment>(interpreter.get(m_class_environment).as_cell());
     auto& outer_environment = running_execution_context.lexical_environment;
+
+    auto const& blueprint = interpreter.current_executable().class_blueprints[m_class_blueprint_index];
 
     Optional<Utf16FlyString> binding_name;
     Utf16FlyString class_name;
-    if (!m_class_expression.has_name() && m_lhs_name.has_value()) {
+    if (!blueprint.has_name && m_lhs_name.has_value()) {
         class_name = interpreter.get_identifier(m_lhs_name.value());
     } else {
-        class_name = m_class_expression.name();
+        class_name = blueprint.name;
         binding_name = class_name;
     }
 
-    auto retval = TRY(m_class_expression.create_class_constructor(interpreter.vm(), class_environment, outer_environment, super_class, element_keys, binding_name, class_name));
+    auto* retval = TRY(construct_class(interpreter.vm(), blueprint, interpreter.current_executable(), class_environment, outer_environment, super_class, element_keys, binding_name, class_name));
     interpreter.set(dst(), retval);
     return {};
 }

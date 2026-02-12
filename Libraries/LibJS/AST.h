@@ -16,7 +16,6 @@
 #include <AK/Utf16String.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
-#include <LibGC/Root.h>
 #include <LibJS/Bytecode/CodeGenerationError.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Bytecode/IdentifierTable.h>
@@ -25,8 +24,8 @@
 #include <LibJS/Bytecode/ScopedOperand.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
+#include <LibJS/FunctionParsingInsights.h>
 #include <LibJS/LocalVariable.h>
-#include <LibJS/Runtime/ClassFieldDefinition.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/EnvironmentCoordinate.h>
 #include <LibJS/Runtime/FunctionKind.h>
@@ -45,8 +44,6 @@ class FunctionDeclaration;
 class Identifier;
 class MemberExpression;
 class VariableDeclaration;
-class SharedFunctionInstanceData;
-
 template<class T, class... Args>
 static inline NonnullRefPtr<T>
 create_ast_node(SourceRange range, Args&&... args)
@@ -386,8 +383,9 @@ private:
 
 // ImportEntry Record, https://tc39.es/ecma262/#table-importentry-record-fields
 struct ImportEntry {
-    Optional<Utf16FlyString> import_name; // [[ImportName]]: stored string if Optional is not empty, NAMESPACE-OBJECT otherwise
-    Utf16FlyString local_name;            // [[LocalName]]
+    Optional<Utf16FlyString> import_name;     // [[ImportName]]: stored string if Optional is not empty, NAMESPACE-OBJECT otherwise
+    Utf16FlyString local_name;                // [[LocalName]]
+    Optional<ModuleRequest> m_module_request; // [[ModuleRequest]]
 
     ImportEntry(Optional<Utf16FlyString> import_name_, Utf16FlyString local_name_)
         : import_name(move(import_name_))
@@ -399,13 +397,8 @@ struct ImportEntry {
 
     ModuleRequest const& module_request() const
     {
-        VERIFY(m_module_request);
-        return *m_module_request;
+        return m_module_request.value();
     }
-
-private:
-    friend class ImportStatement;
-    ModuleRequest* m_module_request = nullptr; // [[ModuleRequest]]
 };
 
 class ImportStatement final : public Statement {
@@ -416,7 +409,7 @@ public:
         , m_entries(move(entries))
     {
         for (auto& entry : m_entries)
-            entry.m_module_request = &m_module_request;
+            entry.m_module_request = m_module_request;
     }
 
     virtual void dump(ASTDumpState const& state = {}) const override;
@@ -455,29 +448,24 @@ struct ExportEntry {
     {
     }
 
+    Optional<ModuleRequest> m_module_request; // [[ModuleRequest]]
+
     bool is_module_request() const
     {
-        return m_module_request != nullptr;
+        return m_module_request.has_value();
     }
 
-    static ExportEntry indirect_export_entry(ModuleRequest const& module_request, Optional<Utf16FlyString> export_name, Optional<Utf16FlyString> import_name)
+    static ExportEntry indirect_export_entry(ModuleRequest module_request, Optional<Utf16FlyString> export_name, Optional<Utf16FlyString> import_name)
     {
         ExportEntry entry { Kind::NamedExport, move(export_name), move(import_name) };
-        entry.m_module_request = &module_request;
+        entry.m_module_request = move(module_request);
         return entry;
     }
 
     ModuleRequest const& module_request() const
     {
-        VERIFY(m_module_request);
-        return *m_module_request;
+        return m_module_request.value();
     }
-
-private:
-    ModuleRequest const* m_module_request { nullptr }; // [[ModuleRequest]]
-    friend class ExportStatement;
-
-public:
     static ExportEntry named_export(Utf16FlyString export_name, Utf16FlyString local_name)
     {
         return ExportEntry { Kind::NamedExport, move(export_name), move(local_name) };
@@ -512,7 +500,7 @@ public:
     {
         if (m_module_request.has_value()) {
             for (auto& entry : m_entries)
-                entry.m_module_request = &m_module_request.value();
+                entry.m_module_request = m_module_request.value();
         }
     }
 
@@ -583,8 +571,6 @@ public:
 
     bool has_top_level_await() const { return m_has_top_level_await; }
     void set_has_top_level_await() { m_has_top_level_await = true; }
-
-    ThrowCompletionOr<void> global_declaration_instantiation(VM&, GlobalEnvironment&) const;
 
 private:
     virtual bool is_program() const override { return true; }
@@ -815,12 +801,8 @@ private:
     Vector<FunctionParameter> m_parameters;
 };
 
-struct FunctionParsingInsights {
-    bool uses_this { false };
-    bool uses_this_from_environment { false };
-    bool contains_direct_call_to_eval { false };
-    bool might_need_arguments_object { false };
-};
+// NB: FunctionParsingInsights is defined in FunctionParsingInsights.h
+//     and re-exported here for convenience.
 
 class JS_API FunctionNode {
 public:
@@ -842,9 +824,6 @@ public:
 
     virtual bool has_name() const = 0;
 
-    GC::Ptr<SharedFunctionInstanceData> shared_data() const;
-    void set_shared_data(GC::Ptr<SharedFunctionInstanceData>) const;
-
     virtual ~FunctionNode();
 
 protected:
@@ -862,8 +841,6 @@ private:
     bool m_is_strict_mode : 1 { false };
     bool m_is_arrow_function : 1 { false };
     FunctionParsingInsights m_parsing_insights;
-
-    mutable GC::Root<SharedFunctionInstanceData> m_shared_data;
 };
 
 class FunctionDeclaration final
@@ -1339,6 +1316,8 @@ public:
     {
     }
 
+    ByteString const& raw_value() const { return m_value; }
+
     virtual void dump(ASTDumpState const& state = {}) const override;
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
@@ -1445,10 +1424,6 @@ public:
     virtual ElementKind class_element_kind() const = 0;
     bool is_static() const { return m_is_static; }
 
-    // We use the Completion also as a ClassStaticBlockDefinition Record.
-    using ClassValue = Variant<ClassFieldDefinition, Completion, PrivateElement>;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value) const = 0;
-
     virtual Optional<Utf16FlyString> private_bound_identifier() const { return {}; }
 
 private:
@@ -1472,11 +1447,11 @@ public:
     }
 
     Expression const& key() const { return *m_key; }
+    FunctionExpression const& function() const { return *m_function; }
     Kind kind() const { return m_kind; }
     virtual ElementKind class_element_kind() const override { return ElementKind::Method; }
 
     virtual void dump(ASTDumpState const& state = {}) const override;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
     virtual Optional<Utf16FlyString> private_bound_identifier() const override;
 
 private:
@@ -1502,7 +1477,6 @@ public:
     virtual ElementKind class_element_kind() const override { return ElementKind::Field; }
 
     virtual void dump(ASTDumpState const& state = {}) const override;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
     virtual Optional<Utf16FlyString> private_bound_identifier() const override;
 
 private:
@@ -1519,7 +1493,8 @@ public:
     }
 
     virtual ElementKind class_element_kind() const override { return ElementKind::StaticInitializer; }
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
+
+    FunctionBody const& function_body() const { return *m_function_body; }
 
     virtual void dump(ASTDumpState const& state = {}) const override;
 
@@ -1562,8 +1537,6 @@ public:
     Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
 
     bool has_name() const { return m_name; }
-
-    ThrowCompletionOr<ECMAScriptFunctionObject*> create_class_constructor(VM&, Environment* class_environment, Environment* environment, Value super_class, ReadonlySpan<Value> element_keys, Optional<Utf16FlyString> const& binding_name = {}, Utf16FlyString const& class_name = {}) const;
 
 private:
     virtual bool is_class_expression() const override { return true; }

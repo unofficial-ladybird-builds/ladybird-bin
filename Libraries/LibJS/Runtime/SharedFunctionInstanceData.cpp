@@ -4,10 +4,19 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/AST.h>
 #include <LibJS/Runtime/SharedFunctionInstanceData.h>
 #include <LibJS/Runtime/VM.h>
 
 namespace JS {
+
+static FunctionLocal to_function_local(Identifier const& identifier)
+{
+    if (!identifier.is_local())
+        return {};
+    auto local = identifier.local_index();
+    return { static_cast<FunctionLocal::Type>(local.type), local.index };
+}
 
 GC_DEFINE_ALLOCATOR(SharedFunctionInstanceData);
 
@@ -43,6 +52,8 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
     else
         m_this_mode = ThisMode::Global;
 
+    m_formal_parameter_count = m_formal_parameters->size();
+
     // 15.1.3 Static Semantics: IsSimpleParameterList, https://tc39.es/ecma262/#sec-static-semantics-issimpleparameterlist
     m_has_simple_parameter_list = all_of(m_formal_parameters->parameters(), [&](auto& parameter) {
         if (parameter.is_rest)
@@ -54,6 +65,14 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
         return true;
     });
 
+    // Pre-extract parameter names for create_mapped_arguments_object.
+    // NB: Mapped arguments are only used for non-strict functions with simple parameter lists.
+    if (m_has_simple_parameter_list) {
+        m_parameter_names_for_mapped_arguments.ensure_capacity(m_formal_parameter_count);
+        for (auto const& parameter : m_formal_parameters->parameters())
+            m_parameter_names_for_mapped_arguments.append(parameter.binding.get<NonnullRefPtr<Identifier const>>()->string());
+    }
+
     // NOTE: The following steps are from FunctionDeclarationInstantiation that could be executed once
     //       and then reused in all subsequent function instantiations.
 
@@ -61,6 +80,7 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
     ScopeNode const* scope_body = nullptr;
     if (is<ScopeNode>(*m_ecmascript_code))
         scope_body = static_cast<ScopeNode const*>(m_ecmascript_code.ptr());
+    m_has_scope_body = scope_body != nullptr;
 
     // 3. Let strict be func.[[Strict]].
 
@@ -123,8 +143,15 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
         scope_body->ensure_function_scope_data();
         auto const& function_scope_data = *scope_body->function_scope_data();
 
-        for (auto const& decl : function_scope_data.functions_to_initialize)
-            m_functions_to_initialize.append(*decl);
+        for (auto const& decl : function_scope_data.functions_to_initialize) {
+            auto shared_data = create_for_function_node(vm, *decl);
+            auto const& name_id = *decl->name_identifier();
+            m_functions_to_initialize.append({
+                .shared_data = shared_data,
+                .name = decl->name(),
+                .local = to_function_local(name_id),
+            });
+        }
 
         if (!m_has_parameter_expressions && function_scope_data.has_function_named_arguments)
             m_arguments_object_needed = false;
@@ -177,7 +204,8 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
                     continue;
 
                 m_var_names_to_initialize_binding.append({
-                    .identifier = var.identifier,
+                    .name = var.identifier.string(),
+                    .local = to_function_local(var.identifier),
                 });
             }
 
@@ -197,7 +225,8 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
             for (auto const& var : function_scope_data.vars_to_initialize) {
                 bool is_in_parameter_bindings = var.is_parameter || (var.identifier.string() == vm.names.arguments.as_string() && m_arguments_object_needed);
                 m_var_names_to_initialize_binding.append({
-                    .identifier = var.identifier,
+                    .name = var.identifier.string(),
+                    .local = to_function_local(var.identifier),
                     .parameter_binding = is_in_parameter_bindings,
                     .function_name = var.is_function_name,
                 });
@@ -234,8 +263,10 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
     size_t* lex_environment_size = nullptr;
 
     // 30. If strict is false, then
+    if (scope_body)
+        m_has_non_local_lexical_declarations = scope_body->has_non_local_lexical_declarations();
     if (!m_strict) {
-        bool can_elide_declarative_environment = !m_contains_direct_call_to_eval && (!scope_body || !scope_body->has_non_local_lexical_declarations());
+        bool can_elide_declarative_environment = !m_contains_direct_call_to_eval && !m_has_non_local_lexical_declarations;
         if (can_elide_declarative_environment) {
             lex_environment_size = var_environment_size;
         } else {
@@ -249,9 +280,16 @@ SharedFunctionInstanceData::SharedFunctionInstanceData(
     }
 
     if (scope_body) {
-        MUST(scope_body->for_each_lexically_declared_identifier([&](auto const& id) {
-            if (!id.is_local())
-                (*lex_environment_size)++;
+        MUST(scope_body->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
+            MUST(declaration.for_each_bound_identifier([&](auto const& id) {
+                if (!id.is_local()) {
+                    (*lex_environment_size)++;
+                    m_lexical_bindings.append({
+                        .name = id.string(),
+                        .is_constant = declaration.is_constant_declaration(),
+                    });
+                }
+            }));
         }));
     }
 
@@ -262,9 +300,48 @@ void SharedFunctionInstanceData::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_executable);
+    for (auto& function : m_functions_to_initialize)
+        visitor.visit(function.shared_data);
     m_class_field_initializer_name.visit([&](PropertyKey const& key) { key.visit_edges(visitor); }, [](auto&) {});
 }
 
 SharedFunctionInstanceData::~SharedFunctionInstanceData() = default;
+
+GC::Ref<SharedFunctionInstanceData> SharedFunctionInstanceData::create_for_function_node(VM& vm, FunctionNode const& node)
+{
+    return create_for_function_node(vm, node, node.name());
+}
+
+GC::Ref<SharedFunctionInstanceData> SharedFunctionInstanceData::create_for_function_node(VM& vm, FunctionNode const& node, Utf16FlyString name)
+{
+    auto data = vm.heap().allocate<SharedFunctionInstanceData>(
+        vm,
+        node.kind(),
+        move(name),
+        node.function_length(),
+        node.parameters(),
+        *node.body_ptr(),
+        node.source_text(),
+        node.is_strict_mode(),
+        node.is_arrow_function(),
+        node.parsing_insights(),
+        node.local_variables_names());
+
+    // NB: Keep the SourceCode alive so that m_source_text (a Utf16View into it) remains valid
+    //     even after the AST is dropped.
+    data->m_source_code = &node.body().source_code();
+
+    return data;
+}
+
+void SharedFunctionInstanceData::clear_compile_inputs()
+{
+    VERIFY(m_executable);
+    m_formal_parameters = nullptr;
+    m_ecmascript_code = nullptr;
+    m_functions_to_initialize.clear();
+    m_var_names_to_initialize_binding.clear();
+    m_lexical_bindings.clear();
+}
 
 }

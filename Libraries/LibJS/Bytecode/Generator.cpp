@@ -15,6 +15,7 @@
 #include <LibJS/Bytecode/Register.h>
 #include <LibJS/Runtime/ECMAScriptFunctionObject.h>
 #include <LibJS/Runtime/NativeJavaScriptBackedFunction.h>
+#include <LibJS/Runtime/SharedFunctionInstanceData.h>
 #include <LibJS/Runtime/VM.h>
 
 namespace JS::Bytecode {
@@ -32,6 +33,25 @@ Generator::Generator(VM& vm, GC::Ptr<SharedFunctionInstanceData const> shared_fu
     , m_builtin_abstract_operations_enabled(builtin_abstract_operations_enabled == BuiltinAbstractOperationsEnabled::Yes)
     , m_shared_function_instance_data(shared_function_instance_data)
 {
+}
+
+static GC::Ref<SharedFunctionInstanceData> ensure_shared_function_data(VM& vm, FunctionNode const& function_node, Utf16FlyString name)
+{
+    return SharedFunctionInstanceData::create_for_function_node(vm, function_node, move(name));
+}
+
+u32 Generator::register_shared_function_data(GC::Ref<SharedFunctionInstanceData> data)
+{
+    auto index = static_cast<u32>(m_shared_function_data.size());
+    m_shared_function_data.append(data);
+    return index;
+}
+
+u32 Generator::register_class_blueprint(ClassBlueprint blueprint)
+{
+    auto index = static_cast<u32>(m_class_blueprints.size());
+    m_class_blueprints.append(move(blueprint));
+    return index;
 }
 
 CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(SharedFunctionInstanceData const& shared_function_instance_data)
@@ -119,56 +139,49 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         }
     }
 
-    ScopeNode const* scope_body = nullptr;
-    if (is<ScopeNode>(*shared_function_instance_data.m_ecmascript_code))
-        scope_body = &static_cast<ScopeNode const&>(*shared_function_instance_data.m_ecmascript_code);
-
     if (!shared_function_instance_data.m_has_parameter_expressions) {
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
-                if (id.is_local()) {
-                    emit<Op::Mov>(local(id.local_index()), add_constant(js_undefined()));
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
+                if (var.local.is_variable() || var.local.is_argument()) {
+                    emit<Op::Mov>(local(var.local), add_constant(js_undefined()));
                 } else {
-                    auto intern_id = intern_identifier(id.string());
+                    auto intern_id = intern_identifier(var.name);
                     emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
                     emit<Op::InitializeVariableBinding>(intern_id, add_constant(js_undefined()));
                 }
             }
         }
     } else {
-        bool has_non_local_parameters = false;
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
-                if (!id.is_local()) {
-                    has_non_local_parameters = true;
+        bool has_non_local_vars = false;
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
+                if (!var.local.is_variable() && !var.local.is_argument()) {
+                    has_non_local_vars = true;
                     break;
                 }
             }
         }
 
-        if (has_non_local_parameters)
+        if (has_non_local_vars)
             emit<Op::CreateVariableEnvironment>(shared_function_instance_data.m_var_environment_bindings_count);
 
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
                 auto initial_value = allocate_register();
-                if (!variable_to_initialize.parameter_binding || variable_to_initialize.function_name) {
+                if (!var.parameter_binding || var.function_name) {
                     emit<Op::Mov>(initial_value, add_constant(js_undefined()));
                 } else {
-                    if (id.is_local()) {
-                        emit<Op::Mov>(initial_value, local(id.local_index()));
+                    if (var.local.is_variable() || var.local.is_argument()) {
+                        emit<Op::Mov>(initial_value, local(var.local));
                     } else {
-                        emit<Op::GetBinding>(initial_value, intern_identifier(id.string()));
+                        emit<Op::GetBinding>(initial_value, intern_identifier(var.name));
                     }
                 }
 
-                if (id.is_local()) {
-                    emit<Op::Mov>(local(id.local_index()), initial_value);
+                if (var.local.is_variable() || var.local.is_argument()) {
+                    emit<Op::Mov>(local(var.local), initial_value);
                 } else {
-                    auto intern_id = intern_identifier(id.string());
+                    auto intern_id = intern_identifier(var.name);
                     emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
                     emit<Op::InitializeVariableBinding>(intern_id, initial_value);
                 }
@@ -176,7 +189,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         }
     }
 
-    if (!shared_function_instance_data.m_strict && scope_body) {
+    if (!shared_function_instance_data.m_strict && shared_function_instance_data.m_has_scope_body) {
         for (auto const& function_name : shared_function_instance_data.m_function_names_to_initialize_binding) {
             auto intern_id = intern_identifier(function_name);
             emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
@@ -185,8 +198,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
     }
 
     if (!shared_function_instance_data.m_strict) {
-        bool can_elide_lexical_environment = !scope_body || !scope_body->has_non_local_lexical_declarations();
-        if (!can_elide_lexical_environment) {
+        if (shared_function_instance_data.m_has_non_local_lexical_declarations) {
             auto parent_environment = m_lexical_environment_register_stack.last();
             auto new_environment = allocate_register();
             emit<Op::CreateLexicalEnvironment>(new_environment, parent_environment, shared_function_instance_data.m_lex_environment_bindings_count);
@@ -194,32 +206,24 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         }
     }
 
-    if (scope_body) {
-        MUST(scope_body->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
-            MUST(declaration.for_each_bound_identifier([&](auto const& id) {
-                if (id.is_local()) {
-                    return;
-                }
-
-                emit<Op::CreateVariable>(intern_identifier(id.string()),
-                    Op::EnvironmentMode::Lexical,
-                    declaration.is_constant_declaration(),
-                    false,
-                    declaration.is_constant_declaration());
-            }));
-        }));
+    for (auto const& binding : shared_function_instance_data.m_lexical_bindings) {
+        emit<Op::CreateVariable>(intern_identifier(binding.name),
+            Op::EnvironmentMode::Lexical,
+            binding.is_constant,
+            false,
+            binding.is_constant);
     }
 
-    for (auto const& declaration : shared_function_instance_data.m_functions_to_initialize) {
-        auto const& identifier = *declaration.name_identifier();
-        if (identifier.is_local()) {
-            auto local_index = identifier.local_index();
-            emit<Op::NewFunction>(local(local_index), declaration, OptionalNone {}, OptionalNone {});
-            set_local_initialized(local_index);
+    for (auto const& function_to_initialize : shared_function_instance_data.m_functions_to_initialize) {
+        auto data_index = register_shared_function_data(function_to_initialize.shared_data);
+
+        if (function_to_initialize.local.is_variable() || function_to_initialize.local.is_argument()) {
+            emit<Op::NewFunction>(local(function_to_initialize.local), data_index, OptionalNone {}, OptionalNone {});
+            set_local_initialized(function_to_initialize.local);
         } else {
             auto function = allocate_register();
-            emit<Op::NewFunction>(function, declaration, OptionalNone {}, OptionalNone {});
-            emit<Op::SetVariableBinding>(intern_identifier(declaration.name()), function);
+            emit<Op::NewFunction>(function, data_index, OptionalNone {}, OptionalNone {});
+            emit<Op::SetVariableBinding>(intern_identifier(function_to_initialize.name), function);
         }
     }
 
@@ -503,6 +507,13 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     executable->basic_block_start_offsets = move(basic_block_start_offsets);
     executable->source_map = move(source_map);
     executable->local_variable_names = move(local_variable_names);
+
+    executable->shared_function_data.ensure_capacity(generator.m_shared_function_data.size());
+    for (auto& root : generator.m_shared_function_data)
+        executable->shared_function_data.append(root.ptr());
+
+    executable->class_blueprints = move(generator.m_class_blueprints);
+
     // NB: Layout is [registers | locals | constants | arguments]
     executable->local_index_base = number_of_registers;
 
@@ -541,6 +552,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_ast_node(VM&
 
 CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_function(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
 {
+    VERIFY(!shared_function_instance_data->m_executable);
     return compile(vm, *shared_function_instance_data->m_ecmascript_code, shared_function_instance_data->m_kind, shared_function_instance_data, MustPropagateCompletion::No, builtin_abstract_operations_enabled, shared_function_instance_data->m_local_variables_names);
 }
 
@@ -565,6 +577,13 @@ void Generator::free_register(Register reg)
 }
 
 ScopedOperand Generator::local(Identifier::Local const& local)
+{
+    if (local.is_variable())
+        return ScopedOperand { *this, Operand { Operand::Type::Local, static_cast<u32>(local.index) } };
+    return ScopedOperand { *this, Operand { Operand::Type::Argument, static_cast<u32>(local.index) } };
+}
+
+ScopedOperand Generator::local(FunctionLocal const& local)
 {
     if (local.is_variable())
         return ScopedOperand { *this, Operand { Operand::Type::Local, static_cast<u32>(local.index) } };
@@ -656,8 +675,10 @@ bool Generator::emit_block_declaration_instantiation(ScopeNode const& scope_node
             auto& function_declaration = static_cast<FunctionDeclaration const&>(declaration);
 
             // ii. Let fo be InstantiateFunctionObject of d with arguments env and privateEnv.
+            auto shared_data = ensure_shared_function_data(m_vm, function_declaration, function_declaration.name());
+            auto data_index = register_shared_function_data(shared_data);
             auto fo = allocate_register();
-            emit<Bytecode::Op::NewFunction>(fo, function_declaration, OptionalNone {}, OptionalNone {});
+            emit<Bytecode::Op::NewFunction>(fo, data_index, OptionalNone {}, OptionalNone {});
 
             // iii. Perform ! env.InitializeBinding(fn, fo). NOTE: This step is replaced in section B.3.2.6.
             if (function_declaration.name_identifier()->is_local()) {
@@ -1266,10 +1287,19 @@ void Generator::pop_home_object()
 
 void Generator::emit_new_function(ScopedOperand dst, FunctionExpression const& function_node, Optional<IdentifierTableIndex> lhs_name, bool is_method)
 {
+    Utf16FlyString name;
+    if (function_node.has_name())
+        name = function_node.name();
+    else if (lhs_name.has_value())
+        name = m_identifier_table->get(lhs_name.value());
+
+    auto shared_data = ensure_shared_function_data(m_vm, function_node, move(name));
+    auto data_index = register_shared_function_data(shared_data);
+
     if (!is_method || m_home_objects.is_empty()) {
-        emit<Op::NewFunction>(dst, function_node, lhs_name, OptionalNone {});
+        emit<Op::NewFunction>(dst, data_index, lhs_name, OptionalNone {});
     } else {
-        emit<Op::NewFunction>(dst, function_node, lhs_name, m_home_objects.last());
+        emit<Op::NewFunction>(dst, data_index, lhs_name, m_home_objects.last());
     }
 }
 
@@ -1427,6 +1457,17 @@ bool Generator::is_local_initialized(Identifier::Local const& local) const
 }
 
 void Generator::set_local_initialized(Identifier::Local const& local)
+{
+    if (local.is_variable()) {
+        m_initialized_locals.set(local.index);
+    } else if (local.is_argument()) {
+        m_initialized_arguments.set(local.index);
+    } else {
+        VERIFY_NOT_REACHED();
+    }
+}
+
+void Generator::set_local_initialized(FunctionLocal const& local)
 {
     if (local.is_variable()) {
         m_initialized_locals.set(local.index);

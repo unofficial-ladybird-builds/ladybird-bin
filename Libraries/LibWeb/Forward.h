@@ -794,6 +794,7 @@ class XMLSerializer;
 
 enum class AllowMultipleFiles;
 enum class MediaSeekMode;
+enum class RequireWellFormed;
 enum class SandboxingFlagSet;
 
 struct Agent;
@@ -1305,6 +1306,7 @@ class ArrayBufferView;
 class BufferSource;
 class CallbackType;
 class DOMException;
+class ObservableArray;
 
 template<typename ValueType>
 class ExceptionOr;

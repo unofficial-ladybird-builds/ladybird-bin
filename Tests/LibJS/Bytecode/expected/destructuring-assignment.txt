@@ -18,17 +18,17 @@ JS bytecode executable "array_destructuring_with_class_default"
 [  70]       JumpFalse condition:reg6, target:@98
 [  80]    1: Mov dst:reg11, src:Undefined
 [  90]       Jump target:@98
-[  98]    2: JumpUndefined condition:reg11, true_target:@a8, false_target:@108
+[  98]    2: JumpUndefined condition:reg11, true_target:@a8, false_target:@100
 [  a8]    3: CreateLexicalEnvironment dst:reg12, parent:reg4, capacity:0
 [  b8]       CreateVariable identifier:C, is_immutable:true, is_global:false, is_strict:false
 [  c8]       SetLexicalEnvironment environment:reg4
-[  d0]       NewClass dst:reg13, class_environment:reg12
-[  f8]       Mov dst:reg11, src:reg13
-[ 108]    4: Mov dst:x~0, src:reg11
-[ 118]       JumpFalse condition:reg6, target:@130
-[ 128]    5: Return value:x~0
-[ 130]    6: IteratorClose iterator_object:reg7, iterator_next:reg8, iterator_done:reg9
-[ 150]       Return value:x~0
+[  d0]       NewClass dst:reg13, class_environment:reg12, class_blueprint_index:0
+[  f0]       Mov dst:reg11, src:reg13
+[ 100]    4: Mov dst:x~0, src:reg11
+[ 110]       JumpFalse condition:reg6, target:@128
+[ 120]    5: Return value:x~0
+[ 128]    6: IteratorClose iterator_object:reg7, iterator_next:reg8, iterator_done:reg9
+[ 148]       Return value:x~0
 
 JS bytecode executable "object_destructuring_with_function_default"
 [   0]    0: GetLexicalEnvironment dst:reg4
@@ -37,7 +37,7 @@ JS bytecode executable "object_destructuring_with_function_default"
 [  28]       ThrowIfNullish src:reg5
 [  30]       GetById dst:reg6, base:reg5, property:x
 [  48]       JumpUndefined condition:reg6, true_target:@58, false_target:@80
-[  58]    1: NewFunction dst:reg7, lhs_name:x
+[  58]    1: NewFunction dst:reg7, shared_function_data_index:0, lhs_name:x
 [  70]       Mov dst:reg6, src:reg7
 [  80]    2: Mov dst:x~0, src:reg6
 [  90]       Return value:x~0
@@ -54,7 +54,7 @@ JS bytecode executable "setter_parameter_resolution"
 [  98]    1: Mov dst:reg11, src:Undefined
 [  a8]       Jump target:@b0
 [  b0]    2: NewObject dst:reg12
-[  c0]       NewFunction dst:reg13, lhs_name:set y, home_object:reg12
+[  c0]       NewFunction dst:reg13, shared_function_data_index:0, lhs_name:set y, home_object:reg12
 [  d8]       PutSetterById base:reg12, property:y, src:reg13
 [  f0]       PutNormalById base:reg12, property:y, src:reg11
 [ 108]       JumpFalse condition:reg6, target:@138
@@ -67,3 +67,4 @@ JS bytecode executable "set y"
 [   0]    0: GetLexicalEnvironment dst:reg4
 [   8]       SetLexicalBinding identifier:setValue, src:arg0
 [  20]       End value:Undefined
+

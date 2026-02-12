@@ -12,6 +12,7 @@
 #include <LibGC/CellAllocator.h>
 #include <LibGC/Weak.h>
 #include <LibGC/WeakInlines.h>
+#include <LibJS/Bytecode/ClassBlueprint.h>
 #include <LibJS/Bytecode/IdentifierTable.h>
 #include <LibJS/Bytecode/Label.h>
 #include <LibJS/Bytecode/Operand.h>
@@ -129,6 +130,9 @@ public:
     NonnullOwnPtr<PropertyKeyTable> property_key_table;
     NonnullOwnPtr<RegexTable> regex_table;
     Vector<Value> constants;
+
+    Vector<GC::Ptr<SharedFunctionInstanceData>> shared_function_data;
+    Vector<ClassBlueprint> class_blueprints;
 
     NonnullRefPtr<SourceCode const> source_code;
     u32 number_of_registers { 0 };
