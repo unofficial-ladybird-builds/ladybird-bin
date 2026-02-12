@@ -19,6 +19,7 @@
 #include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ContentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterDefinitionsStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
@@ -469,6 +470,42 @@ float ComputedProperties::opacity() const
 float ComputedProperties::fill_opacity() const
 {
     return property(PropertyID::FillOpacity).as_number().number();
+}
+
+Vector<Variant<LengthPercentage, float>> ComputedProperties::stroke_dasharray() const
+{
+    auto const& value = property(PropertyID::StrokeDasharray);
+
+    // none
+    if (value.is_keyword() && value.to_keyword() == Keyword::None)
+        return {};
+
+    auto const& stroke_dasharray = value.as_value_list();
+    Vector<Variant<LengthPercentage, float>> dashes;
+
+    for (auto const& value : stroke_dasharray.values()) {
+        if (value->is_length()) {
+            dashes.append(LengthPercentage { value->as_length().length() });
+        } else if (value->is_percentage()) {
+            dashes.append(LengthPercentage { value->as_percentage().percentage() });
+        } else if (value->is_calculated()) {
+            auto const& calculated_value = value->as_calculated();
+
+            if (calculated_value.resolves_to_length())
+                dashes.append(LengthPercentage { value->as_calculated() });
+            else if (calculated_value.resolves_to_number())
+                dashes.append(calculated_value.resolve_number({}).value());
+            else
+                VERIFY_NOT_REACHED();
+
+        } else if (value->is_number()) {
+            dashes.append(value->as_number().number());
+        } else {
+            VERIFY_NOT_REACHED();
+        }
+    }
+
+    return dashes;
 }
 
 StrokeLinecap ComputedProperties::stroke_linecap() const
@@ -1365,9 +1402,18 @@ TextTransform ComputedProperties::text_transform() const
 ListStyleType ComputedProperties::list_style_type() const
 {
     auto const& value = property(PropertyID::ListStyleType);
+
+    if (value.to_keyword() == Keyword::None)
+        return Empty {};
+
     if (value.is_string())
         return value.as_string().string_value().to_string();
-    return keyword_to_counter_style_name_keyword(value.to_keyword()).release_value();
+
+    if (auto keyword = value.as_counter_style().to_counter_style_name_keyword(); keyword.has_value())
+        return keyword.release_value();
+
+    // FIXME: Support user defined counter styles.
+    return Empty {};
 }
 
 ListStylePosition ComputedProperties::list_style_position() const

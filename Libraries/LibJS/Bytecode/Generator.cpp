@@ -54,7 +54,7 @@ u32 Generator::register_class_blueprint(ClassBlueprint blueprint)
     return index;
 }
 
-CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(SharedFunctionInstanceData const& shared_function_instance_data)
+void Generator::emit_function_declaration_instantiation(SharedFunctionInstanceData const& shared_function_instance_data)
 {
     if (shared_function_instance_data.m_has_parameter_expressions) {
         bool has_non_local_parameters = false;
@@ -114,7 +114,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
                 Label { if_not_undefined_block });
 
             switch_to_basic_block(if_undefined_block);
-            auto operand = TRY(parameter.default_value->generate_bytecode(*this));
+            auto operand = parameter.default_value->generate_bytecode(*this);
             emit<Op::Mov>(Operand { Operand::Type::Argument, param_index }, *operand);
             emit<Op::Jump>(Label { if_not_undefined_block });
 
@@ -135,7 +135,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         } else if (auto const* binding_pattern = parameter.binding.get_pointer<NonnullRefPtr<BindingPattern const>>(); binding_pattern) {
             ScopedOperand argument { *this, Operand { Operand::Type::Argument, param_index } };
             auto init_mode = shared_function_instance_data.m_has_duplicates ? Op::BindingInitializationMode::Set : Bytecode::Op::BindingInitializationMode::Initialize;
-            TRY((*binding_pattern)->generate_bytecode(*this, init_mode, argument));
+            (*binding_pattern)->generate_bytecode(*this, init_mode, argument);
         }
     }
 
@@ -226,11 +226,9 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
             emit<Op::SetVariableBinding>(intern_identifier(function_to_initialize.name), function);
         }
     }
-
-    return {};
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind, GC::Ptr<SharedFunctionInstanceData const> shared_function_instance_data, MustPropagateCompletion must_propagate_completion, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled, Vector<LocalVariable> local_variable_names)
+GC::Ref<Executable> Generator::compile(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind, GC::Ptr<SharedFunctionInstanceData const> shared_function_instance_data, MustPropagateCompletion must_propagate_completion, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled, Vector<LocalVariable> local_variable_names)
 {
     Generator generator(vm, shared_function_instance_data, must_propagate_completion, builtin_abstract_operations_enabled);
 
@@ -260,7 +258,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     generator.ensure_lexical_environment_register_initialized();
 
     if (shared_function_instance_data)
-        TRY(generator.emit_function_declaration_instantiation(*shared_function_instance_data));
+        generator.emit_function_declaration_instantiation(*shared_function_instance_data);
 
     if (generator.is_in_generator_function()) {
         // Immediately yield with no value.
@@ -271,7 +269,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
         //       will not enter the generator from the SuspendedStart state and immediately completes the generator.
     }
 
-    auto last_value = TRY(node.generate_bytecode(generator));
+    auto last_value = node.generate_bytecode(generator);
 
     if (!generator.current_block().is_terminated() && last_value.has_value()) {
         generator.emit<Bytecode::Op::End>(last_value.value());
@@ -542,7 +540,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     return executable;
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_ast_node(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind)
+GC::Ref<Executable> Generator::generate_from_ast_node(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind)
 {
     Vector<LocalVariable> local_variable_names;
     if (is<ScopeNode>(node))
@@ -550,7 +548,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_ast_node(VM&
     return compile(vm, node, enclosing_function_kind, {}, MustPropagateCompletion::Yes, BuiltinAbstractOperationsEnabled::No, move(local_variable_names));
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_function(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
+GC::Ref<Executable> Generator::generate_from_function(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
 {
     VERIFY(!shared_function_instance_data->m_executable);
     return compile(vm, *shared_function_instance_data->m_ecmascript_code, shared_function_instance_data->m_kind, shared_function_instance_data, MustPropagateCompletion::No, builtin_abstract_operations_enabled, shared_function_instance_data->m_local_variables_names);
@@ -769,7 +767,7 @@ void Generator::end_breakable_scope()
     end_boundary(BlockBoundaryType::Break);
 }
 
-CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_reference(MemberExpression const& expression)
+Generator::ReferenceOperands Generator::emit_super_reference(MemberExpression const& expression)
 {
     VERIFY(is<SuperExpression>(expression.object()));
 
@@ -785,7 +783,7 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_refere
         // SuperProperty : super [ Expression ]
         // 3. Let propertyNameReference be ? Evaluation of Expression.
         // 4. Let propertyNameValue be ? GetValue(propertyNameReference).
-        computed_property_value = TRY(expression.property().generate_bytecode(*this)).value();
+        computed_property_value = expression.property().generate_bytecode(*this).value();
     } else {
         // SuperProperty : super . IdentifierName
         // 3. Let propertyKey be the StringValue of IdentifierName.
@@ -811,26 +809,37 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_refere
     };
 }
 
-CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_reference(JS::ASTNode const& node, Optional<ScopedOperand> preferred_dst)
+Generator::ReferenceOperands Generator::emit_load_from_reference(JS::ASTNode const& node, Optional<ScopedOperand> preferred_dst)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
-        auto loaded_value = TRY(identifier.generate_bytecode(*this, preferred_dst)).value();
+        auto loaded_value = identifier.generate_bytecode(*this, preferred_dst).value();
         return ReferenceOperands {
             .loaded_value = loaded_value,
         };
     }
     if (!is<MemberExpression>(node)) {
-        return CodeGenerationError {
-            &node,
-            "Unimplemented/invalid node used as a reference"sv
+        // Per spec, evaluate the expression (e.g. the call in f()++) before
+        // throwing ReferenceError for invalid assignment target.
+        (void)node.generate_bytecode(*this);
+        auto exception = allocate_register();
+        emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::InvalidLeftHandAssignment.message()));
+        perform_needed_unwinds<Op::Throw>();
+        emit<Bytecode::Op::Throw>(exception);
+        switch_to_basic_block(make_block());
+        auto dummy = add_constant(js_undefined());
+        return ReferenceOperands {
+            .base = dummy,
+            .referenced_name = dummy,
+            .this_value = dummy,
+            .loaded_value = dummy,
         };
     }
     auto& expression = static_cast<MemberExpression const&>(node);
 
     // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
     if (is<SuperExpression>(expression.object())) {
-        auto super_reference = TRY(emit_super_reference(expression));
+        auto super_reference = emit_super_reference(expression);
         auto dst = preferred_dst.has_value() ? preferred_dst.value() : allocate_register();
 
         if (super_reference.referenced_name.has_value()) {
@@ -846,11 +855,11 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_re
         return super_reference;
     }
 
-    auto base = TRY(expression.object().generate_bytecode(*this)).value();
+    auto base = expression.object().generate_bytecode(*this).value();
     auto base_identifier = intern_identifier_for_expression(expression.object());
 
     if (expression.is_computed()) {
-        auto property = TRY(expression.property().generate_bytecode(*this)).value();
+        auto property = expression.property().generate_bytecode(*this).value();
         auto saved_property = allocate_register();
         emit<Bytecode::Op::Mov>(saved_property, property);
         auto dst = preferred_dst.has_value() ? preferred_dst.value() : allocate_register();
@@ -884,25 +893,22 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_re
             .loaded_value = dst,
         };
     }
-    return CodeGenerationError {
-        &expression,
-        "Unimplemented non-computed member expression"sv
-    };
+    VERIFY_NOT_REACHED();
 }
 
-CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const& node, ScopedOperand value)
+void Generator::emit_store_to_reference(JS::ASTNode const& node, ScopedOperand value)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
         emit_set_variable(identifier, value);
-        return {};
+        return;
     }
     if (is<MemberExpression>(node)) {
         auto& expression = static_cast<MemberExpression const&>(node);
 
         // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
         if (is<SuperExpression>(expression.object())) {
-            auto super_reference = TRY(emit_super_reference(expression));
+            auto super_reference = emit_super_reference(expression);
 
             // 4. Return the Reference Record { [[Base]]: baseValue, [[ReferencedName]]: propertyKey, [[Strict]]: strict, [[ThisValue]]: actualThis }.
             if (super_reference.referenced_name.has_value()) {
@@ -914,10 +920,10 @@ CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const
                 emit<Bytecode::Op::PutNormalByIdWithThis>(*super_reference.base, *super_reference.this_value, property_key_table_index, value, next_property_lookup_cache());
             }
         } else {
-            auto object = TRY(expression.object().generate_bytecode(*this)).value();
+            auto object = expression.object().generate_bytecode(*this).value();
 
             if (expression.is_computed()) {
-                auto property = TRY(expression.property().generate_bytecode(*this)).value();
+                auto property = expression.property().generate_bytecode(*this).value();
                 emit_put_by_value(object, property, value, PutKind::Normal, {});
             } else if (expression.property().is_identifier()) {
                 auto property_key_table_index = intern_property_key(as<Identifier>(expression.property()).string());
@@ -926,43 +932,44 @@ CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const
                 auto identifier_table_ref = intern_identifier(as<PrivateIdentifier>(expression.property()).string());
                 emit<Bytecode::Op::PutPrivateById>(object, identifier_table_ref, value);
             } else {
-                return CodeGenerationError {
-                    &expression,
-                    "Unimplemented non-computed member expression"sv
-                };
+                VERIFY_NOT_REACHED();
             }
         }
 
-        return {};
+        return;
     }
 
-    return CodeGenerationError {
-        &node,
-        "Unimplemented/invalid node used a reference"sv
-    };
+    // Per spec, evaluate the expression (e.g. the call in for(f() in ...))
+    // before throwing ReferenceError for invalid assignment target.
+    (void)node.generate_bytecode(*this);
+    auto exception = allocate_register();
+    emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::InvalidLeftHandAssignment.message()));
+    perform_needed_unwinds<Op::Throw>();
+    emit<Bytecode::Op::Throw>(exception);
+    switch_to_basic_block(make_block());
 }
 
-CodeGenerationErrorOr<void> Generator::emit_store_to_reference(ReferenceOperands const& reference, ScopedOperand value)
+void Generator::emit_store_to_reference(ReferenceOperands const& reference, ScopedOperand value)
 {
     if (reference.referenced_private_identifier.has_value()) {
         emit<Bytecode::Op::PutPrivateById>(*reference.base, *reference.referenced_private_identifier, value);
-        return {};
+        return;
     }
     if (reference.referenced_identifier.has_value()) {
         if (reference.base == reference.this_value)
             emit_put_by_id(*reference.base, *reference.referenced_identifier, value, Bytecode::PutKind::Normal, next_property_lookup_cache());
         else
             emit<Bytecode::Op::PutNormalByIdWithThis>(*reference.base, *reference.this_value, *reference.referenced_identifier, value, next_property_lookup_cache());
-        return {};
+        return;
     }
     if (reference.base == reference.this_value)
         emit_put_by_value(*reference.base, *reference.referenced_name, value, PutKind::Normal, {});
     else
         emit_put_by_value_with_this(*reference.base, *reference.referenced_name, *reference.this_value, value, PutKind::Normal);
-    return {};
+    return;
 }
 
-CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(JS::ASTNode const& node)
+Optional<ScopedOperand> Generator::emit_delete_reference(JS::ASTNode const& node)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
@@ -979,7 +986,7 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
 
         // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
         if (is<SuperExpression>(expression.object())) {
-            auto super_reference = TRY(emit_super_reference(expression));
+            auto super_reference = emit_super_reference(expression);
 
             auto exception = allocate_register();
             emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::UnsupportedDeleteSuperProperty.message()));
@@ -992,21 +999,18 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
             return add_constant(js_undefined());
         }
 
-        auto object = TRY(expression.object().generate_bytecode(*this)).value();
+        auto object = expression.object().generate_bytecode(*this).value();
         auto dst = allocate_register();
 
         if (expression.is_computed()) {
-            auto property = TRY(expression.property().generate_bytecode(*this)).value();
+            auto property = expression.property().generate_bytecode(*this).value();
             emit<Bytecode::Op::DeleteByValue>(dst, object, property);
         } else if (expression.property().is_identifier()) {
             auto property_key_table_index = intern_property_key(as<Identifier>(expression.property()).string());
             emit<Bytecode::Op::DeleteById>(dst, object, property_key_table_index);
         } else {
-            // NOTE: Trying to delete a private field generates a SyntaxError in the parser.
-            return CodeGenerationError {
-                &expression,
-                "Unimplemented non-computed member expression"sv
-            };
+            // NB: Trying to delete a private field generates a SyntaxError in the parser.
+            VERIFY_NOT_REACHED();
         }
         return dst;
     }
@@ -1017,7 +1021,7 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
     // 13.5.1.2 Runtime Semantics: Evaluation, https://tc39.es/ecma262/#sec-delete-operator-runtime-semantics-evaluation
     // 1. Let ref be the result of evaluating UnaryExpression.
     // 2. ReturnIfAbrupt(ref).
-    (void)TRY(node.generate_bytecode(*this));
+    (void)node.generate_bytecode(*this);
 
     // 3. If ref is not a Reference Record, return true.
     // NOTE: The rest of the steps are handled by Delete{Variable,ByValue,Id}.
@@ -1303,23 +1307,23 @@ void Generator::emit_new_function(ScopedOperand dst, FunctionExpression const& f
     }
 }
 
-CodeGenerationErrorOr<ScopedOperand> Generator::emit_named_evaluation_if_anonymous_function(Expression const& expression, Optional<IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst, bool is_method)
+ScopedOperand Generator::emit_named_evaluation_if_anonymous_function(Expression const& expression, Optional<IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst, bool is_method)
 {
     if (is<FunctionExpression>(expression)) {
         auto const& function_expression = static_cast<FunctionExpression const&>(expression);
         if (!function_expression.has_name()) {
-            return TRY(function_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst, is_method)).value();
+            return function_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst, is_method).value();
         }
     }
 
     if (is<ClassExpression>(expression)) {
         auto const& class_expression = static_cast<ClassExpression const&>(expression);
         if (!class_expression.has_name()) {
-            return TRY(class_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst)).value();
+            return class_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst).value();
         }
     }
 
-    return TRY(expression.generate_bytecode(*this, preferred_dst)).value();
+    return expression.generate_bytecode(*this, preferred_dst).value();
 }
 
 void Generator::emit_get_by_id(ScopedOperand dst, ScopedOperand base, PropertyKeyTableIndex property_key_table_index, Optional<IdentifierTableIndex> base_identifier)
@@ -1537,6 +1541,20 @@ bool Generator::fuse_compare_and_jump(ScopedOperand const& condition, Label true
     return false;
 }
 
+void Generator::emit_todo(StringView message)
+{
+    auto error_message = MUST(String::formatted("TODO: {}", message));
+    auto message_string = intern_string(Utf16String::from_utf8(error_message));
+    auto error_register = allocate_register();
+    emit<Op::NewTypeError>(error_register, message_string);
+    perform_needed_unwinds<Op::Throw>();
+    emit<Op::Throw>(error_register);
+    // Switch to a new block so subsequent codegen doesn't crash trying to
+    // emit into a terminated block.
+    auto& dead_block = make_block("dead"_string);
+    switch_to_basic_block(dead_block);
+}
+
 void Generator::emit_jump_if(ScopedOperand const& condition, Label true_target, Label false_target)
 {
     if (condition.operand().is_constant()) {
@@ -1615,126 +1633,74 @@ ScopedOperand Generator::add_constant(Value value)
     return append_new_constant();
 }
 
-CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Identifier const& builtin_identifier, ReadonlySpan<CallExpression::Argument> arguments, ScopedOperand const& dst)
+void Generator::generate_builtin_abstract_operation(Identifier const& builtin_identifier, ReadonlySpan<CallExpression::Argument> arguments, ScopedOperand const& dst)
 {
     VERIFY(m_builtin_abstract_operations_enabled);
-    for (auto const& argument : arguments) {
-        if (argument.is_spread) {
-            return CodeGenerationError {
-                argument.value.ptr(),
-                "Spread arguments not allowed for builtin abstract operations"sv,
-            };
-        }
-    }
+    for (auto const& argument : arguments)
+        VERIFY(!argument.is_spread);
 
     auto const& operation_name = builtin_identifier.string();
 
     if (operation_name == "IsCallable"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "IsCallable only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::IsCallable>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "IsConstructor"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "IsConstructor only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::IsConstructor>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ToBoolean"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToBoolean only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToBoolean>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ToObject"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToObject only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToObject>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ThrowTypeError"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "throw_type_error only accepts one argument"sv,
-            };
-        }
-
+        VERIFY(arguments.size() == 1);
         auto const* message = as_if<StringLiteral>(*arguments[0].value);
-        if (!message) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ThrowTypeError's message must be a string literal"sv,
-            };
-        }
+        VERIFY(message);
 
         auto message_string = intern_string(message->value());
         auto type_error_register = allocate_register();
         emit<Op::NewTypeError>(type_error_register, message_string);
         perform_needed_unwinds<Op::Throw>();
         emit<Op::Throw>(type_error_register);
-        return {};
+        return;
     }
 
     if (operation_name == "ThrowIfNotObject"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ThrowIfNotObject only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ThrowIfNotObject>(source);
-        return {};
+        return;
     }
 
     if (operation_name == "Call"sv) {
-        if (arguments.size() < 2) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "Call must have at least two arguments"sv,
-            };
-        }
+        VERIFY(arguments.size() >= 2);
 
         auto const& callee_argument = arguments[0].value;
-        auto callee = TRY(callee_argument->generate_bytecode(*this)).value();
-        auto this_value = TRY(arguments[1].value->generate_bytecode(*this)).value();
+        auto callee = callee_argument->generate_bytecode(*this).value();
+        auto this_value = arguments[1].value->generate_bytecode(*this).value();
         auto arguments_to_call_with = arguments.slice(2);
 
         Vector<ScopedOperand> argument_operands;
         argument_operands.ensure_capacity(arguments_to_call_with.size());
         for (auto const& argument : arguments_to_call_with) {
-            auto argument_value = TRY(argument.value->generate_bytecode(*this)).value();
+            auto argument_value = argument.value->generate_bytecode(*this).value();
             argument_operands.unchecked_append(copy_if_needed_to_preserve_evaluation_order(argument_value));
         }
 
@@ -1759,97 +1725,56 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
             this_value,
             expression_string_index,
             argument_operands);
-        return {};
+        return;
     }
 
     if (operation_name == "NewObjectWithNoPrototype"sv) {
-        if (!arguments.is_empty()) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewObjectWithNoPrototype does not take any arguments"sv,
-            };
-        }
-
+        VERIFY(arguments.is_empty());
         emit<Op::NewObjectWithNoPrototype>(dst);
-        return {};
+        return;
     }
 
     if (operation_name == "CreateAsyncFromSyncIterator"sv) {
-        if (arguments.size() != 3) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "CreateAsyncFromSyncIterator only accepts exactly three arguments"sv,
-            };
-        }
-
-        auto iterator = TRY(arguments[0].value->generate_bytecode(*this)).value();
-        auto next_method = TRY(arguments[1].value->generate_bytecode(*this)).value();
-        auto done = TRY(arguments[2].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 3);
+        auto iterator = arguments[0].value->generate_bytecode(*this).value();
+        auto next_method = arguments[1].value->generate_bytecode(*this).value();
+        auto done = arguments[2].value->generate_bytecode(*this).value();
 
         emit<Op::CreateAsyncFromSyncIterator>(dst, iterator, next_method, done);
-        return {};
+        return;
     }
 
     if (operation_name == "ToLength"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToLength only accepts exactly one argument"sv,
-            };
-        }
-
-        auto value = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto value = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToLength>(dst, value);
-        return {};
+        return;
     }
 
     if (operation_name == "NewTypeError"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewTypeError only accepts one argument"sv,
-            };
-        }
-
+        VERIFY(arguments.size() == 1);
         auto const* message = as_if<StringLiteral>(*arguments[0].value);
-        if (!message) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "new_type_error's message must be a string literal"sv,
-            };
-        }
+        VERIFY(message);
 
         auto message_string = intern_string(message->value());
         emit<Op::NewTypeError>(dst, message_string);
-        return {};
+        return;
     }
 
     if (operation_name == "NewArrayWithLength"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewArrayWithLength only accepts one argument"sv,
-            };
-        }
-
-        auto length = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto length = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::NewArrayWithLength>(dst, length);
-        return {};
+        return;
     }
 
     if (operation_name == "CreateDataPropertyOrThrow"sv) {
-        if (arguments.size() != 3) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "CreateDataPropertyOrThrow only accepts three arguments"sv,
-            };
-        }
-
-        auto object = TRY(arguments[0].value->generate_bytecode(*this)).value();
-        auto property = TRY(arguments[1].value->generate_bytecode(*this)).value();
-        auto value = TRY(arguments[2].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 3);
+        auto object = arguments[0].value->generate_bytecode(*this).value();
+        auto property = arguments[1].value->generate_bytecode(*this).value();
+        auto value = arguments[2].value->generate_bytecode(*this).value();
         emit<Op::CreateDataPropertyOrThrow>(object, property, value);
-        return {};
+        return;
     }
 
 #define __JS_ENUMERATE(snake_name, functionName, length)                                                     \
@@ -1857,7 +1782,7 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
         Vector<ScopedOperand> argument_operands;                                                             \
         argument_operands.ensure_capacity(arguments.size());                                                 \
         for (auto const& argument : arguments) {                                                             \
-            auto argument_value = TRY(argument.value->generate_bytecode(*this)).value();                     \
+            auto argument_value = argument.value->generate_bytecode(*this).value();                          \
             argument_operands.unchecked_append(copy_if_needed_to_preserve_evaluation_order(argument_value)); \
         }                                                                                                    \
         emit_with_extra_operand_slots<Bytecode::Op::Call>(                                                   \
@@ -1867,19 +1792,15 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
             add_constant(js_undefined()),                                                                    \
             intern_string(builtin_identifier.string().to_utf16_string()),                                    \
             argument_operands);                                                                              \
-        return {};                                                                                           \
+        return;                                                                                              \
     }
     JS_ENUMERATE_NATIVE_JAVASCRIPT_BACKED_ABSTRACT_OPERATIONS
 #undef __JS_ENUMERATE
 
-    dbgln("Unknown builtin abstract operation: '{}'", operation_name);
-    return CodeGenerationError {
-        &builtin_identifier,
-        "Unknown builtin abstract operation"sv,
-    };
+    VERIFY_NOT_REACHED();
 }
 
-CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::maybe_generate_builtin_constant(Identifier const& builtin_identifier)
+Optional<ScopedOperand> Generator::maybe_generate_builtin_constant(Identifier const& builtin_identifier)
 {
     auto const& constant_name = builtin_identifier.string();
 
@@ -1910,11 +1831,7 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::maybe_generate_builtin
         return add_constant(Value(MAX_ARRAY_LIKE_INDEX));
     }
 
-    dbgln("Unknown builtin constant: '{}'", constant_name);
-    return CodeGenerationError {
-        &builtin_identifier,
-        "Unknown builtin constant"sv,
-    };
+    VERIFY_NOT_REACHED();
 }
 
 }
