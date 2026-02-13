@@ -66,6 +66,7 @@
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/ContentSecurityPolicy/PolicyList.h>
+#include <LibWeb/DOM/AbstractElement.h>
 #include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/AdoptedStyleSheets.h>
 #include <LibWeb/DOM/Attr.h>
@@ -130,6 +131,7 @@
 #include <LibWeb/HTML/HTMLMetaElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
 #include <LibWeb/HTML/HTMLScriptElement.h>
+#include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
 #include <LibWeb/HTML/HTMLTitleElement.h>
@@ -1633,6 +1635,21 @@ void Document::update_layout(UpdateLayoutReason reason)
             node_invalidation = element.recompute_inherited_style();
         }
         is_display_none = static_cast<Element&>(node).computed_properties()->display().is_none();
+
+        // If this is a slot element and its style changed, mark its assigned
+        // (slotted) nodes as needing a style update. Slotted elements inherit
+        // from their slot in the flat tree, but they are DOM children of the
+        // shadow host, so the normal DOM tree walk won't propagate inherited
+        // style changes to them.
+        if (!node_invalidation.is_none()) {
+            if (auto* slot = as_if<HTML::HTMLSlotElement>(node)) {
+                for (auto const& slottable : slot->assigned_nodes_internal()) {
+                    slottable.visit([](auto const& assigned_node) {
+                        assigned_node->set_needs_style_update(true);
+                    });
+                }
+            }
+        }
     }
     if (node_invalidation.relayout && node.layout_node()) {
         node.layout_node()->set_needs_layout_update(SetNeedsLayoutReason::StyleChange);
@@ -1739,6 +1756,39 @@ void Document::update_style()
     if (invalidation.rebuild_stacking_context_tree)
         invalidate_stacking_context_tree();
     m_needs_full_style_update = false;
+}
+
+bool Document::element_needs_style_update(AbstractElement const& abstract_element) const
+{
+    // If there are document-level reasons to update style, we can't skip.
+    if (m_needs_full_style_update)
+        return true;
+    if (m_needs_animated_style_update)
+        return true;
+    if (m_needs_invalidation_of_elements_affected_by_has)
+        return true;
+    if (m_style_invalidator->has_pending_invalidations())
+        return true;
+
+    // Check the element itself.
+    if (abstract_element.element().needs_style_update())
+        return true;
+    if (abstract_element.element().entire_subtree_needs_style_update())
+        return true;
+
+    // Walk the inheritance ancestor chain. We use element_to_inherit_style_from()
+    // because style inheritance follows the flat tree (slotted elements inherit
+    // from their assigned slot, not their DOM parent). If any ancestor on the
+    // path has its style marked dirty, the target element's computed style could
+    // change via inherited properties, so we must update.
+    for (auto ancestor = abstract_element.element_to_inherit_style_from(); ancestor.has_value(); ancestor = ancestor->element_to_inherit_style_from()) {
+        if (ancestor->element().needs_style_update())
+            return true;
+        if (ancestor->element().entire_subtree_needs_style_update())
+            return true;
+    }
+
+    return false;
 }
 
 void Document::update_animated_style_if_needed()
