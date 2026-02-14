@@ -994,7 +994,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
         }
 
         // 8. If request's body is null, then set entry's document state's resource to null.
-        if (!state_holder->request->body().has<Empty>()) {
+        if (state_holder->request->body().has<Empty>()) {
             state_holder->entry->document_state()->set_resource(Empty {});
         }
 
@@ -1363,9 +1363,10 @@ static void finalize_session_history_entry(
 
         // 3. If entry's document state's request referrer is "client", and navigationParams is a navigation params (i.e., neither null nor a non-fetch scheme navigation params), then:
         if (entry->document_state()->request_referrer() == Fetch::Infrastructure::Request::Referrer::Client
-            && (!received_navigation_params.has<Navigable::NullOrError>() && received_navigation_params.has<GC::Ref<NonFetchSchemeNavigationParams>>())) {
+            && received_navigation_params.has<GC::Ref<NavigationParams>>()
+            && received_navigation_params.get<GC::Ref<NavigationParams>>()->request) {
             // 1. Assert: navigationParams's request is not null.
-            VERIFY(received_navigation_params.has<GC::Ref<NavigationParams>>() && received_navigation_params.get<GC::Ref<NavigationParams>>()->request);
+            // NB: We don't perform this assertion because srcdoc navigations create NavigationParams with a null request.
 
             // 2. Set entry's document state's request referrer to navigationParams's request's referrer.
             entry->document_state()->set_request_referrer(received_navigation_params.get<GC::Ref<NavigationParams>>()->request->referrer());

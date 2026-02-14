@@ -173,6 +173,7 @@
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/AccumulatedVisualContext.h>
 #include <LibWeb/Painting/DisplayList.h>
@@ -3637,12 +3638,18 @@ void Document::run_the_resize_steps()
 // https://drafts.csswg.org/cssom-view-1/#document-run-the-scroll-steps
 void Document::run_the_scroll_steps()
 {
+    // AD-HOC: Process auto-scroll ticks before dispatching scroll events. This is tied to the rendering update to
+    //         ensure exactly one auto-scroll tick per frame.
+    if (auto navigable = this->navigable())
+        navigable->event_handler().process_auto_scroll();
+
     // FIXME: 1. For each scrolling box box that was scrolled:
     //        ...
 
     // 2. For each item (target, type) in doc’s pending scroll events, in the order they were added to the list, run
     //    these substeps:
-    for (auto const& [target, type] : m_pending_scroll_events) {
+    auto pending_scroll_events = move(m_pending_scroll_events);
+    for (auto const& [target, type] : pending_scroll_events) {
         // 1. If target is a Document, and type is "scroll" or "scrollend", fire an event named type that bubbles at target.
         if (is<Document>(*target) && (type == HTML::EventNames::scroll || type == HTML::EventNames::scrollend)) {
             auto event = DOM::Event::create(realm(), type);
@@ -3653,13 +3660,14 @@ void Document::run_the_scroll_steps()
         // FIXME: 3. Otherwise, if type is "scrollsnapchanging", then:
         // 4. Otherwise, fire an event named type at target.
         else {
-            auto event = DOM::Event::create(realm(), HTML::EventNames::scroll);
+            auto event = DOM::Event::create(realm(), type);
             target->dispatch_event(event);
         }
     }
 
     // 3. Empty doc’s pending scroll events.
-    m_pending_scroll_events.clear();
+    // AD-HOC: We already emptied the scroll events by moving in step 2. This prevents us from removing new scroll
+    //         events that were added while dispatching the old scroll events.
 }
 
 void Document::add_media_query_list(GC::Ref<CSS::MediaQueryList> media_query_list)
@@ -5667,6 +5675,10 @@ void Document::update_animations_and_send_events(double timestamp)
 
             for (auto const& animation : timeline->associated_animations())
                 animation->update();
+
+            auto animations = GC::RootVector { heap(), timeline->associated_animations().values() };
+            for (auto& animation : animations)
+                dispatch_events_for_animation_if_necessary(animation.as_nonnull());
         }
 
         // 2. Remove replaced animations for doc.
@@ -5722,12 +5734,6 @@ void Document::update_animations_and_send_events(double timestamp)
     //    the previous step.
     for (auto const& event : events_to_dispatch)
         event.target->dispatch_event(event.event);
-
-    for (auto& timeline : timelines_to_update) {
-        auto animations_to_dispatch = GC::RootVector { heap(), timeline->associated_animations().values() };
-        for (auto& animation : animations_to_dispatch)
-            dispatch_events_for_animation_if_necessary(animation.as_nonnull());
-    }
 }
 
 // https://www.w3.org/TR/web-animations-1/#remove-replaced-animations
