@@ -1405,7 +1405,7 @@ void StyleComputer::compute_property_values(ComputedProperties& style, Optional<
     }
 
     if (abstract_element.has_value() && is<HTML::HTMLHtmlElement>(abstract_element->element()))
-        const_cast<StyleComputer&>(*this).m_root_element_font_metrics = calculate_root_element_font_metrics(style);
+        m_root_element_font_metrics = calculate_root_element_font_metrics(style);
 }
 
 ComputationContext const& StyleComputer::get_computation_context_for_property(PropertyID property_id, ComputedProperties const& style, Optional<DOM::AbstractElement> abstract_element) const
@@ -1436,7 +1436,7 @@ ComputationContext const& StyleComputer::get_computation_context_for_property(Pr
         if (!m_cached_font_computation_context.has_value()) {
             auto inheritance_parent = abstract_element.map([](auto& element) { return element.element_to_inherit_style_from(); }).value_or(OptionalNone {});
 
-            const_cast<StyleComputer*>(this)->m_cached_font_computation_context = {
+            m_cached_font_computation_context = {
                 .length_resolution_context = inheritance_parent.has_value()
                     ? Length::ResolutionContext::for_element(inheritance_parent.value())
                     : Length::ResolutionContext::for_window(*m_document->window()),
@@ -1456,7 +1456,7 @@ ComputationContext const& StyleComputer::get_computation_context_for_property(Pr
                 inheritance_parent.has_value() ? inheritance_parent->computed_properties()->line_height() : InitialValues::line_height()
             };
 
-            const_cast<StyleComputer*>(this)->m_cached_line_height_computation_context = {
+            m_cached_line_height_computation_context = {
                 .length_resolution_context = {
                     .viewport_rect = viewport_rect(),
                     .font_metrics = line_height_font_metrics,
@@ -1472,7 +1472,7 @@ ComputationContext const& StyleComputer::get_computation_context_for_property(Pr
     }
     default: {
         if (!m_cached_generic_computation_context.has_value()) {
-            const_cast<StyleComputer*>(this)->m_cached_generic_computation_context = {
+            m_cached_generic_computation_context = {
                 .length_resolution_context = {
                     .viewport_rect = viewport_rect(),
                     .font_metrics = {
@@ -1742,6 +1742,10 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
             abstract_element_for_pseudo_element.set_inheritance_override(host_element);
 
         auto style = compute_style(abstract_element_for_pseudo_element);
+
+        // Copy cascaded properties to the element itself so that elements
+        // slotted into this slot can find them via element_to_inherit_style_from().
+        abstract_element.set_cascaded_properties(abstract_element_for_pseudo_element.cascaded_properties());
 
         // Merge back inline styles
         if (auto inline_style = element.inline_style()) {
@@ -2018,7 +2022,7 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
     }
 
     if (is<HTML::HTMLHtmlElement>(abstract_element.element()))
-        const_cast<StyleComputer&>(*this).m_root_element_font_metrics = calculate_root_element_font_metrics(computed_style);
+        m_root_element_font_metrics = calculate_root_element_font_metrics(computed_style);
 
     // Compute the value of custom properties
     compute_custom_properties(computed_style, abstract_element);
