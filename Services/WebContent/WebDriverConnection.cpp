@@ -203,7 +203,9 @@ ErrorOr<NonnullRefPtr<WebDriverConnection>> WebDriverConnection::connect(Web::Pa
     page_client.page().set_should_block_pop_ups(false);
 
     dbgln_if(WEBDRIVER_DEBUG, "Connected to WebDriver");
-    return adopt_nonnull_ref_or_enomem(new (nothrow) WebDriverConnection(make<IPC::Transport>(move(socket)), page_client));
+    auto connection = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) WebDriverConnection(make<IPC::Transport>(move(socket)), page_client)));
+    connection->async_did_set_window_handle(page_client.page().top_level_traversable()->window_handle());
+    return connection;
 }
 
 WebDriverConnection::WebDriverConnection(NonnullOwnPtr<IPC::Transport> transport, Web::PageClient& page_client)
@@ -549,16 +551,6 @@ Messages::WebDriverClient::GetTitleResponse WebDriverConnection::get_title()
     });
 
     return JsonValue {};
-}
-
-// 11.1 Get Window Handle, https://w3c.github.io/webdriver/#get-window-handle
-Messages::WebDriverClient::GetWindowHandleResponse WebDriverConnection::get_window_handle()
-{
-    // 1. If session's current top-level browsing context is no longer open, return error with error code no such window.
-    TRY(ensure_current_top_level_browsing_context_is_open());
-
-    // 2. Return success with data being the window handle associated with session's current top-level browsing context.
-    return JsonValue { current_top_level_browsing_context()->top_level_traversable()->window_handle() };
 }
 
 // 11.2 Close Window, https://w3c.github.io/webdriver/#dfn-close-window
