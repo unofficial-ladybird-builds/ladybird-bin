@@ -198,7 +198,13 @@ public:
         Optional<ScopedOperand> loaded_value {};                         // Loaded value, if we've performed a load.
     };
 
-    ReferenceOperands emit_load_from_reference(JS::ASTNode const&, Optional<ScopedOperand> preferred_dst = {});
+    enum class ReferenceMode {
+        KeepReference,
+        LoadOnly,
+    };
+
+    ReferenceOperands emit_load_from_reference(JS::ASTNode const&, Optional<ScopedOperand> preferred_dst = {}, ReferenceMode = ReferenceMode::KeepReference);
+    ReferenceOperands emit_evaluate_reference(MemberExpression const&);
     void emit_store_to_reference(JS::ASTNode const&, ScopedOperand value);
     void emit_store_to_reference(ReferenceOperands const&, ScopedOperand value);
     Optional<ScopedOperand> emit_delete_reference(JS::ASTNode const&);
