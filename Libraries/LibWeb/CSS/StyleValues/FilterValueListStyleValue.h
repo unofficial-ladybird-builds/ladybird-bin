@@ -10,11 +10,6 @@
 #pragma once
 
 #include <LibGfx/Filter.h>
-#include <LibWeb/CSS/Angle.h>
-#include <LibWeb/CSS/CalculatedOr.h>
-#include <LibWeb/CSS/Length.h>
-#include <LibWeb/CSS/Number.h>
-#include <LibWeb/CSS/PercentageOr.h>
 #include <LibWeb/CSS/StyleValues/StyleValue.h>
 #include <LibWeb/CSS/URL.h>
 
@@ -23,39 +18,34 @@ namespace Web::CSS {
 namespace FilterOperation {
 
 struct Blur {
-    LengthOrCalculated radius { Length::make_px(0) };
-    float resolved_radius(Layout::Node const&) const;
+    ValueComparingNonnullRefPtr<StyleValue const> radius;
+    float resolved_radius() const;
     bool operator==(Blur const&) const = default;
 };
 
+// FIXME: It would be nice if we could use a ShadowStyleValue here
 struct DropShadow {
-    LengthOrCalculated offset_x;
-    LengthOrCalculated offset_y;
-    Optional<LengthOrCalculated> radius;
+    ValueComparingNonnullRefPtr<StyleValue const> offset_x;
+    ValueComparingNonnullRefPtr<StyleValue const> offset_y;
+    ValueComparingRefPtr<StyleValue const> radius;
     ValueComparingRefPtr<StyleValue const> color;
     bool operator==(DropShadow const&) const = default;
 };
 
 struct HueRotate {
-    struct Zero {
-        bool operator==(Zero const&) const = default;
-    };
-    using AngleOrZero = Variant<AngleOrCalculated, Zero>;
-    AngleOrZero angle { Angle::make_degrees(0) };
-    float angle_degrees(Layout::Node const&) const;
+    ValueComparingNonnullRefPtr<StyleValue const> angle;
+    float angle_degrees() const;
     bool operator==(HueRotate const&) const = default;
 };
 
 struct Color {
     Gfx::ColorFilterType operation;
-    NumberPercentage amount { Number { Number::Type::Integer, 1.0 } };
+    ValueComparingNonnullRefPtr<StyleValue const> amount;
     float resolved_amount() const;
     bool operator==(Color const&) const = default;
 };
 
 };
-
-using FilterValue = Variant<FilterOperation::Blur, FilterOperation::DropShadow, FilterOperation::HueRotate, FilterOperation::Color, URL>;
 
 class FilterValueListStyleValue final : public StyleValueWithDefaultOperators<FilterValueListStyleValue> {
 public:

@@ -5751,58 +5751,58 @@ RefPtr<StyleValue const> Parser::parse_filter_value_list_value(TokenStream<Compo
         if (filter_token == FilterToken::Blur) {
             // blur( <length>? )
             if (!tokens.has_next_token())
-                return FilterOperation::Blur {};
-            auto blur_radius = parse_length(tokens);
+                return FilterOperation::Blur { LengthStyleValue::create(Length::make_px(0)) };
+            auto blur_radius = parse_length_value(tokens);
             tokens.discard_whitespace();
-            if (!blur_radius.has_value() || (!blur_radius->is_calculated() && blur_radius->value().raw_value() < 0))
+            if (!blur_radius || (blur_radius->is_length() && blur_radius->as_length().raw_value() < 0))
                 return {};
-            return if_no_more_tokens_return(FilterOperation::Blur { blur_radius.value() });
+            return if_no_more_tokens_return(FilterOperation::Blur { blur_radius.release_nonnull() });
         } else if (filter_token == FilterToken::DropShadow) {
             if (!tokens.has_next_token())
                 return {};
             // drop-shadow( [ <color>? && <length>{2,3} ] )
             // Note: The following code is a little awkward to allow the color to be before or after the lengths.
-            Optional<LengthOrCalculated> maybe_radius = {};
+            RefPtr<StyleValue const> maybe_radius;
             auto maybe_color = parse_color_value(tokens);
             tokens.discard_whitespace();
-            auto x_offset = parse_length(tokens);
+            auto x_offset = parse_length_value(tokens);
             tokens.discard_whitespace();
-            if (!x_offset.has_value() || !tokens.has_next_token())
+            if (!x_offset || !tokens.has_next_token())
                 return {};
 
-            auto y_offset = parse_length(tokens);
+            auto y_offset = parse_length_value(tokens);
             tokens.discard_whitespace();
-            if (!y_offset.has_value())
+            if (!y_offset)
                 return {};
 
             if (tokens.has_next_token()) {
-                maybe_radius = parse_length(tokens);
+                maybe_radius = parse_length_value(tokens);
                 tokens.discard_whitespace();
-                if (!maybe_color && (!maybe_radius.has_value() || tokens.has_next_token())) {
+                if (!maybe_color && (!maybe_radius || tokens.has_next_token())) {
                     maybe_color = parse_color_value(tokens);
                     if (!maybe_color)
                         return {};
-                } else if (!maybe_radius.has_value()) {
+                } else if (!maybe_radius) {
                     return {};
                 }
             }
 
-            return if_no_more_tokens_return(FilterOperation::DropShadow { x_offset.value(), y_offset.value(), maybe_radius, maybe_color });
+            return if_no_more_tokens_return(FilterOperation::DropShadow { x_offset.release_nonnull(), y_offset.release_nonnull(), maybe_radius, maybe_color });
         } else if (filter_token == FilterToken::HueRotate) {
             // hue-rotate( [ <angle> | <zero> ]? )
             if (!tokens.has_next_token())
-                return FilterOperation::HueRotate {};
+                return FilterOperation::HueRotate { AngleStyleValue::create(Angle::make_degrees(0)) };
 
             if (tokens.next_token().is(Token::Type::Number)) {
                 // hue-rotate(0)
                 auto number = tokens.consume_a_token().token().number();
                 if (number.is_integer() && number.integer_value() == 0)
-                    return if_no_more_tokens_return(FilterOperation::HueRotate { FilterOperation::HueRotate::Zero {} });
+                    return if_no_more_tokens_return(FilterOperation::HueRotate { AngleStyleValue::create(Angle::make_degrees(0)) });
                 return {};
             }
 
-            if (auto angle = parse_angle(tokens); angle.has_value())
-                return if_no_more_tokens_return(FilterOperation::HueRotate { angle.value() });
+            if (auto angle = parse_angle_value(tokens))
+                return if_no_more_tokens_return(FilterOperation::HueRotate { angle.release_nonnull() });
 
             return {};
         } else {
@@ -5815,21 +5815,27 @@ RefPtr<StyleValue const> Parser::parse_filter_value_list_value(TokenStream<Compo
             // sepia( <number-percentage>? )
             // saturate( <number-percentage>? )
             if (!tokens.has_next_token())
-                return FilterOperation::Color { filter_token_to_operation(filter_token) };
-            auto amount = parse_number_percentage(tokens);
-            if (amount.has_value()) {
-                if (amount->is_percentage() && amount->percentage().value() < 0)
-                    return {};
-                if (amount->is_number() && amount->number().value() < 0)
-                    return {};
-                if (first_is_one_of(filter_token, FilterToken::Grayscale, FilterToken::Invert, FilterToken::Opacity, FilterToken::Sepia)) {
-                    if (amount->is_percentage() && amount->percentage().value() > 100)
-                        amount = Percentage { 100 };
-                    if (amount->is_number() && amount->number().value() > 1)
-                        amount = Number { Number::Type::Integer, 1.0 };
-                }
+                return FilterOperation::Color { filter_token_to_operation(filter_token), NumberStyleValue::create(1) };
+
+            auto amount = parse_number_percentage_value(tokens);
+
+            if (!amount)
+                return {};
+
+            if (amount->is_percentage() && amount->as_percentage().percentage().value() < 0)
+                return {};
+
+            if (amount->is_number() && amount->as_number().number() < 0)
+                return {};
+
+            if (first_is_one_of(filter_token, FilterToken::Grayscale, FilterToken::Invert, FilterToken::Opacity, FilterToken::Sepia)) {
+                if (amount->is_percentage() && amount->as_percentage().percentage().value() > 100)
+                    amount = PercentageStyleValue::create(Percentage { 100 });
+                if (amount->is_number() && amount->as_number().number() > 1)
+                    amount = NumberStyleValue::create(1);
             }
-            return if_no_more_tokens_return(FilterOperation::Color { filter_token_to_operation(filter_token), amount.value_or(Number { Number::Type::Integer, 1 }) });
+
+            return if_no_more_tokens_return(FilterOperation::Color { filter_token_to_operation(filter_token), amount.release_nonnull() });
         }
     };
 

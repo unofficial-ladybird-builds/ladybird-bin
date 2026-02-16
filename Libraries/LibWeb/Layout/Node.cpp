@@ -682,8 +682,8 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
 
     computed_values.set_float(computed_style.float_());
 
-    computed_values.set_border_spacing_horizontal(computed_style.border_spacing_horizontal(*this));
-    computed_values.set_border_spacing_vertical(computed_style.border_spacing_vertical(*this));
+    computed_values.set_border_spacing_horizontal(computed_style.border_spacing_horizontal());
+    computed_values.set_border_spacing_vertical(computed_style.border_spacing_vertical());
 
     computed_values.set_caption_side(computed_style.caption_side());
     computed_values.set_clear(computed_style.clear());
@@ -784,6 +784,7 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
 
     if (auto const& outline_color = computed_style.property(CSS::PropertyID::OutlineColor); outline_color.has_color())
         computed_values.set_outline_color(outline_color.to_color(color_resolution_context).value());
+    // FIXME: Support calc()
     if (auto const& outline_offset = computed_style.property(CSS::PropertyID::OutlineOffset); outline_offset.is_length())
         computed_values.set_outline_offset(outline_offset.as_length().length());
     computed_values.set_outline_style(computed_style.outline_style());
@@ -826,6 +827,7 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     auto const& stroke_width = computed_style.property(CSS::PropertyID::StrokeWidth);
     // FIXME: Converting to pixels isn't really correct - values should be in "user units"
     //        https://svgwg.org/svg2-draft/coords.html#TermUserUnits
+    // FIXME: Support calc()
     if (stroke_width.is_number())
         computed_values.set_stroke_width(CSS::Length::make_px(CSSPixels::nearest_value_for(stroke_width.as_number().number())));
     else if (stroke_width.is_length())
@@ -868,6 +870,7 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     auto const& stroke_dashoffset = computed_style.property(CSS::PropertyID::StrokeDashoffset);
     // FIXME: Converting to pixels isn't really correct - values should be in "user units"
     //        https://svgwg.org/svg2-draft/coords.html#TermUserUnits
+    // FIXME: Support calc()
     if (stroke_dashoffset.is_number())
         computed_values.set_stroke_dashoffset(CSS::Length::make_px(CSSPixels::nearest_value_for(stroke_dashoffset.as_number().number())));
     else if (stroke_dashoffset.is_length())

@@ -22,6 +22,7 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
+#include <LibWeb/CSS/StyleValues/FilterValueListStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/CanvasRenderingContext2D.h>
 #include <LibWeb/HTML/HTMLCanvasElement.h>
@@ -1216,18 +1217,23 @@ void CanvasRenderingContext2D::set_filter(String filter)
     auto style_value = parser.parse_as_css_value(CSS::PropertyID::Filter);
 
     if (style_value && style_value->is_filter_value_list()) {
-        auto filter_value_list = style_value->as_filter_value_list().filter_value_list();
-
         // Note: The layout must be updated to make sure the canvas's layout node isn't null.
         canvas_element().document().update_layout(DOM::UpdateLayoutReason::CanvasRenderingContext2DSetFilter);
         auto layout_node = canvas_element().layout_node();
+
+        CSS::ComputationContext computation_context {
+            .length_resolution_context = CSS::Length::ResolutionContext::for_layout_node(*layout_node),
+            .abstract_element = DOM::AbstractElement { canvas_element() },
+            .color_scheme = layout_node->computed_values().color_scheme(),
+        };
+        auto filter_value_list = style_value->absolutized(computation_context)->as_filter_value_list().filter_value_list();
 
         // 4. Set this's current filter to the given value.
         for (auto& item : filter_value_list) {
             // FIXME: Add support for SVG filters when they get implement by the CSS parser.
             item.visit(
                 [&](CSS::FilterOperation::Blur const& blur_filter) {
-                    float radius = blur_filter.resolved_radius(*layout_node);
+                    float radius = blur_filter.resolved_radius();
                     auto new_filter = Gfx::Filter::blur(radius, radius);
 
                     drawing_state().filter = drawing_state().filter.has_value()
@@ -1243,7 +1249,7 @@ void CanvasRenderingContext2D::set_filter(String filter)
                         : new_filter;
                 },
                 [&](CSS::FilterOperation::HueRotate const& hue_rotate) {
-                    float angle = hue_rotate.angle_degrees(*layout_node);
+                    float angle = hue_rotate.angle_degrees();
                     auto new_filter = Gfx::Filter::hue_rotate(angle);
 
                     drawing_state().filter = drawing_state().filter.has_value()
@@ -1251,18 +1257,12 @@ void CanvasRenderingContext2D::set_filter(String filter)
                         : new_filter;
                 },
                 [&](CSS::FilterOperation::DropShadow const& drop_shadow) {
-                    auto resolution_context = CSS::Length::ResolutionContext::for_layout_node(*layout_node);
-                    CSS::CalculationResolutionContext calculation_context {
-                        .length_resolution_context = resolution_context,
-                    };
-                    auto zero_px = CSS::Length::make_px(0);
-
-                    float offset_x = static_cast<float>(drop_shadow.offset_x.resolved(calculation_context).value_or(zero_px).to_px(resolution_context));
-                    float offset_y = static_cast<float>(drop_shadow.offset_y.resolved(calculation_context).value_or(zero_px).to_px(resolution_context));
+                    float offset_x = static_cast<float>(CSS::Length::from_style_value(drop_shadow.offset_x, {}).absolute_length_to_px());
+                    float offset_y = static_cast<float>(CSS::Length::from_style_value(drop_shadow.offset_y, {}).absolute_length_to_px());
 
                     float radius = 0.0f;
-                    if (drop_shadow.radius.has_value()) {
-                        radius = static_cast<float>(drop_shadow.radius->resolved(calculation_context).value_or(zero_px).to_px(resolution_context));
+                    if (drop_shadow.radius) {
+                        radius = static_cast<float>(CSS::Length::from_style_value(*drop_shadow.radius, {}).absolute_length_to_px());
                     };
 
                     auto color_context = CSS::ColorResolutionContext::for_layout_node_with_style(*layout_node);
