@@ -20,7 +20,7 @@ class CSSFontFeatureValuesMap final : public Bindings::PlatformObject {
 public:
     static GC::Ref<CSSFontFeatureValuesMap> create(JS::Realm&, size_t max_value_count);
 
-    virtual GC::Ref<JS::Map> map_entries() { return m_map_entries; }
+    GC::Ref<JS::Map> map_entries() { return m_map_entries; }
 
     WebIDL::ExceptionOr<void> set(String const& feature_value_name, Variant<u32, Vector<u32>> const& values);
 
@@ -35,7 +35,7 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
 
     GC::Ref<JS::Map> m_map_entries;
-    size_t m_max_value_count;
+    size_t m_max_value_count { 0 };
 };
 
 }
