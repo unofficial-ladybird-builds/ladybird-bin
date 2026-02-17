@@ -1,0 +1,13 @@
+Harness status: OK
+
+Found 8 tests
+
+8 Pass
+Pass	CSSFontFeatureValuesRule is correctly parsed and accessible via CSSOM.
+Pass	CSSFontFeatureValuesRule family is settable and readable.
+Pass	CSSFontFeatureValuesMap entries are settable to single values.
+Pass	CSSFontFeatureValuesMap entries are settable to sequences of numbers.
+Pass	New rules can be added.
+Pass	Deleting single entries is possible.
+Pass	Clearing all entries is possible.
+Pass	Multiple rules for the same family are kept separate in CSSOM.
