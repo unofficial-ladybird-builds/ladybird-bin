@@ -22,6 +22,7 @@
 #include <LibUnicode/TimeZone.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
+#include <LibWeb/HTML/UniversalGlobalScope.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Internals/Internals.h>
 #include <LibWeb/Loader/ContentFilter.h>
@@ -90,6 +91,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     int request_server_socket { -1 };
     int image_decoder_socket { -1 };
     bool enable_test_mode = false;
+    bool expose_experimental_interfaces = false;
     bool expose_internals_object = false;
     bool wait_for_debugger = false;
     bool log_all_js_exceptions = false;
@@ -111,6 +113,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     args_parser.add_option(request_server_socket, "File descriptor of the socket for the RequestServer connection", "request-server-socket", 'r', "request_server_socket");
     args_parser.add_option(image_decoder_socket, "File descriptor of the socket for the ImageDecoder connection", "image-decoder-socket", 'i', "image_decoder_socket");
     args_parser.add_option(enable_test_mode, "Enable test mode", "test-mode");
+    args_parser.add_option(expose_experimental_interfaces, "Expose experimental IDL interfaces", "expose-experimental-interfaces");
     args_parser.add_option(expose_internals_object, "Expose internals object", "expose-internals-object");
     args_parser.add_option(certificates, "Path to a certificate file", "certificate", 'C', "certificate");
     args_parser.add_option(wait_for_debugger, "Wait for debugger", "wait-for-debugger");
@@ -143,12 +146,6 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         font_provider.set_name_but_fixme_should_create_custom_system_font_provider("FontConfig"_string);
     }
     font_provider.load_all_fonts_from_uri("resource://fonts"sv);
-
-    // Test mode implies internals object is exposed and the Skia CPU backend is used
-    if (enable_test_mode) {
-        expose_internals_object = true;
-        force_cpu_painting = true;
-    }
 
     Web::set_browser_process_command_line(command_line);
     Web::set_browser_process_executable_path(executable_path);
@@ -191,6 +188,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     Web::HTML::Window::set_enable_test_mode(enable_test_mode);
     Web::HTML::Window::set_internals_object_exposed(expose_internals_object);
+    Web::HTML::UniversalGlobalScopeMixin::set_experimental_interfaces_exposed(expose_experimental_interfaces);
 
     Web::Platform::FontPlugin::install(*new WebView::FontPlugin(enable_test_mode, &font_provider));
 
