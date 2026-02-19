@@ -105,7 +105,6 @@ void HTMLMediaElement::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_text_tracks);
     visitor.visit(m_document_observer);
     visitor.visit(m_source_element_selector);
-    visitor.visit(m_fetch_controller);
     visitor.visit(m_pending_play_promises);
     visitor.visit(m_selected_video_track);
 }
@@ -975,6 +974,14 @@ struct HTMLMediaElement::FetchData : public RefCounted<FetchData> {
     Function<void(String)> failure_callback;
     bool accepts_byte_ranges { false };
     u64 offset { 0 };
+
+    ~FetchData()
+    {
+        if (stream != nullptr) {
+            stream->set_data_request_callback(nullptr);
+            stream->close();
+        }
+    }
 };
 
 void HTMLMediaElement::fetch_resource(URL::URL const& url_record, Function<void(String)> failure_callback)
@@ -982,14 +989,14 @@ void HTMLMediaElement::fetch_resource(URL::URL const& url_record, Function<void(
     auto fetch_data = make_ref_counted<FetchData>();
     fetch_data->url_record = url_record;
     fetch_data->stream = Media::IncrementallyPopulatedStream::create_empty();
-    fetch_data->stream->set_data_request_callback([self = GC::Weak(*this), fetch_data](u64 offset) {
+    fetch_data->stream->set_data_request_callback([self = GC::Weak(*this), &fetch_data = *fetch_data](u64 offset) {
         if (!self)
             return;
         self->restart_fetch_at_offset(fetch_data, offset);
     });
     fetch_data->failure_callback = [&stream = *fetch_data->stream, failure_callback = move(failure_callback)](String error_message) {
         // Ensure that we unblock any reads if we stop the fetch due to some failure.
-        stream.reached_end_of_body();
+        stream.close();
         failure_callback(move(error_message));
     };
 
@@ -1084,13 +1091,16 @@ void HTMLMediaElement::fetch_resource(NonnullRefPtr<FetchData> const& fetch_data
         // 8. Fetch request, with processResponse set to the following steps given response response:
         Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input {};
 
-        fetch_algorithms_input.process_response = [this, byte_range = move(byte_range), fetch_data, fetch_generation](auto response) mutable {
+        fetch_algorithms_input.process_response = [weak_self = GC::Weak(*this), byte_range = move(byte_range), fetch_data, fetch_generation](auto response) mutable {
+            if (!weak_self)
+                return;
+
             // FIXME: If the response is CORS cross-origin, we must use its internal response to query any of its data. See:
             //        https://github.com/whatwg/html/issues/9355
             response = response->unsafe_response();
 
             // 1. Let global be the media element's node document's relevant global object.
-            auto& global = document().realm().global_object();
+            auto& global = weak_self->document().realm().global_object();
 
             if (auto content_length = response->header_list()->extract_length(); content_length.template has<u64>()) {
                 auto actual_length = fetch_data->offset + content_length.template get<u64>();
@@ -1102,7 +1112,7 @@ void HTMLMediaElement::fetch_resource(NonnullRefPtr<FetchData> const& fetch_data
 
             // 4. If the result of verifying response given the current media resource and byteRange is false, then abort these steps.
             // NOTE: We do this step before creating the updateMedia task so that we can invoke the failure callback.
-            auto maybe_verify_response_failure = verify_response_or_get_failure_reason(response, byte_range, fetch_data);
+            auto maybe_verify_response_failure = weak_self->verify_response_or_get_failure_reason(response, byte_range, fetch_data);
             if (maybe_verify_response_failure.has_value()) {
                 fetch_data->failure_callback(maybe_verify_response_failure.value());
                 return;
@@ -1111,8 +1121,10 @@ void HTMLMediaElement::fetch_resource(NonnullRefPtr<FetchData> const& fetch_data
             // 2. Let updateMedia be to queue a media element task given the media element to run the first appropriate steps from the media data processing
             //    steps list below. (A new task is used for this so that the work described below occurs relative to the appropriate media element event task
             //    source rather than using the networking task source.)
-            auto update_media = GC::create_function(heap(), [this, fetch_data, fetch_generation](ByteBuffer media_data) mutable {
-                if (fetch_generation != m_current_fetch_generation)
+            auto update_media = GC::create_function(weak_self->heap(), [weak_self, fetch_data, fetch_generation](ByteBuffer media_data) mutable {
+                if (!weak_self)
+                    return;
+                if (fetch_generation != weak_self->m_current_fetch_generation)
                     return;
 
                 // 6. Update the media data with the contents of response's unsafe response obtained in this fashion. response can be CORS-same-origin or
@@ -1121,8 +1133,8 @@ void HTMLMediaElement::fetch_resource(NonnullRefPtr<FetchData> const& fetch_data
                 fetch_data->stream->add_chunk_at(fetch_data->offset, media_data.bytes());
                 fetch_data->offset += media_data.size();
 
-                queue_a_media_element_task([this] {
-                    process_media_data(FetchingStatus::Ongoing).release_value_but_fixme_should_propagate_errors();
+                weak_self->queue_a_media_element_task([&self = *weak_self] {
+                    self.process_media_data(FetchingStatus::Ongoing).release_value_but_fixme_should_propagate_errors();
                 });
             });
 
@@ -1130,18 +1142,20 @@ void HTMLMediaElement::fetch_resource(NonnullRefPtr<FetchData> const& fetch_data
             //    and if all of the data is available to the user agent without network access, then, the user agent must move on to the final step below.
             //    This might never happen, e.g. when streaming an infinite resource such as web radio, or if the resource is longer than the user agent's
             //    ability to cache data.
-            auto process_end_of_media = GC::create_function(heap(), [this, fetch_data, fetch_generation] {
-                if (fetch_generation != m_current_fetch_generation)
+            auto process_end_of_media = GC::create_function(weak_self->heap(), [weak_self, fetch_data, fetch_generation] {
+                if (!weak_self)
+                    return;
+                if (fetch_generation != weak_self->m_current_fetch_generation)
                     return;
 
-                fetch_data->stream->reached_end_of_body();
-                queue_a_media_element_task([this] {
-                    process_media_data(FetchingStatus::Complete).release_value_but_fixme_should_propagate_errors();
+                fetch_data->stream->close();
+                weak_self->queue_a_media_element_task([&self = *weak_self] {
+                    self.process_media_data(FetchingStatus::Complete).release_value_but_fixme_should_propagate_errors();
                 });
             });
 
             VERIFY(response->body());
-            auto empty_algorithm = GC::create_function(heap(), [](JS::Value) { });
+            auto empty_algorithm = GC::create_function(weak_self->heap(), [](JS::Value) { });
 
             // 5. Otherwise, incrementally read response's body given updateMedia, processEndOfMedia, an empty algorithm, and global.
             response->body()->incrementally_read(update_media, process_end_of_media, empty_algorithm, GC::Ref { global });
@@ -1206,9 +1220,9 @@ Optional<String> HTMLMediaElement::verify_response_or_get_failure_reason(GC::Ref
     return {};
 }
 
-void HTMLMediaElement::restart_fetch_at_offset(NonnullRefPtr<FetchData> const& fetch_data, u64 offset)
+void HTMLMediaElement::restart_fetch_at_offset(FetchData& fetch_data, u64 offset)
 {
-    if (!fetch_data->accepts_byte_ranges)
+    if (!fetch_data.accepts_byte_ranges)
         return;
     if (m_fetch_controller && m_fetch_controller->state() == Fetch::Infrastructure::FetchController::State::Ongoing)
         m_fetch_controller->stop_fetch();
