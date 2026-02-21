@@ -149,6 +149,9 @@ public:
     bool is_editable_or_editing_host() const { return is_editable() || is_editing_host(); }
     GC::Ptr<Node> editing_host();
 
+    bool in_editable_subtree() const { return m_in_editable_subtree; }
+    void recompute_editable_subtree_flag();
+
     virtual bool is_dom_node() const final { return true; }
     virtual bool is_html_element() const { return false; }
     virtual bool is_html_html_element() const { return false; }
@@ -281,7 +284,7 @@ public:
     MUST_UPCALL virtual void inserted();
     virtual void post_connection();
     MUST_UPCALL virtual void removed_from(Node* old_parent, Node& old_root);
-    virtual void moved_from(GC::Ptr<Node> old_parent);
+    MUST_UPCALL virtual void moved_from(GC::Ptr<Node> old_parent);
 
     struct ChildrenChangedMetadata {
         enum class Type {
@@ -464,6 +467,7 @@ protected:
     bool m_needs_style_update { false };
     bool m_child_needs_style_update { false };
     bool m_entire_subtree_needs_style_update { false };
+    bool m_in_editable_subtree { false };
 
     UniqueNodeID m_unique_id;
 
