@@ -33,58 +33,57 @@ Gfx::ShapeFeatures FontFeatureData::to_shape_features() const
                 // Specifies that all types of ligatures and contextual forms covered by this property are explicitly disabled.
                 disable_all_ligatures();
             } else {
-                switch (ligature.common) {
-                case Gfx::FontVariantLigatures::Common::Common:
-                    // Enables display of common ligatures (OpenType features: liga, clig).
-                    features.set("liga"sv, 1);
-                    features.set("clig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Common::NoCommon:
-                    // Disables display of common ligatures (OpenType features: liga, clig).
-                    features.set("liga"sv, 0);
-                    features.set("clig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Common::Unset:
-                    break;
+                if (ligature.common.has_value()) {
+                    switch (ligature.common.value()) {
+                    case CommonLigValue::CommonLigatures:
+                        // Enables display of common ligatures (OpenType features: liga, clig).
+                        features.set("liga"sv, 1);
+                        features.set("clig"sv, 1);
+                        break;
+                    case CommonLigValue::NoCommonLigatures:
+                        // Disables display of common ligatures (OpenType features: liga, clig).
+                        features.set("liga"sv, 0);
+                        features.set("clig"sv, 0);
+                        break;
+                    }
+                }
+                if (ligature.discretionary.has_value()) {
+                    switch (ligature.discretionary.value()) {
+                    case DiscretionaryLigValue::DiscretionaryLigatures:
+                        // Enables display of discretionary ligatures (OpenType feature: dlig).
+                        features.set("dlig"sv, 1);
+                        break;
+                    case DiscretionaryLigValue::NoDiscretionaryLigatures:
+                        // Disables display of discretionary ligatures (OpenType feature: dlig).
+                        features.set("dlig"sv, 0);
+                        break;
+                    }
                 }
 
-                switch (ligature.discretionary) {
-                case Gfx::FontVariantLigatures::Discretionary::Discretionary:
-                    // Enables display of discretionary ligatures (OpenType feature: dlig).
-                    features.set("dlig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Discretionary::NoDiscretionary:
-                    // Disables display of discretionary ligatures (OpenType feature: dlig).
-                    features.set("dlig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Discretionary::Unset:
-                    break;
+                if (ligature.historical.has_value()) {
+                    switch (ligature.historical.value()) {
+                    case HistoricalLigValue::HistoricalLigatures:
+                        // Enables display of historical ligatures (OpenType feature: hlig).
+                        features.set("hlig"sv, 1);
+                        break;
+                    case HistoricalLigValue::NoHistoricalLigatures:
+                        // Disables display of historical ligatures (OpenType feature: hlig).
+                        features.set("hlig"sv, 0);
+                        break;
+                    }
                 }
 
-                switch (ligature.historical) {
-                case Gfx::FontVariantLigatures::Historical::Historical:
-                    // Enables display of historical ligatures (OpenType feature: hlig).
-                    features.set("hlig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Historical::NoHistorical:
-                    // Disables display of historical ligatures (OpenType feature: hlig).
-                    features.set("hlig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Historical::Unset:
-                    break;
-                }
-
-                switch (ligature.contextual) {
-                case Gfx::FontVariantLigatures::Contextual::Contextual:
-                    // Enables display of contextual ligatures (OpenType feature: calt).
-                    features.set("calt"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Contextual::NoContextual:
-                    // Disables display of contextual ligatures (OpenType feature: calt).
-                    features.set("calt"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Contextual::Unset:
-                    break;
+                if (ligature.contextual.has_value()) {
+                    switch (ligature.contextual.value()) {
+                    case ContextualAltValue::Contextual:
+                        // Enables display of contextual ligatures (OpenType feature: calt).
+                        features.set("calt"sv, 1);
+                        break;
+                    case ContextualAltValue::NoContextual:
+                        // Disables display of contextual ligatures (OpenType feature: calt).
+                        features.set("calt"sv, 0);
+                        break;
+                    }
                 }
             }
         } else if (text_rendering == TextRendering::Optimizespeed) {
@@ -151,28 +150,27 @@ Gfx::ShapeFeatures FontFeatureData::to_shape_features() const
         // 6.7 https://drafts.csswg.org/css-fonts/#font-variant-numeric-prop
         if (font_variant_numeric.has_value()) {
             auto numeric = font_variant_numeric.value();
-            if (numeric.figure == Gfx::FontVariantNumeric::Figure::Oldstyle) {
+            if (numeric.figure == NumericFigureValue::OldstyleNums) {
                 // Enables display of old-style numerals (OpenType feature: onum).
                 features.set("onum"sv, 1);
-            } else if (numeric.figure == Gfx::FontVariantNumeric::Figure::Lining) {
+            } else if (numeric.figure == NumericFigureValue::LiningNums) {
                 // Enables display of lining numerals (OpenType feature: lnum).
                 features.set("lnum"sv, 1);
             }
 
-            if (numeric.spacing == Gfx::FontVariantNumeric::Spacing::Proportional) {
+            if (numeric.spacing == NumericSpacingValue::ProportionalNums) {
                 // Enables display of proportional numerals (OpenType feature: pnum).
                 features.set("pnum"sv, 1);
-            } else if (numeric.spacing == Gfx::FontVariantNumeric::Spacing::Tabular) {
+            } else if (numeric.spacing == NumericSpacingValue::TabularNums) {
                 // Enables display of tabular numerals (OpenType feature: tnum).
                 features.set("tnum"sv, 1);
             }
 
-            if (numeric.fraction == Gfx::FontVariantNumeric::Fraction::Diagonal) {
+            if (numeric.fraction == NumericFractionValue::DiagonalFractions) {
                 // Enables display of diagonal fractions (OpenType feature: frac).
                 features.set("frac"sv, 1);
-            } else if (numeric.fraction == Gfx::FontVariantNumeric::Fraction::Stacked) {
+            } else if (numeric.fraction == NumericFractionValue::StackedFractions) {
                 // Enables display of stacked fractions (OpenType feature: afrc).
-                features.set("afrc"sv, 1);
                 features.set("afrc"sv, 1);
             }
 
@@ -191,45 +189,45 @@ Gfx::ShapeFeatures FontFeatureData::to_shape_features() const
         // 6.10 https://drafts.csswg.org/css-fonts/#font-variant-east-asian-prop
         if (font_variant_east_asian.has_value()) {
             auto east_asian = font_variant_east_asian.value();
-            switch (east_asian.variant) {
-            case Gfx::FontVariantEastAsian::Variant::Jis78:
-                // Enables display of JIS78 forms (OpenType feature: jp78).
-                features.set("jp78"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis83:
-                // Enables display of JIS83 forms (OpenType feature: jp83).
-                features.set("jp83"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis90:
-                // Enables display of JIS90 forms (OpenType feature: jp90).
-                features.set("jp90"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis04:
-                // Enables display of JIS04 forms (OpenType feature: jp04).
-                features.set("jp04"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Simplified:
-                // Enables display of simplified forms (OpenType feature: smpl).
-                features.set("smpl"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Traditional:
-                // Enables display of traditional forms (OpenType feature: trad).
-                features.set("trad"sv, 1);
-                break;
-            default:
-                break;
+            if (east_asian.variant.has_value()) {
+                switch (east_asian.variant.value()) {
+                case EastAsianVariant::Jis78:
+                    // Enables display of JIS78 forms (OpenType feature: jp78).
+                    features.set("jp78"sv, 1);
+                    break;
+                case EastAsianVariant::Jis83:
+                    // Enables display of JIS83 forms (OpenType feature: jp83).
+                    features.set("jp83"sv, 1);
+                    break;
+                case EastAsianVariant::Jis90:
+                    // Enables display of JIS90 forms (OpenType feature: jp90).
+                    features.set("jp90"sv, 1);
+                    break;
+                case EastAsianVariant::Jis04:
+                    // Enables display of JIS04 forms (OpenType feature: jp04).
+                    features.set("jp04"sv, 1);
+                    break;
+                case EastAsianVariant::Simplified:
+                    // Enables display of simplified forms (OpenType feature: smpl).
+                    features.set("smpl"sv, 1);
+                    break;
+                case EastAsianVariant::Traditional:
+                    // Enables display of traditional forms (OpenType feature: trad).
+                    features.set("trad"sv, 1);
+                    break;
+                }
             }
-            switch (east_asian.width) {
-            case Gfx::FontVariantEastAsian::Width::FullWidth:
-                // Enables display of full-width forms (OpenType feature: fwid).
-                features.set("fwid"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Width::Proportional:
-                // Enables display of proportional-width forms (OpenType feature: pwid).
-                features.set("pwid"sv, 1);
-                break;
-            default:
-                break;
+            if (east_asian.width.has_value()) {
+                switch (east_asian.width.value()) {
+                case EastAsianWidth::FullWidth:
+                    // Enables display of full-width forms (OpenType feature: fwid).
+                    features.set("fwid"sv, 1);
+                    break;
+                case EastAsianWidth::ProportionalWidth:
+                    // Enables display of proportional-width forms (OpenType feature: pwid).
+                    features.set("pwid"sv, 1);
+                    break;
+                }
             }
             if (east_asian.ruby) {
                 // Enables display of ruby forms (OpenType feature: ruby).

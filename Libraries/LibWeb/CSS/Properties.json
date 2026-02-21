@@ -2100,6 +2100,9 @@
     "inherited": true,
     "initial": "normal",
     "requires-computation": "never",
+    "valid-identifiers": [
+      "normal"
+    ],
     "valid-types": [
       "font-variant-alternates"
     ]
@@ -2118,6 +2121,9 @@
     "inherited": true,
     "initial": "normal",
     "requires-computation": "never",
+    "valid-identifiers": [
+      "normal"
+    ],
     "valid-types": [
       "font-variant-east-asian"
     ]
@@ -2136,6 +2142,10 @@
     "inherited": true,
     "initial": "normal",
     "requires-computation": "never",
+    "valid-identifiers": [
+      "normal",
+      "none"
+    ],
     "valid-types": [
       "font-variant-ligatures"
     ]
@@ -2145,6 +2155,9 @@
     "inherited": true,
     "initial": "normal",
     "requires-computation": "never",
+    "valid-identifiers": [
+      "normal"
+    ],
     "valid-types": [
       "font-variant-numeric"
     ]

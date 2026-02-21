@@ -48,6 +48,7 @@
 #include <LibWeb/CSS/StyleValues/TextUnderlinePositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
+#include <LibWeb/CSS/StyleValues/TupleStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/Node.h>
@@ -1489,16 +1490,34 @@ FontFeatureData ComputedProperties::font_feature_data() const
     };
 }
 
-Optional<Gfx::FontVariantAlternates> ComputedProperties::font_variant_alternates() const
+Optional<FontVariantAlternates> ComputedProperties::font_variant_alternates() const
 {
     auto const& value = property(PropertyID::FontVariantAlternates);
-    switch (keyword_to_font_variant_alternates(value.to_keyword()).value()) {
-    case FontVariantAlternates::Normal:
+
+    // normal
+    if (value.is_keyword()) {
+        VERIFY(value.to_keyword() == Keyword::Normal);
         return {};
-    case FontVariantAlternates::HistoricalForms:
-        return Gfx::FontVariantAlternates { .historical_forms = true };
     }
-    VERIFY_NOT_REACHED();
+
+    FontVariantAlternates alternates;
+
+    for (auto const& value : value.as_value_list().values()) {
+        // historical-forms
+        if (value->is_keyword() && value->to_keyword() == Keyword::HistoricalForms) {
+            alternates.historical_forms = true;
+            continue;
+        }
+
+        if (value->is_font_variant_alternates_function()) {
+            // FIXME: Support this
+            continue;
+        }
+
+        VERIFY_NOT_REACHED();
+    }
+
+    return alternates;
 }
 
 FontVariantCaps ComputedProperties::font_variant_caps() const
@@ -1507,59 +1526,25 @@ FontVariantCaps ComputedProperties::font_variant_caps() const
     return keyword_to_font_variant_caps(value.to_keyword()).release_value();
 }
 
-Optional<Gfx::FontVariantEastAsian> ComputedProperties::font_variant_east_asian() const
+Optional<FontVariantEastAsian> ComputedProperties::font_variant_east_asian() const
 {
     auto const& value = property(PropertyID::FontVariantEastAsian);
-    Gfx::FontVariantEastAsian east_asian {};
-    bool normal = false;
 
-    auto apply_keyword = [&east_asian, &normal](Keyword keyword) {
-        switch (keyword) {
-        case Keyword::Normal:
-            normal = true;
-            break;
-        case Keyword::Jis78:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Jis78;
-            break;
-        case Keyword::Jis83:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Jis83;
-            break;
-        case Keyword::Jis90:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Jis90;
-            break;
-        case Keyword::Jis04:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Jis04;
-            break;
-        case Keyword::Simplified:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Simplified;
-            break;
-        case Keyword::Traditional:
-            east_asian.variant = Gfx::FontVariantEastAsian::Variant::Traditional;
-            break;
-        case Keyword::FullWidth:
-            east_asian.width = Gfx::FontVariantEastAsian::Width::FullWidth;
-            break;
-        case Keyword::ProportionalWidth:
-            east_asian.width = Gfx::FontVariantEastAsian::Width::Proportional;
-            break;
-        case Keyword::Ruby:
-            east_asian.ruby = true;
-            break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    };
-
-    if (value.is_keyword()) {
-        apply_keyword(value.to_keyword());
-    } else if (value.is_value_list()) {
-        for (auto& child_value : value.as_value_list().values()) {
-            apply_keyword(child_value->to_keyword());
-        }
-    }
-
-    if (normal)
+    if (value.to_keyword() == Keyword::Normal)
         return {};
+
+    auto const& tuple = value.as_tuple().tuple();
+
+    FontVariantEastAsian east_asian {};
+
+    if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Variant])
+        east_asian.variant = keyword_to_east_asian_variant(tuple[TupleStyleValue::Indices::FontVariantEastAsian::Variant]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Width])
+        east_asian.width = keyword_to_east_asian_width(tuple[TupleStyleValue::Indices::FontVariantEastAsian::Width]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Ruby])
+        east_asian.ruby = true;
 
     return east_asian;
 }
@@ -1570,113 +1555,60 @@ FontVariantEmoji ComputedProperties::font_variant_emoji() const
     return keyword_to_font_variant_emoji(value.to_keyword()).release_value();
 }
 
-Optional<Gfx::FontVariantLigatures> ComputedProperties::font_variant_ligatures() const
+Optional<FontVariantLigatures> ComputedProperties::font_variant_ligatures() const
 {
     auto const& value = property(PropertyID::FontVariantLigatures);
-    Gfx::FontVariantLigatures ligatures {};
-    bool normal = false;
 
-    auto apply_keyword = [&ligatures, &normal](Keyword keyword) {
-        switch (keyword) {
-        case Keyword::Normal:
-            normal = true;
-            break;
-        case Keyword::None:
-            ligatures.none = true;
-            break;
-        case Keyword::CommonLigatures:
-            ligatures.common = Gfx::FontVariantLigatures::Common::Common;
-            break;
-        case Keyword::NoCommonLigatures:
-            ligatures.common = Gfx::FontVariantLigatures::Common::NoCommon;
-            break;
-        case Keyword::DiscretionaryLigatures:
-            ligatures.discretionary = Gfx::FontVariantLigatures::Discretionary::Discretionary;
-            break;
-        case Keyword::NoDiscretionaryLigatures:
-            ligatures.discretionary = Gfx::FontVariantLigatures::Discretionary::NoDiscretionary;
-            break;
-        case Keyword::HistoricalLigatures:
-            ligatures.historical = Gfx::FontVariantLigatures::Historical::Historical;
-            break;
-        case Keyword::NoHistoricalLigatures:
-            ligatures.historical = Gfx::FontVariantLigatures::Historical::NoHistorical;
-            break;
-        case Keyword::Contextual:
-            ligatures.contextual = Gfx::FontVariantLigatures::Contextual::Contextual;
-            break;
-        case Keyword::NoContextual:
-            ligatures.contextual = Gfx::FontVariantLigatures::Contextual::NoContextual;
-            break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    };
-
-    if (value.is_keyword()) {
-        apply_keyword(value.to_keyword());
-    } else if (value.is_value_list()) {
-        for (auto& child_value : value.as_value_list().values()) {
-            apply_keyword(child_value->to_keyword());
-        }
-    }
-
-    if (normal)
+    if (value.to_keyword() == Keyword::Normal)
         return {};
+
+    if (value.to_keyword() == Keyword::None)
+        return FontVariantLigatures { .none = true };
+
+    auto const& tuple = value.as_tuple().tuple();
+
+    FontVariantLigatures ligatures {};
+
+    if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Common])
+        ligatures.common = keyword_to_common_lig_value(tuple[TupleStyleValue::Indices::FontVariantLigatures::Common]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Discretionary])
+        ligatures.discretionary = keyword_to_discretionary_lig_value(tuple[TupleStyleValue::Indices::FontVariantLigatures::Discretionary]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Historical])
+        ligatures.historical = keyword_to_historical_lig_value(tuple[TupleStyleValue::Indices::FontVariantLigatures::Historical]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Contextual])
+        ligatures.contextual = keyword_to_contextual_alt_value(tuple[TupleStyleValue::Indices::FontVariantLigatures::Contextual]->to_keyword()).value();
 
     return ligatures;
 }
 
-Optional<Gfx::FontVariantNumeric> ComputedProperties::font_variant_numeric() const
+Optional<FontVariantNumeric> ComputedProperties::font_variant_numeric() const
 {
     auto const& value = property(PropertyID::FontVariantNumeric);
-    Gfx::FontVariantNumeric numeric {};
-    bool normal = false;
 
-    auto apply_keyword = [&numeric, &normal](Keyword keyword) {
-        switch (keyword) {
-        case Keyword::Normal:
-            normal = true;
-            break;
-        case Keyword::Ordinal:
-            numeric.ordinal = true;
-            break;
-        case Keyword::SlashedZero:
-            numeric.slashed_zero = true;
-            break;
-        case Keyword::OldstyleNums:
-            numeric.figure = Gfx::FontVariantNumeric::Figure::Oldstyle;
-            break;
-        case Keyword::LiningNums:
-            numeric.figure = Gfx::FontVariantNumeric::Figure::Lining;
-            break;
-        case Keyword::ProportionalNums:
-            numeric.spacing = Gfx::FontVariantNumeric::Spacing::Proportional;
-            break;
-        case Keyword::TabularNums:
-            numeric.spacing = Gfx::FontVariantNumeric::Spacing::Tabular;
-            break;
-        case Keyword::DiagonalFractions:
-            numeric.fraction = Gfx::FontVariantNumeric::Fraction::Diagonal;
-            break;
-        case Keyword::StackedFractions:
-            numeric.fraction = Gfx::FontVariantNumeric::Fraction::Stacked;
-            break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    };
-
-    if (value.is_keyword()) {
-        apply_keyword(value.to_keyword());
-    } else if (value.is_value_list()) {
-        for (auto& child_value : value.as_value_list().values()) {
-            apply_keyword(child_value->to_keyword());
-        }
-    }
-
-    if (normal)
+    if (value.to_keyword() == Keyword::Normal)
         return {};
+
+    auto const& tuple = value.as_tuple().tuple();
+
+    FontVariantNumeric numeric {};
+
+    if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Figure])
+        numeric.figure = keyword_to_numeric_figure_value(tuple[TupleStyleValue::Indices::FontVariantNumeric::Figure]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Spacing])
+        numeric.spacing = keyword_to_numeric_spacing_value(tuple[TupleStyleValue::Indices::FontVariantNumeric::Spacing]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Fraction])
+        numeric.fraction = keyword_to_numeric_fraction_value(tuple[TupleStyleValue::Indices::FontVariantNumeric::Fraction]->to_keyword()).value();
+
+    if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Ordinal])
+        numeric.ordinal = true;
+
+    if (tuple[TupleStyleValue::Indices::FontVariantNumeric::SlashedZero])
+        numeric.slashed_zero = true;
 
     return numeric;
 }

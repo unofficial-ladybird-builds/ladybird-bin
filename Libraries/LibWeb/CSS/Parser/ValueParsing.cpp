@@ -20,6 +20,7 @@
 #include <AK/TemporaryChange.h>
 #include <LibWeb/CSS/Enums.h>
 #include <LibWeb/CSS/FontFace.h>
+#include <LibWeb/CSS/FontFeatureData.h>
 #include <LibWeb/CSS/MathFunctions.h>
 #include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
@@ -46,6 +47,7 @@
 #include <LibWeb/CSS/StyleValues/FlexStyleValue.h>
 #include <LibWeb/CSS/StyleValues/FontSourceStyleValue.h>
 #include <LibWeb/CSS/StyleValues/FontStyleStyleValue.h>
+#include <LibWeb/CSS/StyleValues/FontVariantAlternatesFunctionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/FrequencyStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackPlacementStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackSizeListStyleValue.h>
@@ -77,6 +79,7 @@
 #include <LibWeb/CSS/StyleValues/SuperellipseStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
+#include <LibWeb/CSS/StyleValues/TupleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnicodeRangeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
@@ -3713,6 +3716,320 @@ RefPtr<StyleValue const> Parser::parse_font_style_value(TokenStream<ComponentVal
     return FontStyleStyleValue::create(font_style.release_value());
 }
 
+RefPtr<StyleValue const> Parser::parse_font_variant_alternates_value(TokenStream<ComponentValue>& tokens)
+{
+    // 6.8 https://drafts.csswg.org/css-fonts/#font-variant-alternates-prop
+    // [ stylistic(<feature-value-name>) || historical-forms || styleset(<feature-value-name>#) || character-variant(<feature-value-name>#) || swash(<feature-value-name>) || ornaments(<feature-value-name>) || annotation(<feature-value-name>) ]
+    // <feature-value-name> = <ident>
+    RefPtr<StyleValue const> stylistic;
+    RefPtr<StyleValue const> historical_forms;
+    RefPtr<StyleValue const> styleset;
+    RefPtr<StyleValue const> character_variant;
+    RefPtr<StyleValue const> swash;
+    RefPtr<StyleValue const> ornaments;
+    RefPtr<StyleValue const> annotation;
+
+    while (tokens.has_next_token()) {
+        auto transaction = tokens.begin_transaction();
+
+        // historical-forms
+        if (auto keyword_value = parse_keyword_value(tokens); keyword_value && keyword_value->to_keyword() == Keyword::HistoricalForms) {
+            if (historical_forms)
+                return nullptr;
+
+            transaction.commit();
+            historical_forms = keyword_value;
+            continue;
+        }
+
+        if (!tokens.next_token().is_function())
+            break;
+
+        auto function = tokens.consume_a_token().function();
+
+        auto argument_token_stream = TokenStream<ComponentValue> { function.value };
+        auto const& arguments = parse_a_comma_separated_list_of_component_values(argument_token_stream);
+
+        if (arguments.size() == 0)
+            break;
+
+        StyleValueVector feature_value_names;
+        feature_value_names.ensure_capacity(arguments.size());
+
+        for (auto const& argument_values : arguments) {
+            TokenStream<ComponentValue> argument_tokens { argument_values };
+
+            auto ident = parse_custom_ident_value(argument_tokens, {});
+
+            argument_tokens.discard_whitespace();
+
+            if (!ident || argument_tokens.has_next_token())
+                return nullptr;
+
+            feature_value_names.append(ident.release_nonnull());
+        }
+
+        // stylistic(<feature-value-name>)
+        if (function.name.equals_ignoring_ascii_case("stylistic"sv)) {
+            if (feature_value_names.size() != 1 || stylistic)
+                return nullptr;
+
+            transaction.commit();
+            stylistic = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::Stylistic, move(feature_value_names));
+            continue;
+        }
+
+        // styleset(<feature-value-name>#)
+        if (function.name.equals_ignoring_ascii_case("styleset"sv)) {
+            if (styleset)
+                return nullptr;
+
+            transaction.commit();
+            styleset = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::Styleset, move(feature_value_names));
+            continue;
+        }
+
+        // character-variant(<feature-value-name>#)
+        if (function.name.equals_ignoring_ascii_case("character-variant"sv)) {
+            if (character_variant)
+                return nullptr;
+
+            transaction.commit();
+            character_variant = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::CharacterVariant, move(feature_value_names));
+            continue;
+        }
+
+        // swash(<feature-value-name>)
+        if (function.name.equals_ignoring_ascii_case("swash"sv)) {
+            if (feature_value_names.size() != 1 || swash)
+                return nullptr;
+
+            transaction.commit();
+            swash = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::Swash, move(feature_value_names));
+            continue;
+        }
+
+        // ornaments(<feature-value-name>)
+        if (function.name.equals_ignoring_ascii_case("ornaments"sv)) {
+            if (feature_value_names.size() != 1 || ornaments)
+                return nullptr;
+
+            transaction.commit();
+            ornaments = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::Ornaments, move(feature_value_names));
+            continue;
+        }
+
+        // annotation(<feature-value-name>)
+        if (function.name.equals_ignoring_ascii_case("annotation"sv)) {
+            if (feature_value_names.size() != 1 || annotation)
+                return nullptr;
+
+            transaction.commit();
+            annotation = FontVariantAlternatesFunctionStyleValue::create(FontFeatureValueType::Annotation, move(feature_value_names));
+            continue;
+        }
+
+        break;
+    }
+
+    StyleValueVector values;
+    if (stylistic)
+        values.append(stylistic.release_nonnull());
+    if (historical_forms)
+        values.append(historical_forms.release_nonnull());
+    if (styleset)
+        values.append(styleset.release_nonnull());
+    if (character_variant)
+        values.append(character_variant.release_nonnull());
+    if (swash)
+        values.append(swash.release_nonnull());
+    if (ornaments)
+        values.append(ornaments.release_nonnull());
+    if (annotation)
+        values.append(annotation.release_nonnull());
+
+    if (values.is_empty())
+        return nullptr;
+
+    return StyleValueList::create(move(values), StyleValueList::Separator::Space);
+}
+
+RefPtr<StyleValue const> Parser::parse_font_variant_east_asian_value(TokenStream<ComponentValue>& tokens)
+{
+    // 6.10 https://drafts.csswg.org/css-fonts/#propdef-font-variant-east-asian
+    // [ <east-asian-variant-values> || <east-asian-width-values> || ruby ]
+    // <east-asian-variant-values> = [ jis78 | jis83 | jis90 | jis04 | simplified | traditional ]
+    // <east-asian-width-values>   = [ full-width | proportional-width ]
+    StyleValueTuple tuple;
+    tuple.resize_with_default_value(3, nullptr);
+
+    while (tokens.has_next_token()) {
+        auto keyword_transaction = tokens.begin_transaction();
+        auto maybe_value = parse_keyword_value(tokens);
+        if (!maybe_value)
+            break;
+
+        if (maybe_value->to_keyword() == Keyword::Ruby) {
+            if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Ruby])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantEastAsian::Ruby] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_east_asian_width(maybe_value->to_keyword()).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Width])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantEastAsian::Width] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_east_asian_variant(maybe_value->to_keyword()).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantEastAsian::Variant])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantEastAsian::Variant] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        break;
+    }
+
+    if (!any_of(tuple, [](auto& value) { return value != nullptr; }))
+        return nullptr;
+
+    return TupleStyleValue::create(tuple);
+}
+
+RefPtr<StyleValue const> Parser::parse_font_variant_numeric_value(TokenStream<ComponentValue>& tokens)
+{
+    // 6.7 https://drafts.csswg.org/css-fonts/#propdef-font-variant-numeric
+    // [ <numeric-figure-values> || <numeric-spacing-values> || <numeric-fraction-values> || ordinal || slashed-zero]
+    // <numeric-figure-values>       = [ lining-nums | oldstyle-nums ]
+    // <numeric-spacing-values>      = [ proportional-nums | tabular-nums ]
+    // <numeric-fraction-values>     = [ diagonal-fractions | stacked-fractions ]
+    StyleValueTuple tuple;
+    tuple.resize_with_default_value(5, nullptr);
+
+    while (tokens.has_next_token()) {
+        auto keyword_transaction = tokens.begin_transaction();
+        auto maybe_value = parse_keyword_value(tokens);
+        if (!maybe_value)
+            break;
+
+        auto keyword = maybe_value->to_keyword();
+
+        if (keyword_to_numeric_figure_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Figure])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantNumeric::Figure] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_numeric_spacing_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Spacing])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantNumeric::Spacing] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_numeric_fraction_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Fraction])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantNumeric::Fraction] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword == Keyword::Ordinal) {
+            if (tuple[TupleStyleValue::Indices::FontVariantNumeric::Ordinal])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantNumeric::Ordinal] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword == Keyword::SlashedZero) {
+            if (tuple[TupleStyleValue::Indices::FontVariantNumeric::SlashedZero])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantNumeric::SlashedZero] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        break;
+    }
+
+    if (!any_of(tuple, [](auto& value) { return value != nullptr; }))
+        return nullptr;
+
+    return TupleStyleValue::create(tuple);
+}
+
+RefPtr<StyleValue const> Parser::parse_font_variant_ligatures_value(TokenStream<ComponentValue>& tokens)
+{
+    // 6.4 https://drafts.csswg.org/css-fonts/#propdef-font-variant-ligatures
+    // [ <common-lig-values> || <discretionary-lig-values> || <historical-lig-values> || <contextual-alt-values> ]
+    // <common-lig-values>       = [ common-ligatures | no-common-ligatures ]
+    // <discretionary-lig-values> = [ discretionary-ligatures | no-discretionary-ligatures ]
+    // <historical-lig-values>   = [ historical-ligatures | no-historical-ligatures ]
+    // <contextual-alt-values>   = [ contextual | no-contextual ]
+    StyleValueTuple tuple;
+    tuple.resize_with_default_value(4, nullptr);
+
+    while (tokens.has_next_token()) {
+        auto keyword_transaction = tokens.begin_transaction();
+
+        auto maybe_value = parse_keyword_value(tokens);
+        if (!maybe_value)
+            break;
+
+        auto const& keyword = maybe_value->to_keyword();
+
+        if (keyword_to_common_lig_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Common])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantLigatures::Common] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_discretionary_lig_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Discretionary])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantLigatures::Discretionary] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_historical_lig_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Historical])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantLigatures::Historical] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        if (keyword_to_contextual_alt_value(keyword).has_value()) {
+            if (tuple[TupleStyleValue::Indices::FontVariantLigatures::Contextual])
+                return nullptr;
+            keyword_transaction.commit();
+            tuple[TupleStyleValue::Indices::FontVariantLigatures::Contextual] = maybe_value.release_nonnull();
+            continue;
+        }
+
+        break;
+    }
+
+    if (!any_of(tuple, [](auto& value) { return value != nullptr; }))
+        return nullptr;
+
+    return TupleStyleValue::create(tuple);
+}
+
 RefPtr<StyleValue const> Parser::parse_basic_shape_value(TokenStream<ComponentValue>& tokens)
 {
     auto transaction = tokens.begin_transaction();
@@ -5598,6 +5915,14 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_flex_value(tokens);
     case ValueType::FontStyle:
         return parse_font_style_value(tokens);
+    case ValueType::FontVariantAlternates:
+        return parse_font_variant_alternates_value(tokens);
+    case ValueType::FontVariantEastAsian:
+        return parse_font_variant_east_asian_value(tokens);
+    case ValueType::FontVariantLigatures:
+        return parse_font_variant_ligatures_value(tokens);
+    case ValueType::FontVariantNumeric:
+        return parse_font_variant_numeric_value(tokens);
     case ValueType::Frequency:
         return parse_frequency_value(tokens);
     case ValueType::FrequencyPercentage:

@@ -162,6 +162,10 @@
     "none",
     "all"
   ],
+  "common-lig-value": [
+    "common-ligatures",
+    "no-common-ligatures"
+  ],
   "compositing-operator": [
     "add",
     "subtract",
@@ -182,6 +186,10 @@
     "visible",
     "auto",
     "hidden"
+  ],
+  "contextual-alt-value": [
+    "contextual",
+    "no-contextual"
   ],
   "coord-box": [
     "content-box",
@@ -260,6 +268,10 @@
     "ltr",
     "rtl"
   ],
+  "discretionary-lig-value": [
+    "discretionary-ligatures",
+    "no-discretionary-ligatures"
+  ],
   "display-box": [
     "contents",
     "none"
@@ -304,6 +316,18 @@
     "ease-in",
     "ease-out",
     "ease-in-out"
+  ],
+  "east-asian-variant": [
+    "jis78",
+    "jis83",
+    "jis90",
+    "jis04",
+    "simplified",
+    "traditional"
+  ],
+  "east-asian-width": [
+    "full-width",
+    "proportional-width"
   ],
   "empty-cells": [
     "show",
@@ -368,10 +392,6 @@
     "palettes",
     "variations"
   ],
-  "font-variant-alternates": [
-    "normal",
-    "historical-forms"
-  ],
   "font-variant-caps": [
     "normal",
     "small-caps",
@@ -381,46 +401,11 @@
     "unicase",
     "titling-caps"
   ],
-  "font-variant-east-asian": [
-    "normal",
-    "ruby",
-    "jis78",
-    "jis83",
-    "jis90",
-    "jis04",
-    "simplified",
-    "traditional",
-    "full-width",
-    "proportional-width"
-  ],
   "font-variant-emoji": [
     "normal",
     "text",
     "emoji",
     "unicode"
-  ],
-  "font-variant-ligatures": [
-    "normal",
-    "none",
-    "common-ligatures",
-    "no-common-ligatures",
-    "discretionary-ligatures",
-    "no-discretionary-ligatures",
-    "historical-ligatures",
-    "no-historical-ligatures",
-    "contextual",
-    "no-contextual"
-  ],
-  "font-variant-numeric": [
-    "normal",
-    "ordinal",
-    "slashed-zero",
-    "lining-nums",
-    "oldstyle-nums",
-    "proportional-nums",
-    "tabular-nums",
-    "diagonal-fractions",
-    "stacked-fractions"
   ],
   "font-variant-position": [
     "normal",
@@ -449,6 +434,10 @@
     "ui-sans-serif",
     "ui-monospace",
     "ui-rounded"
+  ],
+  "historical-lig-value": [
+    "historical-ligatures",
+    "no-historical-ligatures"
   ],
   "hue-interpolation-method": [
     "shorter",
@@ -574,6 +563,18 @@
     "luminosity",
     "plus-darker",
     "plus-lighter"
+  ],
+  "numeric-figure-value": [
+    "lining-nums",
+    "oldstyle-nums"
+  ],
+  "numeric-fraction-value": [
+    "diagonal-fractions",
+    "stacked-fractions"
+  ],
+  "numeric-spacing-value": [
+    "proportional-nums",
+    "tabular-nums"
   ],
   "object-fit": [
     "fill",

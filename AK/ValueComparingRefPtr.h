@@ -8,7 +8,7 @@
 
 #include <AK/RefPtr.h>
 
-namespace Web::CSS {
+namespace AK {
 
 template<typename T>
 struct ValueComparingNonnullRefPtr : public NonnullRefPtr<T> {
@@ -56,6 +56,11 @@ struct ValueComparingRefPtr : public RefPtr<T> {
     bool operator==(ValueComparingRefPtr const& other) const
     {
         return this->ptr() == other.ptr() || (this->ptr() && other.ptr() && this->ptr()->equals(*other));
+    }
+
+    bool operator==(nullptr_t) const
+    {
+        return this->is_null();
     }
 
 private:
