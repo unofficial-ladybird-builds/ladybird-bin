@@ -1107,11 +1107,12 @@ void CanvasRenderingContext2D::set_shadow_color(String color)
     // 2. Let parsedValue be the result of parsing the given value with context if non-null.
     auto style_value = parse_css_value(CSS::Parser::ParsingParams(), color, CSS::PropertyID::Color);
     if (style_value && style_value->has_color()) {
+        DOM::AbstractElement abstract_element { context };
+        context.document().update_style_if_needed_for_element(abstract_element);
+
         CSS::ColorResolutionContext color_resolution_context {};
-        context.document().update_layout(DOM::UpdateLayoutReason::CanvasRenderingContext2DSetShadowColor);
-        if (auto node = context.layout_node()) {
-            color_resolution_context = CSS::ColorResolutionContext::for_layout_node_with_style(*node);
-        }
+        if (context.computed_properties())
+            color_resolution_context = CSS::ColorResolutionContext::for_element(abstract_element);
 
         auto parsedValue = style_value->to_color(color_resolution_context).value_or(Color::Black);
 
@@ -1218,14 +1219,17 @@ void CanvasRenderingContext2D::set_filter(String filter)
     auto style_value = parser.parse_as_css_value(CSS::PropertyID::Filter);
 
     if (style_value && style_value->is_filter_value_list()) {
-        // Note: The layout must be updated to make sure the canvas's layout node isn't null.
-        canvas_element().document().update_layout(DOM::UpdateLayoutReason::CanvasRenderingContext2DSetFilter);
-        auto layout_node = canvas_element().layout_node();
+        auto& document = canvas_element().document();
+        DOM::AbstractElement abstract_element { canvas_element() };
+        document.update_style_if_needed_for_element(abstract_element);
+
+        auto length_resolution_context = canvas_element().computed_properties()
+            ? CSS::Length::ResolutionContext::for_element(abstract_element)
+            : CSS::Length::ResolutionContext::for_document(document);
 
         CSS::ComputationContext computation_context {
-            .length_resolution_context = CSS::Length::ResolutionContext::for_layout_node(*layout_node),
-            .abstract_element = DOM::AbstractElement { canvas_element() },
-            .color_scheme = layout_node->computed_values().color_scheme(),
+            .length_resolution_context = length_resolution_context,
+            .abstract_element = abstract_element,
         };
         auto filter_value_list = style_value->absolutized(computation_context)->as_filter_value_list().filter_value_list();
 
@@ -1266,10 +1270,11 @@ void CanvasRenderingContext2D::set_filter(String filter)
                         radius = static_cast<float>(CSS::Length::from_style_value(*drop_shadow.radius, {}).absolute_length_to_px());
                     };
 
-                    auto color_context = CSS::ColorResolutionContext::for_layout_node_with_style(*layout_node);
-                    auto color = drop_shadow.color
-                        ? drop_shadow.color->to_color(color_context).value_or(Gfx::Color::Black)
-                        : Gfx::Color::Black;
+                    Gfx::Color color = Gfx::Color::Black;
+                    if (drop_shadow.color && canvas_element().computed_properties()) {
+                        auto color_context = CSS::ColorResolutionContext::for_element(abstract_element);
+                        color = drop_shadow.color->to_color(color_context).value_or(Gfx::Color::Black);
+                    }
 
                     auto new_filter = Gfx::Filter::drop_shadow(offset_x, offset_y, radius, color);
 

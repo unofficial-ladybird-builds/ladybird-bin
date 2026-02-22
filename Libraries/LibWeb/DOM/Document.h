@@ -64,66 +64,58 @@ enum class InvalidateLayoutTreeReason {
 
 [[nodiscard]] StringView to_string(InvalidateLayoutTreeReason);
 
-#define ENUMERATE_UPDATE_LAYOUT_REASONS(X)    \
-    X(AutoScrollSelection)                    \
-    X(CanvasRenderingContext2DSetFilter)      \
-    X(CanvasRenderingContext2DSetFillStyle)   \
-    X(CanvasRenderingContext2DSetShadowColor) \
-    X(CanvasRenderingContext2DSetStrokeStyle) \
-    X(CanvasSetFillStyle)                     \
-    X(CursorBlinkTimer)                       \
-    X(ChildDocumentStyleUpdate)               \
-    X(Debugging)                              \
-    X(DocumentElementFromPoint)               \
-    X(DocumentElementsFromPoint)              \
-    X(DocumentFindMatchingText)               \
-    X(DocumentSetDesignMode)                  \
-    X(DumpDisplayList)                        \
-    X(ElementCheckVisibility)                 \
-    X(ElementClientHeight)                    \
-    X(ElementClientLeft)                      \
-    X(ElementClientTop)                       \
-    X(ElementClientWidth)                     \
-    X(ElementGetClientRects)                  \
-    X(ElementIsPotentiallyScrollable)         \
-    X(ElementScroll)                          \
-    X(ElementScrollHeight)                    \
-    X(ElementScrollIntoView)                  \
-    X(ElementScrollLeft)                      \
-    X(ElementScrollTop)                       \
-    X(ElementScrollWidth)                     \
-    X(ElementSetScrollLeft)                   \
-    X(ElementSetScrollTop)                    \
-    X(EventHandlerHandleDoubleClick)          \
-    X(EventHandlerHandleDragAndDrop)          \
-    X(EventHandlerHandleMouseDown)            \
-    X(EventHandlerHandleMouseMove)            \
-    X(EventHandlerHandleMouseUp)              \
-    X(EventHandlerHandleMouseWheel)           \
-    X(EventHandlerHandleTripleClick)          \
-    X(HTMLElementGetTheTextSteps)             \
-    X(HTMLElementOffsetHeight)                \
-    X(HTMLElementOffsetLeft)                  \
-    X(HTMLElementOffsetParent)                \
-    X(HTMLElementOffsetTop)                   \
-    X(HTMLElementOffsetWidth)                 \
-    X(HTMLElementScrollParent)                \
-    X(HTMLEventLoopRenderingUpdate)           \
-    X(HTMLImageElementHeight)                 \
-    X(HTMLImageElementWidth)                  \
-    X(HTMLImageElementX)                      \
-    X(HTMLImageElementY)                      \
-    X(HTMLInputElementHeight)                 \
-    X(HTMLInputElementWidth)                  \
-    X(InternalsHitTest)                       \
-    X(MediaQueryListMatches)                  \
-    X(NodeNameOrDescription)                  \
-    X(RangeGetClientRects)                    \
-    X(ResolvedCSSStyleDeclarationProperty)    \
-    X(SVGDecodedImageDataRender)              \
-    X(ScrollCursorIntoView)                   \
-    X(SVGGraphicsElementGetBBox)              \
-    X(SourceSetNormalizeSourceDensities)      \
+#define ENUMERATE_UPDATE_LAYOUT_REASONS(X) \
+    X(AutoScrollSelection)                 \
+    X(ChildDocumentStyleUpdate)            \
+    X(Debugging)                           \
+    X(DocumentElementFromPoint)            \
+    X(DocumentElementsFromPoint)           \
+    X(DocumentFindMatchingText)            \
+    X(DocumentSetDesignMode)               \
+    X(DumpDisplayList)                     \
+    X(ElementCheckVisibility)              \
+    X(ElementClientHeight)                 \
+    X(ElementClientWidth)                  \
+    X(ElementGetClientRects)               \
+    X(ElementIsPotentiallyScrollable)      \
+    X(ElementScroll)                       \
+    X(ElementScrollHeight)                 \
+    X(ElementScrollIntoView)               \
+    X(ElementScrollLeft)                   \
+    X(ElementScrollTop)                    \
+    X(ElementScrollWidth)                  \
+    X(ElementSetScrollLeft)                \
+    X(ElementSetScrollTop)                 \
+    X(EventHandlerHandleDoubleClick)       \
+    X(EventHandlerHandleDragAndDrop)       \
+    X(EventHandlerHandleMouseDown)         \
+    X(EventHandlerHandleMouseMove)         \
+    X(EventHandlerHandleMouseUp)           \
+    X(EventHandlerHandleMouseWheel)        \
+    X(EventHandlerHandleTripleClick)       \
+    X(HTMLElementGetTheTextSteps)          \
+    X(HTMLElementOffsetHeight)             \
+    X(HTMLElementOffsetLeft)               \
+    X(HTMLElementOffsetParent)             \
+    X(HTMLElementOffsetTop)                \
+    X(HTMLElementOffsetWidth)              \
+    X(HTMLElementScrollParent)             \
+    X(HTMLEventLoopRenderingUpdate)        \
+    X(HTMLImageElementHeight)              \
+    X(HTMLImageElementWidth)               \
+    X(HTMLImageElementX)                   \
+    X(HTMLImageElementY)                   \
+    X(HTMLInputElementHeight)              \
+    X(HTMLInputElementWidth)               \
+    X(InternalsHitTest)                    \
+    X(MediaQueryListMatches)               \
+    X(NodeNameOrDescription)               \
+    X(RangeGetClientRects)                 \
+    X(ResolvedCSSStyleDeclarationProperty) \
+    X(SVGDecodedImageDataRender)           \
+    X(ScrollCursorIntoView)                \
+    X(SVGGraphicsElementGetBBox)           \
+    X(SourceSetNormalizeSourceDensities)   \
     X(WindowScroll)
 
 enum class UpdateLayoutReason {
@@ -359,6 +351,7 @@ public:
     void obtain_theme_color();
 
     void update_style();
+    void update_style_if_needed_for_element(AbstractElement const&);
     [[nodiscard]] bool element_needs_style_update(AbstractElement const&) const;
     void update_layout(UpdateLayoutReason);
     void update_paint_and_hit_testing_properties_if_needed();

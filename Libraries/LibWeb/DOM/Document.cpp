@@ -517,8 +517,6 @@ Document::Document(JS::Realm& realm, URL::URL const& url, TemporaryDocumentForFr
             return;
 
         auto node = cursor_position->node();
-        node->document().update_layout(UpdateLayoutReason::CursorBlinkTimer);
-
         if (node->paintable()) {
             m_cursor_blink_state = !m_cursor_blink_state;
             node->paintable()->set_needs_display();
@@ -1740,6 +1738,12 @@ void Document::update_style()
     if (invalidation.rebuild_stacking_context_tree)
         invalidate_stacking_context_tree();
     m_needs_full_style_update = false;
+}
+
+void Document::update_style_if_needed_for_element(AbstractElement const& abstract_element)
+{
+    if (element_needs_style_update(abstract_element))
+        update_style();
 }
 
 bool Document::element_needs_style_update(AbstractElement const& abstract_element) const
