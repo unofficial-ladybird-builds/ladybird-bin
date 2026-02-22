@@ -90,6 +90,136 @@ static ThrowCompletionOr<Value> this_number_value(VM& vm, Value value)
     return vm.throw_completion<TypeError>(ErrorType::NotAnObjectOfType, "Number");
 }
 
+struct SignificandAndExponent {
+    Crypto::UnsignedBigInteger significand;
+    i32 exponent { 0 };
+};
+static SignificandAndExponent compute_significand_and_exponent_with_precision(double number, i32 precision)
+{
+    using Extractor = AK::FloatExtractor<double>;
+
+    static auto ONE_BIGINT = 1_bigint;
+    static auto TWO_BIGINT = 2_bigint;
+    static auto TEN_BIGINT = 10_bigint;
+
+    auto result = convert_floating_point_to_decimal_exponential_form(number);
+    auto exponent = result.exponent + count_digits(result.fraction) - 1;
+
+    // Decompose the number into its exact binary representation. An IEEE-754 double is exactly equal to:
+    //
+    //     binary_significand * 2 ^ binary_exponent
+    Extractor extractor;
+    extractor.d = number;
+
+    Crypto::UnsignedBigInteger binary_significand;
+    i32 binary_exponent = 0;
+
+    if (extractor.exponent == 0) {
+        binary_significand = extractor.mantissa;
+        binary_exponent = 1 - Extractor::exponent_bias - Extractor::mantissa_bits;
+    } else {
+        binary_significand = extractor.mantissa | (1ull << Extractor::mantissa_bits);
+        binary_exponent = extractor.exponent - Extractor::exponent_bias - Extractor::mantissa_bits;
+    }
+
+    // Compute the significand from the binary representation using exact arithmetic. We are effectively after:
+    //
+    //    significand = round(number * 10 ^ (precision - exponent - 1))
+    //
+    // Using the binary representation of the number, that becomes:
+    //
+    //    significand = round(binary_significand * (2 ^ binary_exponent) * (10 ^ (precision - exponent - 1)))
+    //
+    // Below, we arrange this as a fraction, placing any negative values into the denominator to ensure that the math
+    // involves only unsigned integers.
+    auto compute_significand = [&](i32 exponent) {
+        auto numerator = binary_significand;
+        auto denominator = ONE_BIGINT;
+
+        // 2 ^ binary_exponent
+        if (binary_exponent > 0)
+            numerator = MUST(numerator.shift_left(binary_exponent));
+        else if (binary_exponent < 0)
+            denominator = MUST(denominator.shift_left(-binary_exponent));
+
+        // 10 ^ (precision - exponent - 1)
+        if (auto scale = precision - exponent - 1; scale > 0)
+            numerator = numerator.multiplied_by(TEN_BIGINT.pow(scale));
+        else if (scale < 0)
+            denominator = denominator.multiplied_by(TEN_BIGINT.pow(-scale));
+
+        auto [quotient, remainder] = numerator.divided_by(denominator);
+
+        // Round half-up to distinguish between equally valid candidates.
+        if (MUST(remainder.shift_left(1)) >= denominator)
+            quotient = quotient.plus(1);
+
+        return quotient;
+    };
+
+    // The exponent computed from Ryu can be off-by-one at boundaries (e.g. when rounding 9.9999... up to 10.0). If the
+    // resulting digit count is incorrect, we adjust the exponent and recompute the significand.
+    auto significand = compute_significand(exponent);
+
+    if (auto digit_count = significand.count_digits_in_base(10); digit_count > static_cast<size_t>(precision))
+        significand = compute_significand(++exponent);
+    else if (digit_count < static_cast<size_t>(precision))
+        significand = compute_significand(--exponent);
+
+    // When the computed significand is exactly (10 ^ (precision - 1)), then we have two candidate representations of
+    // the original number:
+    //
+    //    candidate_a = significand * (10 ^ (exponent - precision + 1))
+    //    candidate_b = alternate * (10 ^ (exponent - precision))
+    //
+    // Where alternate = compute_significand(exponent - 1).
+    //
+    // We want to know which candidate is closest to the original number (x). Tie breaks go to the larger value
+    // (candidate_a), so we only pick candidate_b if:
+    //
+    //    candidate_a - x > x - candidate_b
+    //    candidate_a + candidate_b > 2 * x
+    //
+    // Substituting the candidates and simplifying the left-hand side of this comparison, we have:
+    //
+    //    lhs = significand * (10 ^ (exponent - precision + 1)) + alternate * (10 ^ (exponent - precision))
+    //    lhs = (significand * 10 + alternate) * (10 ^ (exponent - precision))
+    //
+    // And substituting the binary decomposition for the right-hand side of this comparison, we have:
+    //
+    //    rhs = 2 * binary_significand * (2 ^ binary_exponent)
+    //
+    // Similar to `compute_significand` above, we take care to clear any negative exponents to ensure that the math
+    // involves only unsigned integers.
+    if (significand == TEN_BIGINT.pow(precision - 1)) {
+        auto alternate = compute_significand(exponent - 1);
+
+        if (alternate.count_digits_in_base(10) == static_cast<size_t>(precision)) {
+            auto lhs = significand.multiplied_by(TEN_BIGINT).plus(alternate);
+            auto rhs = TWO_BIGINT.multiplied_by(binary_significand);
+
+            // 10 ^ (exponent - precision)
+            if (auto scale = exponent - precision; scale > 0)
+                lhs = lhs.multiplied_by(TEN_BIGINT.pow(scale));
+            else if (scale < 0)
+                rhs = rhs.multiplied_by(TEN_BIGINT.pow(-scale));
+
+            // 2 ^ binary_exponent
+            if (binary_exponent > 0)
+                rhs = MUST(rhs.shift_left(binary_exponent));
+            else if (binary_exponent < 0)
+                lhs = MUST(lhs.shift_left(-binary_exponent));
+
+            if (lhs > rhs) {
+                significand = move(alternate);
+                --exponent;
+            }
+        }
+    }
+
+    return { .significand = move(significand), .exponent = exponent };
+}
+
 // 21.1.3.2 Number.prototype.toExponential ( fractionDigits ), https://tc39.es/ecma262/#sec-number.prototype.toexponential
 JS_DEFINE_NATIVE_FUNCTION(NumberPrototype::to_exponential)
 {
@@ -140,23 +270,32 @@ JS_DEFINE_NATIVE_FUNCTION(NumberPrototype::to_exponential)
     }
     // 10. Else,
     else {
-        // a. If fractionDigits is not undefined, then
-        //     i. Let e and n be integers such that 10^f ≤ n < 10^(f+1) and for which n × 10^(e-f) - x is as close to zero as possible.
-        //        If there are two such sets of e and n, pick the e and n for which n × 10^(e-f) is larger.
-        // b. Else,
-        //     i. Let e, n, and f be integers such that f ≥ 0, 10^f ≤ n < 10^(f+1), 𝔽(n × 10^(e-f)) is 𝔽(x), and f is as small as possible.
-        //        Note that the decimal representation of n has f + 1 digits, n is not divisible by 10, and the least significant digit of n is not necessarily uniquely determined by these criteria.
-        exponent = static_cast<int>(floor(log10(number)));
+        Crypto::UnsignedBigInteger significand;
 
-        if (fraction_digits_value.is_undefined()) {
-            auto mantissa = convert_floating_point_to_decimal_exponential_form(number).fraction;
-            fraction_digits = count_digits(mantissa) - 1;
+        // a. If fractionDigits is not undefined, then
+        if (!fraction_digits_value.is_undefined()) {
+            // i. Let e and n be integers such that 10^f ≤ n < 10^(f+1) and for which n × 10^(e-f) - x is as close to
+            //    zero as possible. If there are two such sets of e and n, pick the e and n for which n × 10^(e-f) is
+            //    larger.
+            auto result = compute_significand_and_exponent_with_precision(number, static_cast<i32>(fraction_digits) + 1);
+
+            significand = move(result.significand);
+            exponent = result.exponent;
+        }
+        // b. Else,
+        else {
+            // i. Let e, n, and f be integers such that f ≥ 0, 10^f ≤ n < 10^(f+1), 𝔽(n × 10^(e-f)) is 𝔽(x), and f is
+            //    as small as possible. Note that the decimal representation of n has f + 1 digits, n is not divisible
+            //    by 10, and the least significant digit of n is not necessarily uniquely determined by these criteria.
+            auto result = convert_floating_point_to_decimal_exponential_form(number);
+
+            significand = result.fraction;
+            fraction_digits = count_digits(result.fraction) - 1;
+            exponent = result.exponent + static_cast<i32>(fraction_digits);
         }
 
-        number = round(number / pow(10, exponent - fraction_digits));
-
         // c. Let m be the String value consisting of the digits of the decimal representation of n (in order, with no leading zeroes).
-        number_string = number_to_string(number, NumberToStringMode::WithoutExponent);
+        number_string = MUST(significand.to_base(10));
     }
 
     // 11. If f ≠ 0, then
@@ -287,68 +426,6 @@ JS_DEFINE_NATIVE_FUNCTION(NumberPrototype::to_locale_string)
     return PrimitiveString::create(vm, move(formatted));
 }
 
-struct NumberAndExponent {
-    Crypto::UnsignedBigInteger number;
-    i32 exponent { 0 };
-};
-static NumberAndExponent compute_number_and_exponent_with_precision(double number, i32 precision)
-{
-    using Extractor = AK::FloatExtractor<double>;
-
-    auto result = convert_floating_point_to_decimal_exponential_form(number);
-    auto exponent = result.exponent + count_digits(result.fraction) - 1;
-
-    // Decompose the number into its exact binary representation. An IEEE-754 double is exactly equal to:
-    //
-    //     binary_significand * 2 ^ binary_exponent
-    Extractor extractor;
-    extractor.d = number;
-
-    u64 binary_significand = 0;
-    i32 binary_exponent = 0;
-
-    if (extractor.exponent == 0) {
-        binary_significand = extractor.mantissa;
-        binary_exponent = 1 - Extractor::exponent_bias - Extractor::mantissa_bits;
-    } else {
-        binary_significand = extractor.mantissa | (1ull << Extractor::mantissa_bits);
-        binary_exponent = extractor.exponent - Extractor::exponent_bias - Extractor::mantissa_bits;
-    }
-
-    // Compute the significand from the binary representation using exact arithmetic. We are effectively after:
-    //
-    //    significand = round(number * 10 ^ (precision - exponent - 1))
-    //
-    // Using the binary representation of the number, that becomes:
-    //
-    //    significand = round(binary_significand * (2 ^ binary_exponent) * (10 ^ (precision - exponent - 1)))
-    //
-    // Below, we arrange this as a fraction, placing any negative values into the denominator to ensure that the math
-    // involves only unsigned integers.
-    Crypto::UnsignedBigInteger numerator { binary_significand };
-    Crypto::UnsignedBigInteger denominator = 1_bigint;
-
-    // 2 ^ binary_exponent
-    if (binary_exponent > 0)
-        numerator = MUST(numerator.shift_left(binary_exponent));
-    else if (binary_exponent < 0)
-        denominator = MUST(denominator.shift_left(-binary_exponent));
-
-    // 10 ^ (precision - exponent - 1)
-    if (auto scale = precision - exponent - 1; scale > 0)
-        numerator = numerator.multiplied_by((10_bigint).pow(scale));
-    else if (scale < 0)
-        denominator = denominator.multiplied_by((10_bigint).pow(-scale));
-
-    auto [quotient, remainder] = numerator.divided_by(denominator);
-
-    // Round half-up to distinguish between equally valid candidates.
-    if (MUST(remainder.shift_left(1)) >= denominator)
-        quotient = quotient.plus(1);
-
-    return { .number = quotient, .exponent = exponent };
-}
-
 // 21.1.3.5 Number.prototype.toPrecision ( precision ), https://tc39.es/ecma262/#sec-number.prototype.toprecision
 JS_DEFINE_NATIVE_FUNCTION(NumberPrototype::to_precision)
 {
@@ -402,12 +479,12 @@ JS_DEFINE_NATIVE_FUNCTION(NumberPrototype::to_precision)
     else {
         // a. Let e and n be integers such that 10^(p-1) ≤ n < 10^p and for which n × 10^(e-p+1) - x is as close to zero
         //    as possible. If there are two such sets of e and n, pick the e and n for which n × 10^(e-p+1) is larger.
-        auto result = compute_number_and_exponent_with_precision(number, static_cast<i32>(precision));
+        auto result = compute_significand_and_exponent_with_precision(number, static_cast<i32>(precision));
         exponent = result.exponent;
 
         // b. Let m be the String value consisting of the digits of the decimal representation of n (in order, with no
         //    leading zeroes).
-        number_string = MUST(result.number.to_base(10));
+        number_string = MUST(result.significand.to_base(10));
 
         // c. If e < -6 or e ≥ p, then
         if ((exponent < -6) || (exponent >= precision)) {
