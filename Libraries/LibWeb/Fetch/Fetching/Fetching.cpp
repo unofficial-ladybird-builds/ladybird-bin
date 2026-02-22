@@ -1117,10 +1117,25 @@ GC::Ref<PendingResponse> scheme_fetch(JS::Realm& realm, Infrastructure::FetchPar
     else if (request->current_url().scheme() == "file"sv || request->current_url().scheme() == "resource"sv) {
         // For now, unfortunate as it is, file: URLs are left as an exercise for the reader.
         // When in doubt, return a network error.
-        if (request->origin().has<URL::Origin>() && (request->origin().get<URL::Origin>().is_opaque() || request->origin().get<URL::Origin>().scheme() == "file"sv || request->origin().get<URL::Origin>().scheme() == "resource"sv))
-            return nonstandard_resource_loader_file_or_http_network_fetch(realm, fetch_params);
-        else
-            return PendingResponse::create(vm, request, Infrastructure::Response::network_error(vm, "Request with 'file:' or 'resource:' URL blocked"_string));
+
+        auto error = PendingResponse::create(vm, request, Infrastructure::Response::network_error(vm, "Request with 'file:' or 'resource:' URL blocked"_string));
+
+        auto const* origin = request->origin().get_pointer<URL::Origin>();
+        if (!origin)
+            return error;
+
+        if (!(origin->is_opaque() || origin->scheme() == "file"sv || origin->scheme() == "resource"sv))
+            return error;
+
+        // Allow file:// pages to load subresources (scripts, styles, fonts, etc.) from other file:// URLs,
+        // but block the fetch() API and other requests without a destination from reading arbitrary files.
+        // Requests made via fetch() have an empty destination, so we use that to distinguish between
+        // subresource loads initiated by the browser (which have a destination) and programmatic fetches
+        // (which do not). This prevents data exfiltration via fetch() from file:// pages.
+        if (!request->destination().has_value())
+            return error;
+
+        return nonstandard_resource_loader_file_or_http_network_fetch(realm, fetch_params);
     }
     // -> HTTP(S) scheme
     else if (Infrastructure::is_http_or_https_scheme(request->current_url().scheme())) {
