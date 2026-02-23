@@ -94,18 +94,33 @@ jobs:
             cp "$lib" "$BIN_DIR/lib/"
           done
 
-          # Copy Qt6 plugins (platforms, multimedia)
-          mkdir -p "$BIN_DIR/plugins/platforms"
-          cp -r /usr/lib/qt/plugins/platforms/* "$BIN_DIR/plugins/platforms/" || true
-          mkdir -p "$BIN_DIR/plugins/audio"
-          cp -r /usr/lib/qt/plugins/audio/* "$BIN_DIR/plugins/audio/" || true
+          # Bundle Qt6 plugins (platforms, multimedia)
+          set -e
 
-          # Set RPATH so binary uses bundled lib
-          patchelf --set-rpath '$ORIGIN/lib' "$BINARY"
+          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
+          BIN_DIR=$(dirname "$BINARY")
+          LIB_DIR="$BIN_DIR/lib"
 
-          echo "Qt6 libraries bundled successfully."
+          mkdir -p "$LIB_DIR"
 
-      # ----------------------------
+          echo "Bundling shared libraries..."
+
+          ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
+            case "$lib" in
+              */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
+                echo "Skipping core libc: $lib"
+                ;;
+              *)
+                echo "Copying $lib"
+                cp -v --parents "$lib" "$LIB_DIR"
+                ;;
+            esac
+          done
+
+          echo "Setting RPATH..."
+          patchelf --set-rpath '$ORIGIN/lib/usr/lib:$ORIGIN/lib' "$BINARY"
+          # ----------------------------
+          
       # CREATE ZIP ARTIFACT
       # ----------------------------
       - name: Package Ladybird portable zip
