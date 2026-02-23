@@ -384,6 +384,9 @@ static ErrorOr<void> collect_ref_tests(Application const& app, Vector<Test>& tes
             continue;
         }
 
+        if (!is_valid_test_name(name))
+            continue;
+
         auto relative_path = LexicalPath::relative_path(input_path, app.test_root_path).release_value();
         tests.append({ TestMode::Ref, input_path, {}, relative_path, relative_path });
     }
@@ -510,12 +513,15 @@ static ErrorOr<void> generate_result_files(ReadonlySpan<Test> tests, ReadonlySpa
         bool has_stdout = FileSystem::exists(ByteString::formatted("{}.stdout.txt", base_path));
         bool has_stderr = FileSystem::exists(ByteString::formatted("{}.stderr.txt", base_path));
 
-        js.appendff("    {{ \"name\": \"{}\", \"result\": \"{}\", \"mode\": \"{}\", \"hasStdout\": {}, \"hasStderr\": {} }}",
+        js.appendff("    {{ \"name\": \"{}\", \"result\": \"{}\", \"mode\": \"{}\", \"hasStdout\": {}, \"hasStderr\": {}",
             test.safe_relative_path,
             test_result_to_string(result.result),
             test_mode_to_string(test.mode),
             has_stdout ? "true" : "false",
             has_stderr ? "true" : "false");
+        if (test.mode == TestMode::Ref && test.diff_pixel_error_count > 0)
+            js.appendff(", \"pixelErrors\": {}, \"maxChannelDiff\": {}", test.diff_pixel_error_count, test.diff_maximum_error);
+        js.append(" }"sv);
     }
 
     js.append("\n  ]\n};\n"sv);
@@ -857,6 +863,8 @@ static void run_ref_test(TestWebView& view, TestRunContext& context, Test& test,
             return TestResult::Pass;
 
         auto& app = Application::the();
+        auto const& actual = *test.actual_screenshot;
+        auto const& expected = *test.expectation_screenshot;
 
         auto dump_screenshot = [](Gfx::Bitmap const& bitmap, StringView path) -> ErrorOr<void> {
             auto screenshot_file = TRY(Core::File::open(path, Core::File::OpenMode::Write));
@@ -869,8 +877,27 @@ static void run_ref_test(TestWebView& view, TestRunContext& context, Test& test,
         TRY(Core::Directory::create(output_dir, Core::Directory::CreateDirectories::Yes));
 
         auto base_path = LexicalPath::join(app.results_directory, test.safe_relative_path).string();
-        TRY(dump_screenshot(*test.actual_screenshot, ByteString::formatted("{}.actual.png", base_path)));
-        TRY(dump_screenshot(*test.expectation_screenshot, ByteString::formatted("{}.expected.png", base_path)));
+        TRY(dump_screenshot(actual, ByteString::formatted("{}.actual.png", base_path)));
+        TRY(dump_screenshot(expected, ByteString::formatted("{}.expected.png", base_path)));
+
+        // Generate a diff image and compute stats.
+        if (actual.width() == expected.width() && actual.height() == expected.height()) {
+            auto diff = actual.diff(expected);
+            test.diff_pixel_error_count = diff.pixel_error_count;
+            test.diff_maximum_error = diff.maximum_error;
+
+            auto diff_bitmap = TRY(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888, { actual.width(), actual.height() }));
+            for (int y = 0; y < actual.height(); ++y) {
+                for (int x = 0; x < actual.width(); ++x) {
+                    auto pixel = actual.get_pixel(x, y);
+                    if (pixel != expected.get_pixel(x, y))
+                        diff_bitmap->set_pixel(x, y, Gfx::Color(255, 0, 0));
+                    else
+                        diff_bitmap->set_pixel(x, y, pixel.mixed_with(expected.get_pixel(x, y), 0.5f).mixed_with(Gfx::Color::White, 0.8f));
+                }
+            }
+            TRY(dump_screenshot(*diff_bitmap, ByteString::formatted("{}.diff.png", base_path)));
+        }
 
         return TestResult::Fail;
     };
@@ -1282,9 +1309,11 @@ static ErrorOr<int> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePix
             // Disconnect child crash handlers so old child crashes don't affect the next test
             view->disconnect_child_crash_handlers();
 
-            // Don't try to reset zoom if WebContent crashed - it's gone
-            if (test_result != TestResult::Crashed)
+            // Don't try to reset state if WebContent crashed - it's gone
+            if (test_result != TestResult::Crashed) {
                 view->reset_zoom();
+                view->reset_viewport_size(window_size);
+            }
 
             auto& test = tests[test_index];
             if (test.timeout_timer) {

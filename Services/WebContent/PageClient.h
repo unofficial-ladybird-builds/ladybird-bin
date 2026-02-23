@@ -52,14 +52,13 @@ public:
     virtual void report_finished_handling_input_event(u64 page_id, Web::EventResult event_was_handled) override;
 
     void set_palette_impl(Gfx::PaletteImpl&);
-    void set_viewport_size(Web::DevicePixelSize const&);
+    void set_viewport(Web::DevicePixelSize const&, double device_pixel_ratio);
     void set_screen_rects(Vector<Web::DevicePixelRect> const& rects, size_t main_screen_index)
     {
         m_all_screen_rects = rects;
         m_main_screen_index = main_screen_index;
     }
-    void set_device_pixel_ratio(double device_pixel_ratio);
-    void set_zoom_level(double zoom_level) { m_zoom_level = zoom_level; }
+    void set_zoom_level(double zoom_level);
     void set_maximum_frames_per_second(u64 maximum_frames_per_second);
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
     void set_preferred_contrast(Web::CSS::PreferredContrast);
@@ -129,6 +128,7 @@ private:
     virtual void page_did_request_maximize_window() override;
     virtual void page_did_request_minimize_window() override;
     virtual void page_did_request_fullscreen_window() override;
+    virtual void page_did_request_exit_fullscreen() override;
     virtual void page_did_request_tooltip_override(Web::CSSPixelPoint, ByteString const&) override;
     virtual void page_did_stop_tooltip_override() override;
     virtual void page_did_enter_tooltip_area(ByteString const&) override;
