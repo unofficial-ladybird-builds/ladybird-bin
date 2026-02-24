@@ -501,6 +501,7 @@ Document::Document(JS::Realm& realm, URL::URL const& url, TemporaryDocumentForFr
     , m_style_computer(realm.heap().allocate<CSS::StyleComputer>(*this))
     , m_font_computer(realm.heap().allocate<CSS::FontComputer>(*this))
     , m_url(url)
+    , m_fonts(CSS::FontFaceSet::create(realm))
     , m_temporary_document_for_fragment_parsing(temporary_document_for_fragment_parsing)
     , m_editing_host_manager(EditingHostManager::create(realm, *this))
     , m_dynamic_view_transition_style_sheet(parse_css_stylesheet(CSS::Parser::ParsingParams(realm), ""sv, {}))
@@ -2319,9 +2320,7 @@ GC::Ref<HTML::HTMLAllCollection> Document::all()
 // https://drafts.csswg.org/css-font-loading/#font-source
 GC::Ref<CSS::FontFaceSet> Document::fonts()
 {
-    if (!m_fonts)
-        m_fonts = CSS::FontFaceSet::create(realm());
-    return *m_fonts;
+    return m_fonts;
 }
 
 // https://html.spec.whatwg.org/multipage/obsolete.html#dom-document-clear
@@ -7609,27 +7608,38 @@ String Document::dump_display_list()
         dump_context(root, 1);
 
     builder.append("\nDisplayList:\n"sv);
-    int indent = 0;
-    for (auto const& item : display_list->commands()) {
-        int nesting_change = item.command.visit([](auto const& cmd) {
-            if constexpr (requires { cmd.nesting_level_change; })
-                return cmd.nesting_level_change;
-            return 0;
-        });
 
-        if (nesting_change < 0)
-            indent = max(0, indent + nesting_change);
+    Function<void(Painting::DisplayList const&, int)> dump_commands =
+        [&](Painting::DisplayList const& list, int base_indent) {
+            int indent = base_indent;
+            for (auto const& item : list.commands()) {
+                int nesting_change = item.command.visit([](auto const& cmd) {
+                    if constexpr (requires { cmd.nesting_level_change; })
+                        return cmd.nesting_level_change;
+                    return 0;
+                });
 
-        builder.append_repeated(' ', indent * 2);
-        item.command.visit([&](auto const& command) {
-            builder.appendff("{}@{}", command.command_name, item.context ? item.context->id() : 0);
-            command.dump(builder);
-        });
-        builder.append('\n');
+                if (nesting_change < 0)
+                    indent = max(base_indent, indent + nesting_change);
 
-        if (nesting_change > 0)
-            indent += nesting_change;
-    }
+                builder.append_repeated(' ', indent * 2);
+                item.command.visit([&](auto const& command) {
+                    builder.appendff("{}@{}", command.command_name, item.context ? item.context->id() : 0);
+                    command.dump(builder);
+                });
+                builder.append('\n');
+
+                if (auto const* nested = item.command.get_pointer<Painting::PaintNestedDisplayList>()) {
+                    if (nested->display_list)
+                        dump_commands(*nested->display_list, indent + 1);
+                }
+
+                if (nesting_change > 0)
+                    indent += nesting_change;
+            }
+        };
+
+    dump_commands(*display_list, 0);
 
     return builder.to_string_without_validation();
 }

@@ -14,6 +14,8 @@ namespace Web::Painting {
 
 void DisplayList::append(DisplayListCommand&& command, RefPtr<AccumulatedVisualContext const> context)
 {
+    if (context && context->has_empty_effective_clip())
+        return;
     m_commands.append({ move(context), move(command) });
 }
 
@@ -259,8 +261,6 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
         restore({});
         applied_depth--;
     }
-
-    flush();
 }
 
 }

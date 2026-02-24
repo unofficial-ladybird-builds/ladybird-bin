@@ -86,12 +86,17 @@ public:
     void disconnect_from_css_rule();
     void reparse_connected_css_font_face_rule_descriptors();
 
+    ParsedFontFace parsed_font_face() const;
+
     Bindings::FontFaceLoadStatus status() const { return m_status; }
 
     GC::Ref<WebIDL::Promise> load();
     GC::Ref<WebIDL::Promise> loaded() const;
 
     GC::Ref<WebIDL::Promise> font_status_promise() { return m_font_status_promise; }
+
+    void add_to_set(FontFaceSet&);
+    void remove_from_set(FontFaceSet&);
 
 private:
     FontFace(JS::Realm&, GC::Ref<WebIDL::Promise> font_status_promise);
@@ -125,6 +130,7 @@ private:
     RefPtr<Core::Promise<NonnullRefPtr<Gfx::Typeface const>>> m_font_load_promise;
 
     GC::Ptr<CSSFontFaceRule> m_css_font_face_rule;
+    HashTable<GC::Ref<FontFaceSet>> m_containing_sets;
 };
 
 bool font_format_is_supported(FlyString const& name);
