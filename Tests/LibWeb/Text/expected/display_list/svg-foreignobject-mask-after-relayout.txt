@@ -1,0 +1,26 @@
+AccumulatedVisualContext Tree:
+  [1] scroll_frame_id=0 (PaintableWithLines(BlockContainer<PRE>#out))
+    [2] clip=[8,8 100x100] (SVGForeignObjectPaintable(SVGForeignObjectBox<foreignObject>#fo))
+      [3] clip=[8,8 100x100] (PaintableWithLines(BlockContainer(anonymous)))
+
+DisplayList:
+SaveLayer@0
+  Save@2
+    AddClipRect@2 rect=[-2,-2 119x119]
+    SaveLayer@2
+      ApplyEffects@3 opacity=1 has_filter=false
+        PaintNestedDisplayList@3 rect=[-2,-2 119x119]
+      Restore@3
+    Restore@3
+  Restore@3
+  Save@2
+    AddClipRect@2 rect=[-2,-2 119x119]
+    SaveLayer@2
+      FillRect@3 rect=[8,8 100x100] color=rgb(0, 0, 0)
+      ApplyEffects@2 opacity=1 has_filter=false
+        PaintNestedDisplayList@2 rect=[-2,-2 119x119]
+      Restore@2
+    Restore@2
+  Restore@2
+Restore@0
+

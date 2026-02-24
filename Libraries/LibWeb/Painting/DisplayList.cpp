@@ -28,12 +28,12 @@ static Optional<Gfx::IntRect> command_bounding_rectangle(DisplayListCommand cons
         });
 }
 
-static bool command_is_clip_or_mask(DisplayListCommand const& command)
+static bool command_is_clip(DisplayListCommand const& command)
 {
     return command.visit(
         [&](auto const& command) -> bool {
-            if constexpr (requires { command.is_clip_or_mask(); })
-                return command.is_clip_or_mask();
+            if constexpr (requires { command.is_clip(); })
+                return command.is_clip();
             else
                 return false;
         });
@@ -45,8 +45,12 @@ void DisplayListPlayer::execute(DisplayList& display_list, ScrollStateSnapshotBy
     if (surface) {
         surface->lock_context();
     }
+    m_surface = surface;
     auto scroll_state_snapshot = m_scroll_state_snapshots_by_display_list.get(display_list).value_or({});
-    execute_impl(display_list, scroll_state_snapshot, surface);
+    execute_impl(display_list, scroll_state_snapshot);
+    if (surface)
+        flush();
+    m_surface = nullptr;
     if (surface) {
         surface->unlock_context();
     }
@@ -84,21 +88,14 @@ static FloatMatrix4x4 scale_matrix_for_device_pixels(FloatMatrix4x4 matrix, floa
     return matrix;
 }
 
-void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnapshot const& scroll_state, RefPtr<Gfx::PaintingSurface> surface)
+void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnapshot const& scroll_state)
 {
-    if (surface)
-        m_surfaces.append(*surface);
-    ScopeGuard guard = [&surfaces = m_surfaces, pop_surface_from_stack = !!surface] {
-        if (pop_surface_from_stack)
-            (void)surfaces.take_last();
-    };
-
     auto const& commands = display_list.commands();
     auto device_pixels_per_css_pixel = display_list.device_pixels_per_css_pixel();
 
     DevicePixelConverter device_pixel_converter { device_pixels_per_css_pixel };
 
-    VERIFY(!m_surfaces.is_empty());
+    VERIFY(m_surface);
 
     auto for_each_node_from_common_ancestor_to_target = [](this auto const& self, RefPtr<AccumulatedVisualContext const> common_ancestor, RefPtr<AccumulatedVisualContext const> node, auto&& callback) -> void {
         if (!node || node == common_ancestor)
@@ -209,9 +206,9 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
         }
 
         if (bounding_rect.has_value() && (bounding_rect->is_empty() || would_be_fully_clipped_by_painter(*bounding_rect))) {
-            // Any clip or mask that's located outside of the visible region is equivalent to a simple clip-rect,
+            // Any clip that's located outside of the visible region is equivalent to a simple clip-rect,
             // so replace it with one to avoid doing unnecessary work.
-            if (command_is_clip_or_mask(command)) {
+            if (command_is_clip(command)) {
                 if (command.has<AddClipRect>()) {
                     add_clip_rect(command.get<AddClipRect>());
                 } else {
@@ -252,7 +249,6 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
         else HANDLE_COMMAND(ApplyBackdropFilter, apply_backdrop_filter)
         else HANDLE_COMMAND(DrawRect, draw_rect)
         else HANDLE_COMMAND(AddRoundedRectClip, add_rounded_rect_clip)
-        else HANDLE_COMMAND(AddMask, add_mask)
         else HANDLE_COMMAND(PaintNestedDisplayList, paint_nested_display_list)
         else HANDLE_COMMAND(ApplyEffects, apply_effects)
         else VERIFY_NOT_REACHED();
@@ -264,8 +260,7 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
         applied_depth--;
     }
 
-    if (surface)
-        flush();
+    flush();
 }
 
 }

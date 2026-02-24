@@ -135,7 +135,7 @@ struct AddClipRect {
     Gfx::IntRect rect;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
-    bool is_clip_or_mask() const { return true; }
+    bool is_clip() const { return true; }
     void dump(StringBuilder&) const;
 };
 
@@ -322,20 +322,7 @@ struct AddRoundedRectClip {
     CornerClip corner_clip;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return border_rect; }
-    bool is_clip_or_mask() const { return true; }
-
-    void dump(StringBuilder&) const;
-};
-
-struct AddMask {
-    static constexpr StringView command_name = "AddMask"sv;
-
-    RefPtr<DisplayList> display_list;
-    Gfx::IntRect rect;
-    Gfx::MaskKind kind;
-
-    [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
-    bool is_clip_or_mask() const { return true; }
+    bool is_clip() const { return true; }
 
     void dump(StringBuilder&) const;
 };
@@ -372,6 +359,7 @@ struct ApplyEffects {
     float opacity { 1.0f };
     Gfx::CompositingAndBlendingOperator compositing_and_blending_operator { Gfx::CompositingAndBlendingOperator::Normal };
     Optional<Gfx::Filter> filter {};
+    Optional<Gfx::MaskKind> mask_kind {};
 
     void dump(StringBuilder&) const;
 };
@@ -402,7 +390,6 @@ using DisplayListCommand = Variant<
     ApplyBackdropFilter,
     DrawRect,
     AddRoundedRectClip,
-    AddMask,
     PaintNestedDisplayList,
     PaintScrollBar,
     ApplyEffects>;

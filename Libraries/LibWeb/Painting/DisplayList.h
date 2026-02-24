@@ -27,8 +27,8 @@ public:
     void execute(DisplayList&, ScrollStateSnapshotByDisplayList&&, RefPtr<Gfx::PaintingSurface>);
 
 protected:
-    Gfx::PaintingSurface& surface() const { return m_surfaces.last(); }
-    void execute_impl(DisplayList&, ScrollStateSnapshot const& scroll_state, RefPtr<Gfx::PaintingSurface>);
+    Gfx::PaintingSurface& surface() const { return *m_surface; }
+    void execute_impl(DisplayList&, ScrollStateSnapshot const& scroll_state);
 
     ScrollStateSnapshotByDisplayList m_scroll_state_snapshots_by_display_list;
 
@@ -59,7 +59,6 @@ private:
     virtual void apply_backdrop_filter(ApplyBackdropFilter const&) = 0;
     virtual void draw_rect(DrawRect const&) = 0;
     virtual void add_rounded_rect_clip(AddRoundedRectClip const&) = 0;
-    virtual void add_mask(AddMask const&) = 0;
     virtual void paint_nested_display_list(PaintNestedDisplayList const&) = 0;
     virtual void paint_scrollbar(PaintScrollBar const&) = 0;
     virtual void apply_effects(ApplyEffects const&) = 0;
@@ -68,7 +67,7 @@ private:
 
     virtual void add_clip_path(Gfx::Path const&) = 0;
 
-    Vector<NonnullRefPtr<Gfx::PaintingSurface>, 1> m_surfaces;
+    RefPtr<Gfx::PaintingSurface> m_surface;
 };
 
 class DisplayList : public AtomicRefCounted<DisplayList> {
