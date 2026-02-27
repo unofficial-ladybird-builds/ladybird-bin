@@ -17,16 +17,16 @@ Vector<CounterStyleRangeEntry> AutoRange::resolve(CounterStyleAlgorithm const& a
 {
     // The range depends on the counter system:
     return algorithm.visit(
-        [&](AdditiveCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
+        [](AdditiveCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
             // For additive systems, the range is 0 to positive infinity.
             return { { 0, NumericLimits<i64>::max() } };
         },
-        [&](FixedCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
+        [](FixedCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
             // For cyclic, numeric, and fixed systems, the range is negative infinity to positive infinity.
             // NB: cyclic and numeric are handled below.
             return { { NumericLimits<i64>::min(), NumericLimits<i64>::max() } };
         },
-        [&](GenericCounterStyleAlgorithm const& generic_algorithm) -> Vector<CounterStyleRangeEntry> {
+        [](GenericCounterStyleAlgorithm const& generic_algorithm) -> Vector<CounterStyleRangeEntry> {
             switch (generic_algorithm.type) {
             case CounterStyleSystem::Cyclic:
             case CounterStyleSystem::Numeric:
@@ -42,6 +42,14 @@ Vector<CounterStyleRangeEntry> AutoRange::resolve(CounterStyleAlgorithm const& a
                 VERIFY_NOT_REACHED();
             }
             VERIFY_NOT_REACHED();
+        },
+        [](EthiopicNumericCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
+            // NB: All complex predefined counter styles define their range explicitly (i.e. not via auto)
+            VERIFY_NOT_REACHED();
+        },
+        [](ExtendedCJKCounterStyleAlgorithm const&) -> Vector<CounterStyleRangeEntry> {
+            // NB: All complex predefined counter styles define their range explicitly (i.e. not via auto)
+            VERIFY_NOT_REACHED();
         });
 }
 
@@ -55,7 +63,7 @@ Optional<CounterStyleDefinition> CounterStyleDefinition::from_counter_style_rule
     if (maybe_algorithm.has<Empty>())
         return {};
 
-    return CounterStyleDefinition(
+    return CounterStyleDefinition::create(
         rule.name(),
         maybe_algorithm.downcast<CounterStyleAlgorithm, CounterStyleSystemStyleValue::Extends>(),
         rule.negative_style_value() ? Optional<CounterStyleNegativeSign> { resolve_negative_sign(*rule.negative_style_value()) } : Optional<CounterStyleNegativeSign> {},
