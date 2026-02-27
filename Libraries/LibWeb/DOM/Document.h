@@ -107,16 +107,20 @@ enum class InvalidateLayoutTreeReason {
     X(HTMLImageElementY)                   \
     X(HTMLInputElementHeight)              \
     X(HTMLInputElementWidth)               \
+    X(InspectDOMTree)                      \
     X(InternalsHitTest)                    \
     X(MediaQueryListMatches)               \
+    X(NavigableSelectedText)               \
     X(NavigableViewportScroll)             \
     X(NodeNameOrDescription)               \
     X(RangeGetClientRects)                 \
     X(ResolvedCSSStyleDeclarationProperty) \
     X(SVGDecodedImageDataRender)           \
     X(ScrollCursorIntoView)                \
+    X(ProcessScreenshot)                   \
     X(SVGGraphicsElementGetBBox)           \
     X(SourceSetNormalizeSourceDensities)   \
+    X(ViewTransitionCapture)               \
     X(WindowScroll)
 
 enum class UpdateLayoutReason {
@@ -364,6 +368,7 @@ public:
     void update_style_if_needed_for_element(AbstractElement const&);
     [[nodiscard]] bool element_needs_style_update(AbstractElement const&) const;
     void update_layout(UpdateLayoutReason);
+    [[nodiscard]] bool layout_is_up_to_date() const;
     void update_paint_and_hit_testing_properties_if_needed();
     void update_animated_style_if_needed();
 
@@ -375,8 +380,14 @@ public:
     Layout::Viewport const* layout_node() const;
     Layout::Viewport* layout_node();
 
+    Layout::Viewport const* unsafe_layout_node() const;
+    Layout::Viewport* unsafe_layout_node();
+
     Painting::ViewportPaintable const* paintable() const;
     Painting::ViewportPaintable* paintable();
+
+    Painting::ViewportPaintable const* unsafe_paintable() const;
+    Painting::ViewportPaintable* unsafe_paintable();
 
     GC::Ref<NodeList> get_elements_by_name(FlyString const&);
 
@@ -1207,6 +1218,8 @@ private:
 
     bool m_needs_full_style_update { false };
     bool m_needs_full_layout_tree_update { false };
+
+    bool m_is_running_update_layout { false };
 
     HashTable<GC::Ref<Layout::SVGSVGBox>> m_svg_roots_needing_relayout;
 
