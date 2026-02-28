@@ -157,7 +157,7 @@ public:
     template<DerivedFrom<Object> T>
     [[nodiscard]] ALWAYS_INLINE bool is() const
     {
-        return is_object() && ::is<T>(as_object());
+        return as_if<T>() != nullptr;
     }
 
     template<DerivedFrom<Object> T>
@@ -165,7 +165,11 @@ public:
     {
         if (!is_object())
             return nullptr;
-        return ::as_if<T>(as_object());
+        if constexpr (IsSame<T, Object>) {
+            return as_object();
+        } else {
+            return ::as_if<T>(as_object());
+        }
     }
 
     template<DerivedFrom<Object> T>
@@ -173,7 +177,27 @@ public:
     {
         if (!is_object())
             return nullptr;
-        return ::as_if<T>(as_object());
+        if constexpr (IsSame<T, Object>) {
+            return as_object();
+        } else {
+            return ::as_if<T>(as_object());
+        }
+    }
+
+    template<DerivedFrom<Object> T>
+    [[nodiscard]] ALWAYS_INLINE T& as()
+    {
+        auto ptr = as_if<T>();
+        VERIFY(ptr);
+        return *ptr;
+    }
+
+    template<DerivedFrom<Object> T>
+    [[nodiscard]] ALWAYS_INLINE T const& as() const
+    {
+        auto ptr = as_if<T>();
+        VERIFY(ptr);
+        return *ptr;
     }
 
     constexpr Value()

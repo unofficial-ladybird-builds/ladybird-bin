@@ -30,9 +30,9 @@
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Painting/BackingStoreManager.h>
 #include <LibWeb/Painting/PaintableBox.h>
-#include <LibWeb/Platform/EventLoopPluginSerenity.h>
+#include <LibWeb/Platform/EventLoopPlugin.h>
+#include <LibWeb/Platform/FontPlugin.h>
 #include <LibWeb/WebIDL/Tracing.h>
-#include <LibWebView/Plugins/FontPlugin.h>
 #include <LibWebView/Plugins/ImageCodecPlugin.h>
 #include <LibWebView/SiteIsolation.h>
 #include <LibWebView/Utilities.h>
@@ -81,7 +81,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     WebView::platform_init();
 
-    Web::Platform::EventLoopPlugin::install(*new Web::Platform::EventLoopPluginSerenity);
+    Web::Platform::EventLoopPlugin::install(*new Web::Platform::EventLoopPlugin);
 
     StringView command_line {};
     StringView executable_path {};
@@ -195,7 +195,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Web::HTML::Window::set_internals_object_exposed(expose_internals_object);
     Web::HTML::UniversalGlobalScopeMixin::set_experimental_interfaces_exposed(expose_experimental_interfaces);
 
-    Web::Platform::FontPlugin::install(*new WebView::FontPlugin(enable_test_mode, &font_provider));
+    Web::Platform::FontPlugin::install(*new Web::Platform::FontPlugin(enable_test_mode, &font_provider));
 
     Web::Bindings::initialize_main_thread_vm(Web::Bindings::AgentType::SimilarOriginWindow);
 
