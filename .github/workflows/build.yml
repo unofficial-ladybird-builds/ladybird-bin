@@ -1,4 +1,4 @@
-name: Build Ladybird (AUR PKGBUILD)
+name: Build Ladybird (AppImage)
 
 on:
   push:
@@ -27,23 +27,9 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
-            base-devel \
-            git \
-            sudo \
-            ninja \
-            cmake \
-            curl \
-            qt6-base \
-            qt6-tools \
-            qt6-wayland \
-            qt6-multimedia \
-            libgl \
-            ffmpeg \
-            ttf-liberation \
-            nasm \
-            unzip \
-            zip \
-            patchelf
+            base-devel git sudo ninja cmake curl qt6-base qt6-tools \
+            qt6-wayland qt6-multimedia libgl ffmpeg ttf-liberation \
+            nasm unzip zip patchelf wget
 
       # ----------------------------
       # BUILDER USER
@@ -76,69 +62,63 @@ jobs:
           sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
       # ----------------------------
-      # BUNDLE Qt6 DYNAMICALLY
+      # PREPARE AppDir
       # ----------------------------
-      - name: Bundle Qt6 for portable binary
+      - name: Prepare AppDir for AppImage
         run: |
-          set -e
-          # Find the Ladybird binary
-          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
-          echo "Found binary: $BINARY"
-
-          BIN_DIR=$(dirname "$BINARY")
-          mkdir -p "$BIN_DIR/lib"
-
-          # Find all Qt6 shared libraries needed by the binary
-          echo "Copying Qt6 libraries..."
-          ldd "$BINARY" | grep Qt6 | awk '{print $3}' | while read lib; do
-            cp "$lib" "$BIN_DIR/lib/"
-          done
-
-          # Bundle Qt6 plugins (platforms, multimedia)
-          set -e
-
-          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
-          BIN_DIR=$(dirname "$BINARY")
-          LIB_DIR="$BIN_DIR/lib"
-
-          mkdir -p "$LIB_DIR"
-
-          echo "Bundling shared libraries..."
-
-          ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
-            case "$lib" in
-              */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
-                echo "Skipping core libc: $lib"
-                ;;
-              *)
-                echo "Copying $lib"
-                cp -v --parents "$lib" "$LIB_DIR"
-                ;;
-            esac
-          done
-
-          echo "Setting RPATH..."
-          patchelf --set-rpath '$ORIGIN/lib/usr/lib:$ORIGIN/lib' "$BINARY"
-          # ----------------------------
-          
-      # CREATE ZIP ARTIFACT
       # ----------------------------
-      - name: Package Ladybird portable zip
+      # PREPARE AppDir
+      # ----------------------------
+      - name: Prepare AppDir for AppImage
         run: |
-          # The binary folder
           BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
-          BIN_DIR=$(dirname "$BINARY")
-          cd "$BIN_DIR"
-          zip -r "$GITHUB_WORKSPACE/ladybird-arch-linux.zip" ./*
+          APPDIR=ladybird/AppDir
+          mkdir -p "$APPDIR/usr/bin"
+          cp "$BINARY" "$APPDIR/usr/bin/"
+
+          # Bundle Qt6 plugins
+          mkdir -p "$APPDIR/usr/lib/qt6/plugins"
+          cp -r /usr/lib/qt6/plugins/{platforms,mediaservice,imageformats} "$APPDIR/usr/lib/qt6/plugins/"
+
+          # Create desktop entry
+          mkdir -p "$APPDIR/usr/share/applications"
+          echo "[Desktop Entry]" > "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Type=Application" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Name=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Exec=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Icon=ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Comment=Ladybird web browser" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Categories=Network;WebBrowser;" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          echo "Terminal=false" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+
+          # Placeholder icon
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          convert -size 256x256 xc:none "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
+      # ----------------------------
+      # DOWNLOAD linuxdeployqt
+      # ----------------------------
+      - name: Download linuxdeployqt
+        run: |
+          wget -O linuxdeployqt.AppImage \
+            https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod +x linuxdeployqt.AppImage
 
       # ----------------------------
-      # UPLOAD ARTIFACT
+      # CREATE AppImage
       # ----------------------------
-      - name: Upload portable artifact
+      - name: Create AppImage
+        run: |
+          export QT_QPA_PLATFORM=xcb
+          ./linuxdeployqt.AppImage ladybird/AppDir/usr/share/applications/Ladybird.desktop -appimage
+
+      # ----------------------------
+      # UPLOAD APPIMAGE ARTIFACT
+      # ----------------------------
+      - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-arch-linux
-          path: ladybird-arch-linux.zip
+          name: ladybird-appimage
+          path: "ladybird/AppDir/*.AppImage"
 
       # ----------------------------
       # RELEASE (TAGS ONLY)
@@ -147,4 +127,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ladybird-arch-linux.zip
+          files: ladybird/AppDir/*.AppImage
