@@ -130,15 +130,21 @@ jobs:
           chmod +x linuxdeployqt.AppImage
 
       # ----------------------------
-      # CREATE AppImage
+      # CREATE AppImage (No FUSE)
       # ----------------------------
       - name: Create AppImage
         run: |
+          set -e
+
           export QT_QPA_PLATFORM=xcb
-          ./linuxdeployqt.AppImage \
+
+          # Extract linuxdeployqt (avoid FUSE requirement)
+          ./linuxdeployqt.AppImage --appimage-extract
+          
+          # Run extracted AppRun binary
+          ./squashfs-root/AppRun \
             ladybird/AppDir/usr/share/applications/Ladybird.desktop \
             -appimage
-
       # ----------------------------
       # UPLOAD ARTIFACT
       # ----------------------------
