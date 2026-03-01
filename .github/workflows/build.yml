@@ -27,9 +27,25 @@ jobs:
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
-            base-devel git sudo ninja cmake curl qt6-base qt6-tools \
-            qt6-wayland qt6-multimedia libgl ffmpeg ttf-liberation \
-            nasm unzip zip patchelf wget
+            base-devel \
+            git \
+            sudo \
+            ninja \
+            cmake \
+            curl \
+            qt6-base \
+            qt6-tools \
+            qt6-wayland \
+            qt6-multimedia \
+            libgl \
+            ffmpeg \
+            ttf-liberation \
+            nasm \
+            unzip \
+            zip \
+            patchelf \
+            wget \
+            imagemagick
 
       # ----------------------------
       # BUILDER USER
@@ -64,24 +80,32 @@ jobs:
       # ----------------------------
       # PREPARE AppDir
       # ----------------------------
-      - name: Prepare AppDir for AppImage
+      - name: Prepare AppDir
         run: |
-      # ----------------------------
-      # PREPARE AppDir
-      # ----------------------------
-      - name: Prepare AppDir for AppImage
-        run: |
+          set -e
+
           BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
+          echo "Found binary: $BINARY"
+
           APPDIR=ladybird/AppDir
           mkdir -p "$APPDIR/usr/bin"
           cp "$BINARY" "$APPDIR/usr/bin/"
 
-          # Bundle Qt6 plugins
+          # Bundle Qt6 plugins safely (Qt6 layout on Arch)
           mkdir -p "$APPDIR/usr/lib/qt6/plugins"
-          cp -r /usr/lib/qt6/plugins/{platforms,mediaservice,imageformats} "$APPDIR/usr/lib/qt6/plugins/"
+
+          for dir in platforms multimedia imageformats; do
+            if [ -d "/usr/lib/qt6/plugins/$dir" ]; then
+              echo "Copying Qt6 plugin directory: $dir"
+              cp -r "/usr/lib/qt6/plugins/$dir" "$APPDIR/usr/lib/qt6/plugins/"
+            else
+              echo "Skipping missing plugin dir: $dir"
+            fi
+          done
 
           # Create desktop entry
           mkdir -p "$APPDIR/usr/share/applications"
+
           echo "[Desktop Entry]" > "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Type=Application" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Name=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
@@ -91,9 +115,11 @@ jobs:
           echo "Categories=Network;WebBrowser;" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Terminal=false" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
 
-          # Placeholder icon
+          # Create placeholder icon (prevents AppImage build failure)
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-          convert -size 256x256 xc:none "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
+          convert -size 256x256 xc:none \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
+
       # ----------------------------
       # DOWNLOAD linuxdeployqt
       # ----------------------------
@@ -109,10 +135,12 @@ jobs:
       - name: Create AppImage
         run: |
           export QT_QPA_PLATFORM=xcb
-          ./linuxdeployqt.AppImage ladybird/AppDir/usr/share/applications/Ladybird.desktop -appimage
+          ./linuxdeployqt.AppImage \
+            ladybird/AppDir/usr/share/applications/Ladybird.desktop \
+            -appimage
 
       # ----------------------------
-      # UPLOAD APPIMAGE ARTIFACT
+      # UPLOAD ARTIFACT
       # ----------------------------
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
