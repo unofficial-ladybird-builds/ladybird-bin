@@ -1,4 +1,4 @@
-name: Build Ladybird (AppImage)
+name: Build Ladybird AppImage
 
 on:
   push:
@@ -17,65 +17,64 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: archlinux:latest
+      image: ubuntu:22.04   # IMPORTANT: Required for linuxdeployqt
 
     steps:
       # ----------------------------
       # BASE SYSTEM
       # ----------------------------
-      - name: Initialize Arch Linux
+      - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed \
-            base-devel \
-            git \
-            sudo \
-            ninja \
-            cmake \
-            curl \
-            qt6-base \
-            qt6-tools \
-            qt6-wayland \
-            qt6-multimedia \
-            libgl \
-            ffmpeg \
-            ttf-liberation \
-            nasm \
-            unzip \
-            zip \
-            patchelf \
-            wget \
-            imagemagick
+          apt update
+          DEBIAN_FRONTEND=noninteractive apt install -y \
+            autoconf autoconf-archive automake build-essential \
+            ccache curl fonts-liberation2 git libdrm-dev \
+            libgl1-mesa-dev libtool nasm ninja-build pkg-config \
+            python3-venv qt6-base-dev qt6-tools-dev-tools \
+            qt6-wayland qt6-multimedia-dev \
+            tar unzip zip wget imagemagick
 
       # ----------------------------
-      # BUILDER USER
+      # INSTALL CMAKE 3.30+
       # ----------------------------
-      - name: Create builder user
+      - name: Install modern CMake
         run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor - \
+            | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] \
+            https://apt.kitware.com/ubuntu/ jammy main" \
+            | tee /etc/apt/sources.list.d/kitware.list
+
+          apt update
+          apt install -y cmake
 
       # ----------------------------
-      # FIX WORKSPACE PERMISSIONS
+      # INSTALL RUST
       # ----------------------------
-      - name: Fix workspace ownership
+      - name: Install Rust toolchain
         run: |
-          chown -R builder:builder "$GITHUB_WORKSPACE"
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       # ----------------------------
-      # FETCH AUR PKGBUILD
+      # CLONE LADYBIRD
       # ----------------------------
-      - name: Clone Ladybird AUR repo
+      - name: Clone Ladybird
         run: |
-          sudo -u builder git clone https://aur.archlinux.org/ladybird.git
+          git clone https://github.com/LadybirdBrowser/ladybird.git
+          cd ladybird
+          git submodule update --init --recursive
 
       # ----------------------------
-      # BUILD PACKAGE
+      # BUILD LADYBIRD
       # ----------------------------
-      - name: Build Ladybird from AUR
+      - name: Build Ladybird
         run: |
           cd ladybird
-          sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
+          cmake -B build -S . -GNinja -DCMAKE_BUILD_TYPE=Release
+          ninja -C build
 
       # ----------------------------
       # PREPARE AppDir
@@ -83,29 +82,11 @@ jobs:
       - name: Prepare AppDir
         run: |
           set -e
-
-          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
-          echo "Found binary: $BINARY"
-
           APPDIR=ladybird/AppDir
           mkdir -p "$APPDIR/usr/bin"
-          cp "$BINARY" "$APPDIR/usr/bin/"
+          cp ladybird/build/bin/Ladybird "$APPDIR/usr/bin/"
 
-          # Bundle Qt6 plugins safely (Qt6 layout on Arch)
-          mkdir -p "$APPDIR/usr/lib/qt6/plugins"
-
-          for dir in platforms multimedia imageformats; do
-            if [ -d "/usr/lib/qt6/plugins/$dir" ]; then
-              echo "Copying Qt6 plugin directory: $dir"
-              cp -r "/usr/lib/qt6/plugins/$dir" "$APPDIR/usr/lib/qt6/plugins/"
-            else
-              echo "Skipping missing plugin dir: $dir"
-            fi
-          done
-
-          # Create desktop entry
           mkdir -p "$APPDIR/usr/share/applications"
-
           echo "[Desktop Entry]" > "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Type=Application" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Name=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
@@ -115,7 +96,6 @@ jobs:
           echo "Categories=Network;WebBrowser;" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
           echo "Terminal=false" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
 
-          # Create placeholder icon (prevents AppImage build failure)
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           convert -size 256x256 xc:none \
             "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
@@ -130,12 +110,14 @@ jobs:
           chmod +x linuxdeployqt.AppImage
 
       # ----------------------------
-      # CREATE AppImage
+      # CREATE AppImage (NO FUSE)
       # ----------------------------
       - name: Create AppImage
         run: |
           export QT_QPA_PLATFORM=xcb
-          ./linuxdeployqt.AppImage \
+
+          ./linuxdeployqt.AppImage --appimage-extract
+          ./squashfs-root/AppRun \
             ladybird/AppDir/usr/share/applications/Ladybird.desktop \
             -appimage
 
@@ -145,8 +127,8 @@ jobs:
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-appimage
-          path: "ladybird/AppDir/*.AppImage"
+          name: Ladybird-AppImage
+          path: "*.AppImage"
 
       # ----------------------------
       # RELEASE (TAGS ONLY)
@@ -155,4 +137,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ladybird/AppDir/*.AppImage
+          files: "*.AppImage"
