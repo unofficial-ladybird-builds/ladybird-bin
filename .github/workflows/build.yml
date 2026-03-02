@@ -82,6 +82,17 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       # ----------------------------
+      # INSTALL simdutf
+      # ----------------------------
+      - name: Install simdutf
+        run: |
+          git clone https://github.com/simdutf/simdutf.git
+          cd simdutf
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          cmake --install build
+
+      # ----------------------------
       # CLONE LADYBIRD
       # ----------------------------
       - name: Clone Ladybird
@@ -103,7 +114,8 @@ jobs:
           cmake -B build -S . \
             -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_LINKER=lld-21
+            -DCMAKE_LINKER=lld-21 \
+            -DCMAKE_PREFIX_PATH=/usr/local
 
           ninja -C build
 
