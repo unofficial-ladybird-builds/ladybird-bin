@@ -5,9 +5,9 @@ on:
     branches: ["*"]
   pull_request:
     branches: ["*"]
+  workflow_dispatch:
   schedule:
     - cron: '0 */48 * * *'
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,12 +17,12 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ubuntu:22.04   # REQUIRED for portable AppImage
+      image: ubuntu:22.04   # REQUIRED for portable AppImage (glibc 2.35)
 
     steps:
-      # ----------------------------
+      # --------------------------------------------------
       # BASE DEPENDENCIES
-      # ----------------------------
+      # --------------------------------------------------
       - name: Install base dependencies
         run: |
           apt update
@@ -34,12 +34,12 @@ jobs:
             qt6-wayland qt6-multimedia-dev \
             libpulse-dev \
             tar unzip zip wget imagemagick \
-            software-properties-common gnupg
+            software-properties-common gnupg ca-certificates
 
-      # ----------------------------
-      # INSTALL MODERN CMAKE (3.30+)
-      # ----------------------------
-      - name: Install CMake 3.30+
+      # --------------------------------------------------
+      # CMAKE 3.30+
+      # --------------------------------------------------
+      - name: Install modern CMake
         run: |
           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
             | gpg --dearmor - \
@@ -52,9 +52,9 @@ jobs:
           apt update
           apt install -y cmake
 
-      # ----------------------------
-      # INSTALL LLVM 21 (clang-21)
-      # ----------------------------
+      # --------------------------------------------------
+      # LLVM 21
+      # --------------------------------------------------
       - name: Install LLVM 21
         run: |
           wget -O /usr/share/keyrings/llvm-snapshot.gpg.key \
@@ -66,24 +66,21 @@ jobs:
 
           apt update
           apt install -y \
-            clang-21 \
-            clangd-21 \
-            clang-tools-21 \
-            clang-format-21 \
-            clang-tidy-21 \
+            clang-21 clangd-21 clang-tools-21 \
+            clang-format-21 clang-tidy-21 \
             lld-21
 
-      # ----------------------------
-      # INSTALL RUST
-      # ----------------------------
-      - name: Install Rust toolchain
+      # --------------------------------------------------
+      # RUST
+      # --------------------------------------------------
+      - name: Install Rust
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      # ----------------------------
+      # --------------------------------------------------
       # INSTALL simdutf
-      # ----------------------------
+      # --------------------------------------------------
       - name: Install simdutf
         run: |
           git clone https://github.com/simdutf/simdutf.git
@@ -92,18 +89,29 @@ jobs:
           cmake --build build
           cmake --install build
 
-      # ----------------------------
+      # --------------------------------------------------
+      # INSTALL FastFloat
+      # --------------------------------------------------
+      - name: Install FastFloat
+        run: |
+          git clone https://github.com/fastfloat/fast_float.git
+          cd fast_float
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          cmake --install build
+
+      # --------------------------------------------------
       # CLONE LADYBIRD
-      # ----------------------------
+      # --------------------------------------------------
       - name: Clone Ladybird
         run: |
           git clone https://github.com/LadybirdBrowser/ladybird.git
           cd ladybird
           git submodule update --init --recursive
 
-      # ----------------------------
+      # --------------------------------------------------
       # BUILD LADYBIRD
-      # ----------------------------
+      # --------------------------------------------------
       - name: Build Ladybird
         run: |
           cd ladybird
@@ -119,9 +127,9 @@ jobs:
 
           ninja -C build
 
-      # ----------------------------
+      # --------------------------------------------------
       # PREPARE AppDir
-      # ----------------------------
+      # --------------------------------------------------
       - name: Prepare AppDir
         run: |
           set -e
@@ -131,31 +139,33 @@ jobs:
           cp ladybird/build/bin/Ladybird "$APPDIR/usr/bin/"
 
           mkdir -p "$APPDIR/usr/share/applications"
-          echo "[Desktop Entry]" > "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Type=Application" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Name=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Exec=Ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Icon=ladybird" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Comment=Ladybird web browser" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Categories=Network;WebBrowser;" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
-          echo "Terminal=false" >> "$APPDIR/usr/share/applications/Ladybird.desktop"
+          cat > "$APPDIR/usr/share/applications/Ladybird.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Ladybird
+          Exec=Ladybird
+          Icon=ladybird
+          Comment=Ladybird web browser
+          Categories=Network;WebBrowser;
+          Terminal=false
+          EOF
 
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           convert -size 256x256 xc:none \
             "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
 
-      # ----------------------------
+      # --------------------------------------------------
       # DOWNLOAD linuxdeployqt
-      # ----------------------------
+      # --------------------------------------------------
       - name: Download linuxdeployqt
         run: |
           wget -O linuxdeployqt.AppImage \
             https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
 
-      # ----------------------------
-      # CREATE AppImage (NO FUSE)
-      # ----------------------------
+      # --------------------------------------------------
+      # BUILD AppImage (no FUSE)
+      # --------------------------------------------------
       - name: Create AppImage
         run: |
           export QT_QPA_PLATFORM=xcb
@@ -165,19 +175,19 @@ jobs:
             ladybird/AppDir/usr/share/applications/Ladybird.desktop \
             -appimage
 
-      # ----------------------------
+      # --------------------------------------------------
       # UPLOAD ARTIFACT
-      # ----------------------------
-      - name: Upload AppImage artifact
+      # --------------------------------------------------
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Ladybird-AppImage
           path: "*.AppImage"
 
-      # ----------------------------
-      # RELEASE (TAGS ONLY)
-      # ----------------------------
-      - name: Upload to GitHub Release (on tag)
+      # --------------------------------------------------
+      # RELEASE ON TAG
+      # --------------------------------------------------
+      - name: Release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
