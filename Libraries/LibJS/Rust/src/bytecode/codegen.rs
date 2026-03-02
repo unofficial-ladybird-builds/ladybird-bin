@@ -259,7 +259,7 @@ fn generate_expression_inner(
             op,
             argument,
             prefixed,
-        } => generate_update_expression(generator, *op, argument, *prefixed, preferred_dst),
+        } => generate_update_expression(generator, *op, argument, *prefixed),
 
         // === Assignment ===
         ExpressionKind::Assignment { op, lhs, rhs } => {
@@ -705,15 +705,7 @@ fn generate_member_expression(
         if let Some(key) = computed_key {
             emit_get_by_value_with_this(generator, &dst, &super_base, &key, &this_value);
         } else if let ExpressionKind::Identifier(ident) = &property.inner {
-            let key = generator.intern_property_key(&ident.name);
-            let cache = generator.next_property_lookup_cache();
-            generator.emit(Instruction::GetByIdWithThis {
-                dst: dst.operand(),
-                base: super_base.operand(),
-                property: key,
-                this_value: this_value.operand(),
-                cache_index: cache,
-            });
+            emit_get_by_id_with_this(generator, &dst, &super_base, &ident.name, &this_value);
         }
         return Some(dst);
     }
@@ -832,6 +824,7 @@ fn generate_yield_expression(
     generator.emit_jump_if(&type_is_throw, throw_value_block, return_value_block);
 
     generator.switch_to_basic_block(throw_value_block);
+    generator.perform_needed_unwinds();
     generator.emit(Instruction::Throw {
         src: received_completion_value.operand(),
     });
@@ -1264,6 +1257,7 @@ fn generate_await_with_completions(
     generator.emit_jump_if(&is_normal, normal_block, throw_block);
 
     generator.switch_to_basic_block(throw_block);
+    generator.perform_needed_unwinds();
     generator.emit(Instruction::Throw {
         src: received_completion_value.operand(),
     });
@@ -1588,6 +1582,7 @@ fn generate_yield_from(
         dst: exception.operand(),
         error_string,
     });
+    generator.perform_needed_unwinds();
     generator.emit(Instruction::Throw {
         src: exception.operand(),
     });
@@ -2421,7 +2416,8 @@ fn generate_for_statement(
             has_lexical_environment = true;
             let is_const = *kind == DeclarationKind::Const;
 
-            // begin_variable_scope: CreateLexicalEnvironment
+            // begin_variable_scope: CreateLexicalEnvironment + boundary
+            generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
             generator.push_new_lexical_environment(0);
 
             for (name, _) in &non_local_names {
@@ -2486,6 +2482,7 @@ fn generate_for_statement(
             generator.emit(Instruction::Jump { target: end_block });
             generator.switch_to_basic_block(end_block);
             if has_lexical_environment {
+                generator.end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
                 generator.lexical_environment_register_stack.pop();
                 if !generator.is_current_block_terminated() {
                     let parent = generator.current_lexical_environment();
@@ -2538,6 +2535,7 @@ fn generate_for_statement(
 
     // end_variable_scope: restore parent environment
     if has_lexical_environment {
+        generator.end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
         generator.lexical_environment_register_stack.pop();
         if !generator.is_current_block_terminated() {
             let parent = generator.current_lexical_environment();
@@ -2572,6 +2570,7 @@ fn emit_per_iteration_bindings(generator: &mut Generator, bindings: &[Utf16Strin
     }
 
     // Pop current environment (end_variable_scope).
+    generator.end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
     generator.lexical_environment_register_stack.pop();
     let parent = generator.current_lexical_environment();
     generator.emit(Instruction::SetLexicalEnvironment {
@@ -2579,6 +2578,7 @@ fn emit_per_iteration_bindings(generator: &mut Generator, bindings: &[Utf16Strin
     });
 
     // Push new environment (begin_variable_scope).
+    generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
     generator.push_new_lexical_environment(0);
 
     // Re-create variables and initialize from saved values.
@@ -3163,15 +3163,13 @@ fn generate_call_expression(
                 if let Some(key) = computed_key {
                     emit_get_by_value_with_this(generator, &method, &super_base, &key, &this_value);
                 } else if let ExpressionKind::Identifier(ident) = &property.inner {
-                    let key = generator.intern_property_key(&ident.name);
-                    let cache = generator.next_property_lookup_cache();
-                    generator.emit(Instruction::GetByIdWithThis {
-                        dst: method.operand(),
-                        base: super_base.operand(),
-                        property: key,
-                        this_value: this_value.operand(),
-                        cache_index: cache,
-                    });
+                    emit_get_by_id_with_this(
+                        generator,
+                        &method,
+                        &super_base,
+                        &ident.name,
+                        &this_value,
+                    );
                 }
                 (method, Some(this_value))
             }
@@ -3390,7 +3388,6 @@ fn emit_update_op(
     op: UpdateOp,
     prefixed: bool,
     value: &ScopedOperand,
-    preferred_dst: Option<&ScopedOperand>,
 ) -> ScopedOperand {
     if prefixed {
         match op {
@@ -3403,7 +3400,8 @@ fn emit_update_op(
         }
         value.clone()
     } else {
-        let dst = choose_dst(generator, preferred_dst);
+        // Always allocate a fresh register for the old value, matching C++.
+        let dst = generator.allocate_register();
         match op {
             UpdateOp::Increment => generator.emit(Instruction::PostfixIncrement {
                 dst: dst.operand(),
@@ -3423,14 +3421,13 @@ fn generate_update_expression(
     op: UpdateOp,
     argument: &Expression,
     prefixed: bool,
-    preferred_dst: Option<&ScopedOperand>,
 ) -> Option<ScopedOperand> {
     // Load the value, keeping track of the base for member expressions
     // so we can store back without re-evaluating.
     match &argument.inner {
         ExpressionKind::Identifier(ident) => {
             let value = generate_identifier(ident, generator, None)?;
-            let result = emit_update_op(generator, op, prefixed, &value, preferred_dst);
+            let result = emit_update_op(generator, op, prefixed, &value);
             emit_set_variable(generator, ident, &value);
             Some(result)
         }
@@ -3461,17 +3458,9 @@ fn generate_update_expression(
                 if let Some(ref key) = computed_key {
                     emit_get_by_value_with_this(generator, &value, &base, key, &this_value);
                 } else if let ExpressionKind::Identifier(ident) = &property.inner {
-                    let key = generator.intern_property_key(&ident.name);
-                    let cache = generator.next_property_lookup_cache();
-                    generator.emit(Instruction::GetByIdWithThis {
-                        dst: value.operand(),
-                        base: base.operand(),
-                        property: key,
-                        this_value: this_value.operand(),
-                        cache_index: cache,
-                    });
+                    emit_get_by_id_with_this(generator, &value, &base, &ident.name, &this_value);
                 }
-                let result = emit_update_op(generator, op, prefixed, &value, preferred_dst);
+                let result = emit_update_op(generator, op, prefixed, &value);
                 emit_super_put(
                     generator,
                     &base,
@@ -3495,7 +3484,7 @@ fn generate_update_expression(
                     generator.emit_mov(&saved_property, &property);
                     // FIXME: Remove these manual drop() calls when we no longer need to match C++ register allocation.
                     drop(property);
-                    let result = emit_update_op(generator, op, prefixed, &value, preferred_dst);
+                    let result = emit_update_op(generator, op, prefixed, &value);
                     emit_put_normal_by_value(generator, &base, &saved_property, &value, None);
                     // FIXME: Remove this manual drop() when we no longer need to match C++ register allocation.
                     if !prefixed {
@@ -3506,7 +3495,7 @@ fn generate_update_expression(
                     let value = generator.allocate_register();
                     emit_get_by_id(generator, &value, &base, &property_ident.name, base_id);
                     let key = generator.intern_property_key(&property_ident.name);
-                    let result = emit_update_op(generator, op, prefixed, &value, preferred_dst);
+                    let result = emit_update_op(generator, op, prefixed, &value);
                     let cache2 = generator.next_property_lookup_cache();
                     generator.emit(Instruction::PutNormalById {
                         base: base.operand(),
@@ -3514,6 +3503,21 @@ fn generate_update_expression(
                         src: value.operand(),
                         cache_index: cache2,
                         base_identifier: None,
+                    });
+                    Some(result)
+                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+                    let id = generator.intern_identifier(&priv_ident.name);
+                    let value = generator.allocate_register();
+                    generator.emit(Instruction::GetPrivateById {
+                        dst: value.operand(),
+                        base: base.operand(),
+                        property: id,
+                    });
+                    let result = emit_update_op(generator, op, prefixed, &value);
+                    generator.emit(Instruction::PutPrivateById {
+                        base: base.operand(),
+                        property: id,
+                        src: value.operand(),
                     });
                     Some(result)
                 } else {
@@ -3679,15 +3683,13 @@ fn generate_assignment_expression(
                     if let Some(ref key) = computed_key {
                         emit_get_by_value_with_this(generator, &old_val, &base, key, &super_this);
                     } else if let ExpressionKind::Identifier(ident) = &property.inner {
-                        let key = generator.intern_property_key(&ident.name);
-                        let cache = generator.next_property_lookup_cache();
-                        generator.emit(Instruction::GetByIdWithThis {
-                            dst: old_val.operand(),
-                            base: base.operand(),
-                            property: key,
-                            this_value: super_this.operand(),
-                            cache_index: cache,
-                        });
+                        emit_get_by_id_with_this(
+                            generator,
+                            &old_val,
+                            &base,
+                            &ident.name,
+                            &super_this,
+                        );
                     }
                     let is_logical = matches!(
                         op,
@@ -3903,7 +3905,7 @@ fn generate_assignment_expression(
             Some(generator.add_constant_undefined())
         }
         AssignmentLhs::Pattern(pattern) => {
-            let rhs_val = generate_expression(rhs, generator, preferred_dst)?;
+            let rhs_val = generate_expression(rhs, generator, None)?;
             generate_binding_pattern_bytecode(generator, pattern, BindingMode::Set, &rhs_val);
             Some(rhs_val)
         }
@@ -3949,15 +3951,7 @@ fn emit_super_get(
         emit_get_by_value_with_this(generator, dst, base, &property, this_value);
         Some(property)
     } else if let ExpressionKind::Identifier(ident) = &property.inner {
-        let key = generator.intern_property_key(&ident.name);
-        let cache = generator.next_property_lookup_cache();
-        generator.emit(Instruction::GetByIdWithThis {
-            dst: dst.operand(),
-            base: base.operand(),
-            property: key,
-            this_value: this_value.operand(),
-            cache_index: cache,
-        });
+        emit_get_by_id_with_this(generator, dst, base, &ident.name, this_value);
         None
     } else {
         None
@@ -4026,8 +4020,38 @@ fn emit_get_by_id(
     }
 }
 
-/// Emit a "Invalid left-hand side in assignment" ReferenceError followed by Throw,
-/// then switch to a dead block for subsequent codegen.
+/// Emit a property access by name with a this value, using GetLengthWithThis
+/// for the "length" property.
+fn emit_get_by_id_with_this(
+    generator: &mut Generator,
+    dst: &ScopedOperand,
+    base: &ScopedOperand,
+    property_name: &[u16],
+    this_value: &ScopedOperand,
+) {
+    let key = generator.intern_property_key(property_name);
+    if property_name == utf16!("length") {
+        generator.length_identifier = Some(key);
+        let cache = generator.next_property_lookup_cache();
+        generator.emit(Instruction::GetLengthWithThis {
+            dst: dst.operand(),
+            base: base.operand(),
+            this_value: this_value.operand(),
+            cache_index: cache,
+        });
+    } else {
+        let cache = generator.next_property_lookup_cache();
+        generator.emit(Instruction::GetByIdWithThis {
+            dst: dst.operand(),
+            base: base.operand(),
+            property: key,
+            this_value: this_value.operand(),
+            cache_index: cache,
+        });
+    }
+}
+
+/// Emit a "Invalid left-hand side in assignment" ReferenceError followed by Throw.
 fn emit_invalid_lhs_error(generator: &mut Generator) {
     let exception = generator.allocate_register();
     let error_string = generator.intern_string(utf16!("Invalid left-hand side in assignment"));
@@ -4035,11 +4059,10 @@ fn emit_invalid_lhs_error(generator: &mut Generator) {
         dst: exception.operand(),
         error_string,
     });
+    generator.perform_needed_unwinds();
     generator.emit(Instruction::Throw {
         src: exception.operand(),
     });
-    let dead_block = generator.make_block();
-    generator.switch_to_basic_block(dead_block);
 }
 
 /// Check if a UTF-16 string is a canonical array index (non-negative integer < 2^32 - 1).
@@ -4110,14 +4133,25 @@ fn emit_get_by_value_with_this(
     this_value: &ScopedOperand,
 ) {
     if let Some(key) = generator.try_constant_string_to_property_key(property) {
-        let cache = generator.next_property_lookup_cache();
-        generator.emit(Instruction::GetByIdWithThis {
-            dst: dst.operand(),
-            base: base.operand(),
-            property: key,
-            this_value: this_value.operand(),
-            cache_index: cache,
-        });
+        if generator.property_key_table[key.0 as usize].0 == utf16!("length") {
+            generator.length_identifier = Some(key);
+            let cache = generator.next_property_lookup_cache();
+            generator.emit(Instruction::GetLengthWithThis {
+                dst: dst.operand(),
+                base: base.operand(),
+                this_value: this_value.operand(),
+                cache_index: cache,
+            });
+        } else {
+            let cache = generator.next_property_lookup_cache();
+            generator.emit(Instruction::GetByIdWithThis {
+                dst: dst.operand(),
+                base: base.operand(),
+                property: key,
+                this_value: this_value.operand(),
+                cache_index: cache,
+            });
+        }
         return;
     }
     generator.emit(Instruction::GetByValueWithThis {
@@ -4263,9 +4297,13 @@ fn emit_set_variable(generator: &mut Generator, ident: &Identifier, value: &Scop
             // Emit TDZ check before const assignment error, matching C++ which
             // calls emit_tdz_check_if_needed() in the caller before emit_set_variable().
             let local_index = ident.local_index.get();
-            if generator.is_local_lexically_declared(local_index)
-                && !generator.is_local_initialized(local_index)
-            {
+            let needs_tdz = if ident.local_type.get() == Some(LocalType::Argument) {
+                !generator.is_argument_initialized(local_index)
+            } else {
+                generator.is_local_lexically_declared(local_index)
+                    && !generator.is_local_initialized(local_index)
+            };
+            if needs_tdz {
                 let local = generator.resolve_local(local_index, ident.local_type.get().unwrap());
                 generator.emit(Instruction::ThrowIfTDZ {
                     src: local.operand(),
@@ -4276,26 +4314,32 @@ fn emit_set_variable(generator: &mut Generator, ident: &Identifier, value: &Scop
         }
         let local_index = ident.local_index.get();
         let local = generator.resolve_local(local_index, ident.local_type.get().unwrap());
+        // Match C++ emit_set_variable: skip self-move entirely (no TDZ check needed
+        // either, since the value was already read with a TDZ check at the use site).
+        let is_variable_self_move = ident.local_type.get() == Some(LocalType::Variable)
+            && value.operand().is_local()
+            && value.operand().index() == local_index;
+        if is_variable_self_move {
+            return;
+        }
         // TDZ check: throw ReferenceError if assigning to an uninitialized let/const binding.
-        // Matching C++ AssignmentExpression: check is_lexically_declared && !is_initialized.
-        if generator.is_local_lexically_declared(local_index)
-            && !generator.is_local_initialized(local_index)
-        {
+        // For arguments, check argument initialization tracking.
+        // For variables, check is_lexically_declared && !is_initialized.
+        let needs_tdz = if ident.local_type.get() == Some(LocalType::Argument) {
+            !generator.is_argument_initialized(local_index)
+        } else {
+            generator.is_local_lexically_declared(local_index)
+                && !generator.is_local_initialized(local_index)
+        };
+        if needs_tdz {
             generator.emit(Instruction::ThrowIfTDZ {
                 src: local.operand(),
             });
         }
-        // Match C++ emit_set_variable: only skip self-move for variable locals,
-        // not for arguments.
-        let is_variable_self_move = ident.local_type.get() == Some(LocalType::Variable)
-            && value.operand().is_local()
-            && value.operand().index() == local_index;
-        if !is_variable_self_move {
-            generator.emit(Instruction::Mov {
-                dst: local.operand(),
-                src: value.operand(),
-            });
-        }
+        generator.emit(Instruction::Mov {
+            dst: local.operand(),
+            src: value.operand(),
+        });
     } else if ident.is_global.get() {
         let id = generator.intern_identifier(&ident.name);
         let cache = generator.next_global_variable_cache();
@@ -4372,14 +4416,17 @@ fn emit_delete_reference(generator: &mut Generator, operand: &Expression) -> Sco
             // Deleting a super property is always a ReferenceError.
             if matches!(object.inner, ExpressionKind::Super) {
                 let this_value = emit_resolve_this_binding(generator);
+                // Evaluate computed property for side effects before throwing.
+                // Per spec, property key evaluation precedes ResolveSuperBase.
+                let _computed_key = if *computed {
+                    Some(generate_expression_or_undefined(property, generator, None))
+                } else {
+                    None
+                };
                 let super_base = generator.allocate_register();
                 generator.emit(Instruction::ResolveSuperBase {
                     dst: super_base.operand(),
                 });
-                // Evaluate computed property for side effects before throwing.
-                if *computed {
-                    generate_expression_or_undefined(property, generator, None);
-                }
                 let exception = generator.allocate_register();
                 let error_string =
                     generator.intern_string(utf16!("Can't delete a property on 'super'"));
@@ -4393,7 +4440,7 @@ fn emit_delete_reference(generator: &mut Generator, operand: &Expression) -> Sco
                 });
                 let dead_block = generator.make_block();
                 generator.switch_to_basic_block(dead_block);
-                let _ = this_value;
+                let _ = (this_value, _computed_key);
                 return generator.add_constant_undefined();
             }
             let base = generate_expression_or_undefined(object, generator, None);
@@ -4807,20 +4854,24 @@ fn generate_tagged_template_literal(
             computed,
         } if matches!(object.inner, ExpressionKind::Super) => {
             // super.func`` or super["func"]``
+            // Per spec, evaluation order: ResolveThisBinding, evaluate
+            // computed property, then ResolveSuperBase.
             let this_value = emit_resolve_this_binding(generator);
+            let computed_key = if *computed {
+                Some(generate_expression_or_undefined(property, generator, None))
+            } else {
+                None
+            };
             let super_base = generator.allocate_register();
             generator.emit(Instruction::ResolveSuperBase {
                 dst: super_base.operand(),
             });
             let method = generator.allocate_register();
-            emit_super_get(
-                generator,
-                &method,
-                &super_base,
-                property,
-                *computed,
-                &this_value,
-            );
+            if let Some(key) = computed_key {
+                emit_get_by_value_with_this(generator, &method, &super_base, &key, &this_value);
+            } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                emit_get_by_id_with_this(generator, &method, &super_base, &ident.name, &this_value);
+            }
             (method, Some(this_value))
         }
         ExpressionKind::Member {
@@ -4947,6 +4998,9 @@ fn generate_switch_statement(
     // Block declaration instantiation: create lexical environment for
     // function declarations and let/const across all switch cases.
     let did_create_env = emit_switch_block_declaration_instantiation(generator, data);
+    if did_create_env {
+        generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
+    }
 
     // Create first test block and jump to it (matching C++ structure).
     let first_test_block = generator.make_block();
@@ -5065,6 +5119,7 @@ fn generate_switch_statement(
     generator.switch_to_basic_block(end_block);
 
     if did_create_env {
+        generator.end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
         generator.lexical_environment_register_stack.pop();
         if !generator.is_current_block_terminated() {
             let parent = generator.current_lexical_environment();
@@ -6451,7 +6506,9 @@ fn generate_for_in_statement(
         generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
     }
 
-    generate_with_completion(body, generator, &completion, preferred_dst);
+    if !generator.is_current_block_terminated() {
+        generate_with_completion(body, generator, &completion, preferred_dst);
+    }
 
     if needs_lexical_env {
         generator.end_variable_scope();
@@ -6548,20 +6605,21 @@ fn generate_for_of_statement_inner(
     preferred_dst: Option<&ScopedOperand>,
     is_await: bool,
 ) -> Option<ScopedOperand> {
+    // Match C++ block creation order: create end_block and update_block before
+    // evaluating the RHS expression. This ensures loop blocks get lower block
+    // numbers than any blocks created during RHS evaluation (e.g. conditional
+    // expressions), matching the C++ pipeline's block layout.
+    let end_block = generator.make_block();
+    let update_block = generator.make_block();
+
     // Create TDZ for lexical declarations before evaluating the RHS expression.
     let entered_tdz = enter_for_in_of_head_tdz(generator, lhs);
     let object = generate_expression_or_undefined(rhs, generator, None);
     if entered_tdz {
         leave_for_in_of_head_tdz(generator);
     }
-    let end_block = generator.make_block();
     let needs_lexical_env = for_in_of_needs_lexical_env(lhs);
     let old_handler = generator.current_unwind_handler;
-
-    // NB: Create update_block before exception blocks to match C++ block ordering
-    // (C++ creates loop_end and loop_update in ForOfStatement, then exception blocks
-    // in for_in_of_body_evaluation).
-    let update_block = generator.make_block();
 
     // Get iterator
     let iterator_object = generator.allocate_register();
@@ -6601,6 +6659,7 @@ fn generate_for_of_statement_inner(
         registered_jumps: Vec::new(),
         next_jump_index: FinallyContext::FIRST_JUMP_INDEX,
         lexical_environment_at_entry: lexical_env_at_entry.clone(),
+        saved_unwind_handler: None,
     });
 
     // Break scope wraps the ReturnToFinally so break hits ReturnToFinally first.
@@ -6690,11 +6749,17 @@ fn generate_for_of_statement_inner(
 
     // Body
     generator.begin_continuable_scope(update_block, labels, completion.clone());
+    if needs_lexical_env {
+        generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
+    }
 
-    generate_with_completion(body, generator, &completion, preferred_dst);
+    if !generator.is_current_block_terminated() {
+        generate_with_completion(body, generator, &completion, preferred_dst);
+    }
 
     // Restore lexical env before continuing
     if needs_lexical_env {
+        generator.end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
         generator.lexical_environment_register_stack.pop();
     }
     generator.end_continuable_scope();
@@ -6997,10 +7062,6 @@ fn assign_to_for_in_of_lhs(generator: &mut Generator, lhs: &ForInOfLhs, value: &
                 generator.emit(Instruction::Throw {
                     src: exception.operand(),
                 });
-                // Switch to a dead block so the caller can continue
-                // generating body code (matching C++ emit_store_to_reference).
-                let dead = generator.make_block();
-                generator.switch_to_basic_block(dead);
                 return;
             }
             // The declaration is a VariableDeclaration with a single declarator
@@ -7455,6 +7516,7 @@ fn generate_try_statement(
             registered_jumps: Vec::new(),
             next_jump_index: FinallyContext::FIRST_JUMP_INDEX,
             lexical_environment_at_entry: Some(saved_env.clone()),
+            saved_unwind_handler: None,
         });
 
         // Generate exception preamble block:
@@ -7881,16 +7943,20 @@ pub fn emit_function_declaration_instantiation(
     generator: &mut Generator,
     function_data: &FunctionData,
     body_scope: &ScopeData,
+    var_environment_bindings_count: usize,
 ) {
     let strict = function_data.is_strict_mode || generator.strict;
     let is_arrow = function_data.is_arrow_function;
 
     // --- Compute FDI metadata ---
 
-    // Check for parameter expressions (default values or binding patterns with defaults).
+    // Check for parameter expressions (default values or binding patterns with expressions).
     let has_parameter_expressions = function_data.parameters.iter().any(|p| {
         p.default_value.is_some()
-            || matches!(p.binding, FunctionParameterBinding::BindingPattern(_))
+            || matches!(
+                p.binding,
+                FunctionParameterBinding::BindingPattern(ref pat) if pat.contains_expression()
+            )
     });
 
     // Build parameter_names map and check for duplicates.
@@ -8130,7 +8196,7 @@ pub fn emit_function_declaration_instantiation(
 
             if has_non_local_vars {
                 generator.emit(Instruction::CreateVariableEnvironment {
-                    capacity: u32_from_usize(fsd.non_local_var_count_for_parameter_expressions),
+                    capacity: u32_from_usize(var_environment_bindings_count),
                 });
                 // After CreateVariableEnvironment, re-read the lexical environment
                 // (which was also updated) and push it onto the register stack.

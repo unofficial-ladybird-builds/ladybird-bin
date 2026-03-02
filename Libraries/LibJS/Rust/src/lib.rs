@@ -1990,6 +1990,7 @@ pub unsafe extern "C" fn rust_compile_function(
                     &mut generator,
                     &function_data,
                     &scope.borrow(),
+                    sfd_metadata.var_environment_bindings_count,
                 );
             }
 
@@ -2049,6 +2050,7 @@ struct SfdMetadata {
     uses_this: bool,
     function_environment_needed: bool,
     function_environment_bindings_count: usize,
+    var_environment_bindings_count: usize,
     might_need_arguments: bool,
     contains_eval: bool,
 }
@@ -2121,7 +2123,10 @@ fn compute_sfd_metadata(function_data: &ast::FunctionData) -> SfdMetadata {
     // §10.2.11 step 4: check for parameter expressions.
     let has_parameter_expressions = function_data.parameters.iter().any(|p| {
         p.default_value.is_some()
-            || matches!(p.binding, ast::FunctionParameterBinding::BindingPattern(_))
+            || matches!(
+                p.binding,
+                ast::FunctionParameterBinding::BindingPattern(ref pat) if pat.contains_expression()
+            )
     });
 
     // §10.2.11 steps 5-8: count non-local unique parameter names.
@@ -2231,6 +2236,7 @@ fn compute_sfd_metadata(function_data: &ast::FunctionData) -> SfdMetadata {
         uses_this: bsi.uses_this,
         function_environment_needed,
         function_environment_bindings_count,
+        var_environment_bindings_count,
         might_need_arguments: bsi.might_need_arguments,
         contains_eval: bsi.contains_eval,
     }

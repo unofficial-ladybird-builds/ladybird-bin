@@ -516,7 +516,6 @@
             font-size: 13px;
             color: var(--accent-orange);
             margin-bottom: 6px;
-            word-break: break-all;
         }
 
         .node-class {
@@ -711,7 +710,6 @@
             font-size: 10px;
             color: var(--root-color);
             margin-top: 4px;
-            word-break: break-all;
         }
 
         .no-selection {
@@ -918,6 +916,62 @@
             background: rgba(255, 107, 157, 0.2);
             color: var(--root-color);
             margin-left: 8px;
+        }
+
+        /* Stack trace */
+        .stack-frame-item {
+            display: flex;
+            align-items: baseline;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 1px;
+            gap: 8px;
+        }
+
+        .stack-frame-item.highlighted {
+            background: rgba(0, 212, 255, 0.12);
+            color: var(--accent-cyan-dim);
+            border-left: 3px solid var(--accent-cyan);
+        }
+
+        .stack-frame-index {
+            min-width: 24px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .stack-frame-size {
+            min-width: 32px;
+            text-align: right;
+            flex-shrink: 0;
+            font-size: 10px;
+        }
+
+        .stack-frame-symbol {
+            color: var(--text-primary);
+        }
+
+        .stack-frame-item.highlighted .stack-frame-symbol {
+            color: var(--accent-cyan);
+        }
+
+        .stack-frame-item.inline {
+            color: var(--text-muted);
+        }
+
+        .stack-frame-item.inline.highlighted {
+            color: var(--text-secondary);
+        }
+
+        .stack-frame-item.inline .stack-frame-size {
+            text-align: center;
+        }
+
+        .stack-frame-item.inline .stack-frame-symbol {
+            color: var(--text-secondary);
         }
 
         .root-category-header {
@@ -1163,6 +1217,16 @@
                 </div>
             </div>
 
+            <div class="detail-section" id="stack-trace-section" style="display: none;">
+                <div class="section-header" onclick="toggleSection('stack-trace')">
+                    <div class="section-title">
+                        Stack Trace <span class="section-count" id="stack-trace-count">0</span>
+                    </div>
+                    <span class="section-toggle">&#9660;</span>
+                </div>
+                <div class="section-content collapsed" id="stack-trace-content" style="max-height: 300px;"></div>
+            </div>
+
             <div class="detail-section" id="outgoing-section">
                 <div class="section-header" onclick="toggleSection('outgoing')">
                     <div class="section-title">
@@ -1197,6 +1261,9 @@
     <script>
         // Global state
         let heapData = null;
+        let stackFrames = null;
+        let stackFrameElements = null;
+        let highlightedFrameIndex = undefined;
         let classStats = null;
         let reverseEdges = null;
         let rootNodes = null;
@@ -1212,6 +1279,9 @@
         const mainApp = document.getElementById('main-app');
         const fileInput = document.getElementById('file-input');
         const loading = document.getElementById('loading');
+        const classSearchInput = document.getElementById('class-search');
+        const rootSearchInput = document.getElementById('root-search');
+        let currentFilterButton = document.querySelector('.filter-btn.active');
 
         // File handling
         dropZone.addEventListener('dragover', (e) => {
@@ -1261,6 +1331,10 @@
         }
 
         function processData(data) {
+            // Extract stack_frames before treating data as a node map
+            stackFrames = data.stack_frames || null;
+            delete data.stack_frames;
+
             heapData = data;
 
             // Build reverse edges map
@@ -1307,14 +1381,17 @@
             document.getElementById('stat-edges').textContent = totalEdges.toLocaleString();
             document.getElementById('stat-classes').textContent = Object.keys(classStats).length.toLocaleString();
 
-            // Render class list
+            // Render UI
+            renderStackTrace();
             renderClassList();
             renderRootList();
             setupTabs();
             initGraph();
         }
 
-        function renderClassList(filter = '', sortBy = 'count') {
+        function renderClassList() {
+            const filter = classSearchInput.value;
+            const sortBy = currentFilterButton.dataset.sort;
             const list = document.getElementById('class-list');
             const maxCount = Math.max(...Object.values(classStats).map(s => s.count));
 
@@ -1348,7 +1425,8 @@
             `).join('');
         }
 
-        function renderRootList(filter = '') {
+        function renderRootList() {
+            const filter = rootSearchInput.value;
             const list = document.getElementById('root-list');
 
             // Group roots by type
@@ -1409,31 +1487,22 @@
                 });
             });
 
-            document.getElementById('class-search').addEventListener('input', (e) => {
-                renderClassList(e.target.value, getCurrentSort());
-            });
-
-            document.getElementById('root-search').addEventListener('input', (e) => {
-                renderRootList(e.target.value);
-            });
+            classSearchInput.addEventListener('input', renderClassList);
+            rootSearchInput.addEventListener('input', renderRootList);
 
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    currentFilterButton.classList.remove('active');
                     btn.classList.add('active');
-                    renderClassList(document.getElementById('class-search').value, btn.dataset.sort);
+                    currentFilterButton = btn;
+                    renderClassList();
                 });
             });
         }
 
-        function getCurrentSort() {
-            const active = document.querySelector('.filter-btn.active');
-            return active ? active.dataset.sort : 'count';
-        }
-
         function selectClass(className) {
             selectedClass = className;
-            renderClassList(document.getElementById('class-search').value, getCurrentSort());
+            renderClassList();
             visualizeClass(className);
         }
 
@@ -1620,7 +1689,7 @@
                 <div class="selected-node-info">
                     <div class="node-address">${toHex(addr)}</div>
                     <div class="node-class">${escapeHtml(node.class_name)}</div>
-                    ${node.root ? `<div class="node-root-badge">ROOT: ${escapeHtml(node.root)}</div>` : ''}
+                    ${node.root ? `<div class="node-root-badge">ROOT: ${escapeHtml(rootLabel(node))}</div>` : ''}
                 </div>
             `;
 
@@ -1666,6 +1735,50 @@
                 .classed('highlighted', d => d.source.id === addr || d.target.id === addr);
         }
 
+        function renderStackTrace() {
+            const section = document.getElementById('stack-trace-section');
+            const content = document.getElementById('stack-trace-content');
+            const count = document.getElementById('stack-trace-count');
+
+            if (!stackFrames || stackFrames.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = '';
+            count.textContent = stackFrames.length;
+
+            stackFrameElements = [];
+            for (let i = 0; i < stackFrames.length; i++) {
+                const frame = stackFrames[i];
+                const isInline = frame.size === 0;
+                const el = document.createElement('div');
+                el.className = 'stack-frame-item' + (isInline ? ' inline' : '');
+                el.innerHTML = `<span class="stack-frame-index">${i}</span>`
+                    + `<span class="stack-frame-size">${isInline ? '-' : formatSize(frame.size)}</span>`
+                    + `<span class="stack-frame-symbol">${escapeHtml(insertWordBreaks(frame.label) || '???')}</span>`;
+                content.appendChild(el);
+                stackFrameElements.push(el);
+            }
+        }
+
+        function updateStackTrace(frameIndex) {
+            if (!stackFrameElements) return;
+            if (frameIndex === highlightedFrameIndex) return;
+            if (frameIndex >= stackFrameElements.length) return;
+
+            if (highlightedFrameIndex !== undefined) {
+                stackFrameElements[highlightedFrameIndex].classList.remove('highlighted');
+            }
+
+            highlightedFrameIndex = frameIndex;
+
+            if (frameIndex !== undefined) {
+                stackFrameElements[frameIndex].classList.add('highlighted');
+                stackFrameElements[frameIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        }
+
         function findPathToRoot() {
             if (!selectedNode) return;
 
@@ -1674,8 +1787,13 @@
 
             if (!path) {
                 pathContent.innerHTML = '<div class="no-selection">No path to root found (node may be unreachable)</div>';
+                updateStackTrace(undefined);
                 return;
             }
+
+            // Use the nearest root's stack frame index for the stack trace highlight
+            const rootNode = heapData[path[0]];
+            updateStackTrace(rootNode?.stack_frame_index);
 
             pathContent.innerHTML = path.map((addr, i) => {
                 const node = heapData[addr];
@@ -1687,7 +1805,7 @@
                         <div class="path-node-info">
                             <div class="path-node-class">${escapeHtml(node.class_name)}</div>
                             <div class="path-node-addr">${formatAddress(addr)}</div>
-                            ${node.root ? `<div class="path-root-info">${escapeHtml(node.root)}</div>` : ''}
+                            ${node.root ? `<div class="path-root-info">${escapeHtml(rootLabel(node))}</div>` : ''}
                         </div>
                     </div>
                 `;
@@ -1754,6 +1872,14 @@
         function toggleSection(section) {
             const content = document.getElementById(section + '-content');
             content.classList.toggle('collapsed');
+
+            // When expanding the stack trace, scroll the highlighted frame into view
+            if (section === 'stack-trace') {
+                const highlighted = content.querySelector('.highlighted');
+                if (highlighted) {
+                    highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }
+            }
         }
 
         // Graph controls
@@ -1796,6 +1922,24 @@
         }
 
         // Utility functions
+        const wordBreakRegEx = /(\W)(\w)/g;
+        function insertWordBreaks(text) {
+            return text.replace(wordBreakRegEx, '$1\u200B$2');
+        }
+
+        function rootLabel(node) {
+            const frame = stackFrames?.[node.stack_frame_index];
+            if (frame)
+                return `${node.root} ${frame.label}`;
+            return insertWordBreaks(node.root);
+        }
+
+        function formatSize(bytes) {
+            if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+            if (bytes >= 1024) return (bytes / 1024).toFixed(1) + 'K';
+            return bytes + 'B';
+        }
+
         function toHex(addr) {
             return '0x' + BigInt(addr).toString(16).toUpperCase();
         }
@@ -1836,7 +1980,7 @@
                 // Also select the class to show it in the graph
                 const className = heapData[decimalAddr].class_name;
                 selectedClass = className;
-                renderClassList(document.getElementById('class-search').value, getCurrentSort());
+                renderClassList();
                 visualizeClass(className);
             } else {
                 alert('Address not found in heap dump');
