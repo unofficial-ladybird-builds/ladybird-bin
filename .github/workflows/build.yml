@@ -17,13 +17,13 @@ jobs:
     runs-on: ubuntu-24.04
 
     container:
-      image: ubuntu:22.04   # IMPORTANT: Required for linuxdeployqt
+      image: ubuntu:22.04   # REQUIRED for portable AppImage
 
     steps:
       # ----------------------------
-      # BASE SYSTEM
+      # BASE DEPENDENCIES
       # ----------------------------
-      - name: Install build dependencies
+      - name: Install base dependencies
         run: |
           apt update
           DEBIAN_FRONTEND=noninteractive apt install -y \
@@ -32,12 +32,14 @@ jobs:
             libgl1-mesa-dev libtool nasm ninja-build pkg-config \
             python3-venv qt6-base-dev qt6-tools-dev-tools \
             qt6-wayland qt6-multimedia-dev \
-            tar unzip zip wget imagemagick
+            libpulse-dev \
+            tar unzip zip wget imagemagick \
+            software-properties-common gnupg
 
       # ----------------------------
-      # INSTALL CMAKE 3.30+
+      # INSTALL MODERN CMAKE (3.30+)
       # ----------------------------
-      - name: Install modern CMake
+      - name: Install CMake 3.30+
         run: |
           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
             | gpg --dearmor - \
@@ -45,10 +47,31 @@ jobs:
 
           echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] \
             https://apt.kitware.com/ubuntu/ jammy main" \
-            | tee /etc/apt/sources.list.d/kitware.list
+            > /etc/apt/sources.list.d/kitware.list
 
           apt update
           apt install -y cmake
+
+      # ----------------------------
+      # INSTALL LLVM 21 (clang-21)
+      # ----------------------------
+      - name: Install LLVM 21
+        run: |
+          wget -O /usr/share/keyrings/llvm-snapshot.gpg.key \
+            https://apt.llvm.org/llvm-snapshot.gpg.key
+
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] \
+            https://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
+            > /etc/apt/sources.list.d/llvm.list
+
+          apt update
+          apt install -y \
+            clang-21 \
+            clangd-21 \
+            clang-tools-21 \
+            clang-format-21 \
+            clang-tidy-21 \
+            lld-21
 
       # ----------------------------
       # INSTALL RUST
@@ -73,7 +96,15 @@ jobs:
       - name: Build Ladybird
         run: |
           cd ladybird
-          cmake -B build -S . -GNinja -DCMAKE_BUILD_TYPE=Release
+
+          export CC=clang-21
+          export CXX=clang++-21
+
+          cmake -B build -S . \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LINKER=lld-21
+
           ninja -C build
 
       # ----------------------------
@@ -83,6 +114,7 @@ jobs:
         run: |
           set -e
           APPDIR=ladybird/AppDir
+
           mkdir -p "$APPDIR/usr/bin"
           cp ladybird/build/bin/Ladybird "$APPDIR/usr/bin/"
 
