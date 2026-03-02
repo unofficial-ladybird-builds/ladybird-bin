@@ -34,7 +34,7 @@ jobs:
             qt6-wayland qt6-multimedia-dev \
             libpulse-dev \
             tar unzip zip wget imagemagick \
-            software-properties-common gnupg ca-certificates
+            software-properties-common gnupg ca-certificates libfmt-dev
 
       # --------------------------------------------------
       # CMAKE 3.30+
