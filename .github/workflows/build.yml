@@ -1,4 +1,4 @@
-name: Build Ladybird Portable
+name: Build Ladybird Portable (AUR PKGBUILD)
 
 on:
   push:
@@ -14,51 +14,53 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:latest
 
     steps:
       # ----------------------------
       # BASE SYSTEM
       # ----------------------------
-      - name: Update and install dependencies
+      - name: Initialize Arch Linux
         run: |
-          sudo apt update
-          sudo apt install -y \
-            build-essential \
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel \
             git \
-            ninja-build \
+            sudo \
+            ninja \
             cmake \
             curl \
-            qt6-base-dev \
-            qt6-wayland-dev \
-            qt6-multimedia-dev \
-            libgl1-mesa-dev \
+            qt6-base \
+            qt6-tools \
+            qt6-wayland \
+            qt6-multimedia \
+            libgl \
             ffmpeg \
-            fonts-liberation \
+            ttf-liberation \
             nasm \
             unzip \
             zip \
-            patchelf \
-            imagemagick \
-            wget
+            patchelf
 
       # ----------------------------
       # BUILDER USER
       # ----------------------------
       - name: Create builder user
         run: |
-          sudo useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       # ----------------------------
-      # CLONE LADYBIRD SOURCE (builder home)
+      # FETCH AUR PKGBUILD
       # ----------------------------
-      - name: Clone Ladybird source
+      - name: Clone Ladybird AUR repo
         run: |
           sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
 
       # ----------------------------
-      # BUILD LADYBIRD (builder home)
+      # BUILD PACKAGE
       # ----------------------------
       - name: Build Ladybird from AUR
         run: |
@@ -79,23 +81,38 @@ jobs:
           mkdir -p "$PORTABLE/lib"
           mkdir -p "$PORTABLE/plugins"
 
+          # Copy binary
           cp "$BINARY" "$PORTABLE/bin/"
 
-          # Copy required shared libraries
-          ldd "$BINARY" | awk '{print $3}' | grep '/' | while read lib; do
-            echo "Copying $lib"
-            cp -v "$lib" "$PORTABLE/lib/" || true
+          # Copy all shared libraries needed by binary
+          echo "Copying shared libraries..."
+          ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
+            case "$lib" in
+              */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
+                echo "Skipping core libc: $lib"
+                ;;
+              *)
+                echo "Copying $lib"
+                cp -v --parents "$lib" "$PORTABLE/lib/"
+                ;;
+            esac
           done
 
           # Copy Qt6 plugins
-          if [ -d "/usr/lib/qt6/plugins" ]; then
-            cp -r /usr/lib/qt6/plugins/* "$PORTABLE/plugins/"
-          fi
+          echo "Copying Qt6 plugins..."
+          for dir in platforms multimedia imageformats; do
+            if [ -d "/usr/lib/qt6/plugins/$dir" ]; then
+              mkdir -p "$PORTABLE/plugins/$dir"
+              cp -r /usr/lib/qt6/plugins/$dir/* "$PORTABLE/plugins/$dir/"
+            fi
+          done
 
-          # Patch rpath so binary looks in ./lib
+          # Patch rpath
+          echo "Setting RPATH..."
           patchelf --set-rpath '$ORIGIN/../lib' "$PORTABLE/bin/Ladybird"
 
-          # Create launcher script
+          # Create launcher
+          echo "Creating launcher script..."
           cat > "$PORTABLE/Ladybird.sh" << 'EOF'
           #!/usr/bin/env bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -103,20 +120,24 @@ jobs:
           export QT_PLUGIN_PATH="$DIR/plugins"
           exec "$DIR/bin/Ladybird" "$@"
           EOF
-
           chmod +x "$PORTABLE/Ladybird.sh"
 
-          # Compress portable bundle
-          tar -czf /home/builder/ladybird-linux-x86_64.tar.gz -C /home/builder Ladybird-portable
+      # ----------------------------
+      # ZIP PORTABLE ARTIFACT
+      # ----------------------------
+      - name: Package Ladybird portable zip
+        run: |
+          cd /home/builder
+          zip -r "$GITHUB_WORKSPACE/ladybird-portable-linux.zip" Ladybird-portable
 
       # ----------------------------
-      # UPLOAD PORTABLE ARTIFACT
+      # UPLOAD ARTIFACT
       # ----------------------------
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-linux-x86_64
-          path: /home/builder/ladybird-linux-x86_64.tar.gz
+          name: ladybird-portable-linux
+          path: ladybird-portable-linux.zip
 
       # ----------------------------
       # RELEASE (TAGS ONLY)
@@ -125,4 +146,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: /home/builder/ladybird-linux-x86_64.tar.gz
+          files: ladybird-portable-linux.zip
