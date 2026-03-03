@@ -1,4 +1,4 @@
-name: Build Ladybird Portable (AUR PKGBUILD)
+name: Build Ladybird Portable (Full Qt6 + Plugins)
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: archlinux:latest
 
@@ -53,14 +53,14 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       # ----------------------------
-      # FETCH AUR PKGBUILD
+      # CLONE AUR PKGBUILD
       # ----------------------------
       - name: Clone Ladybird AUR repo
         run: |
           sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
 
       # ----------------------------
-      # BUILD PACKAGE
+      # BUILD LADYBIRD
       # ----------------------------
       - name: Build Ladybird from AUR
         run: |
@@ -68,13 +68,13 @@ jobs:
           sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
       # ----------------------------
-      # CREATE PORTABLE BUNDLE
+      # CREATE FULL PORTABLE BUNDLE
       # ----------------------------
-      - name: Create portable bundle
+      - name: Create portable bundle with full Qt6
         run: |
           set -e
           BINARY=$(find /home/builder/ladybird/pkg -type f -name 'Ladybird')
-          echo "Found binary: $BINARY"
+          echo "Binary found: $BINARY"
 
           PORTABLE=/home/builder/Ladybird-portable
           mkdir -p "$PORTABLE/bin"
@@ -84,8 +84,14 @@ jobs:
           # Copy binary
           cp "$BINARY" "$PORTABLE/bin/"
 
-          # Copy all shared libraries needed by binary
-          echo "Copying shared libraries..."
+          # Copy all Qt6 libraries
+          echo "Copying Qt6 libraries..."
+          for lib in /usr/lib/qt6/*/lib/*.so* /usr/lib/qt6/lib/*.so*; do
+            [ -f "$lib" ] && cp -v --parents "$lib" "$PORTABLE/lib/"
+          done
+
+          # Copy other runtime dependencies
+          echo "Copying other shared libraries..."
           ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
             case "$lib" in
               */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
@@ -100,14 +106,20 @@ jobs:
 
           # Copy Qt6 plugins
           echo "Copying Qt6 plugins..."
-          for dir in platforms multimedia imageformats; do
-            if [ -d "/usr/lib/qt6/plugins/$dir" ]; then
-              mkdir -p "$PORTABLE/plugins/$dir"
-              cp -r /usr/lib/qt6/plugins/$dir/* "$PORTABLE/plugins/$dir/"
+          PLUGIN_DIRS=("platforms" "wayland" "imageformats" "iconengines" "styles" "mediaservice" "audio" "printsupport" "accessible")
+          for dir in "${PLUGIN_DIRS[@]}"; do
+            SRC="/usr/lib/qt6/plugins/$dir"
+            DEST="$PORTABLE/plugins/$dir"
+            if [ -d "$SRC" ]; then
+              mkdir -p "$DEST"
+              cp -r "$SRC"/* "$DEST/"
+              echo "Copied Qt6 plugin directory: $dir"
+            else
+              echo "Plugin directory missing: $dir (skipped)"
             fi
           done
 
-          # Patch rpath
+          # Patch RPATH
           echo "Setting RPATH..."
           patchelf --set-rpath '$ORIGIN/../lib' "$PORTABLE/bin/Ladybird"
 
