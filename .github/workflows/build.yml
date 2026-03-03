@@ -1,4 +1,4 @@
-name: Build Ladybird Portable (Arch AUR)
+name: Build Ladybird Portable (Arch AUR Hardened)
 
 on:
   push:
@@ -14,14 +14,14 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: archlinux:latest
 
     steps:
-      # ----------------------------
+      # -------------------------------------------------
       # BASE SYSTEM
-      # ----------------------------
+      # -------------------------------------------------
       - name: Initialize Arch Linux
         run: |
           pacman -Syu --noconfirm
@@ -44,72 +44,73 @@ jobs:
             zip \
             patchelf
 
-      # ----------------------------
+      # -------------------------------------------------
       # BUILDER USER
-      # ----------------------------
+      # -------------------------------------------------
       - name: Create builder user
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-      # ----------------------------
-      # CLONE AUR PKGBUILD
-      # ----------------------------
-      - name: Clone Ladybird AUR repo
+      # -------------------------------------------------
+      # CLONE AUR
+      # -------------------------------------------------
+      - name: Clone Ladybird AUR
         run: |
           sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
 
-      # ----------------------------
+      # -------------------------------------------------
       # BUILD PACKAGE
-      # ----------------------------
+      # -------------------------------------------------
       - name: Build Ladybird from AUR
         run: |
           cd /home/builder/ladybird
           sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
-      # ----------------------------
+      # -------------------------------------------------
       # CREATE PORTABLE BUNDLE
-      # ----------------------------
+      # -------------------------------------------------
       - name: Create portable bundle
         run: |
           set -e
 
-          BINARY=$(find /home/builder/ladybird/pkg -type f -name 'Ladybird')
-          echo "Binary found: $BINARY"
+          PKG_DIR=$(find /home/builder/ladybird/pkg -type d -name "usr")
+          BIN_SOURCE="$PKG_DIR/bin"
 
           PORTABLE=/home/builder/Ladybird-portable
           mkdir -p "$PORTABLE/bin"
           mkdir -p "$PORTABLE/lib"
           mkdir -p "$PORTABLE/plugins"
 
-          # Copy binary
-          cp "$BINARY" "$PORTABLE/bin/"
+          echo "Copying Ladybird executables..."
+          for file in "$BIN_SOURCE"/*; do
+            if file "$file" | grep -q ELF; then
+              cp "$file" "$PORTABLE/bin/"
+            fi
+          done
 
-          # Copy ALL runtime shared libraries (flat, no --parents)
-          echo "Copying runtime libraries..."
-          ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
+          MAIN_BINARY="$PORTABLE/bin/Ladybird"
+
+          echo "Copying runtime shared libraries..."
+          ldd "$MAIN_BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
             case "$lib" in
               */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
                 echo "Skipping core libc: $lib"
                 ;;
               *)
-                echo "Copying $lib"
                 cp -v "$lib" "$PORTABLE/lib/"
                 ;;
             esac
           done
 
-          # Also copy all Qt6 core libraries explicitly
           echo "Copying Qt6 libraries..."
           for lib in /usr/lib/libQt6*.so*; do
             [ -f "$lib" ] && cp -v "$lib" "$PORTABLE/lib/"
           done
 
-          # Copy Qt6 plugins (all common ones)
           echo "Copying Qt6 plugins..."
           PLUGIN_DIRS=(
             platforms
-            wayland
             imageformats
             iconengines
             styles
@@ -125,46 +126,50 @@ jobs:
             if [ -d "$SRC" ]; then
               mkdir -p "$DEST"
               cp -r "$SRC"/* "$DEST/"
-              echo "Copied plugin directory: $dir"
             fi
           done
 
-          # Patch RPATH so binary prefers bundled libs
-          echo "Setting RPATH..."
-          patchelf --set-rpath '$ORIGIN/../lib' "$PORTABLE/bin/Ladybird"
+          echo "Patching RPATH on all executables..."
+          for bin in "$PORTABLE/bin/"*; do
+            if file "$bin" | grep -q ELF; then
+              patchelf --set-rpath '$ORIGIN/../lib' "$bin"
+            fi
+          done
 
-          # Create launcher script
           echo "Creating launcher..."
           cat > "$PORTABLE/Ladybird.sh" << 'EOF'
           #!/usr/bin/env bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
+
           export LD_LIBRARY_PATH="$DIR/lib"
           export QT_PLUGIN_PATH="$DIR/plugins"
+          export QT_QPA_PLATFORM=xcb
+
           exec "$DIR/bin/Ladybird" "$@"
           EOF
 
           chmod +x "$PORTABLE/Ladybird.sh"
 
-      # ----------------------------
+      # -------------------------------------------------
       # PACKAGE ZIP
-      # ----------------------------
+      # -------------------------------------------------
       - name: Package portable zip
         run: |
           cd /home/builder
           zip -r "$GITHUB_WORKSPACE/ladybird-portable-linux.zip" Ladybird-portable
 
-      # ----------------------------
+      # -------------------------------------------------
       # UPLOAD ARTIFACT
-      # ----------------------------
+      # -------------------------------------------------
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
           name: ladybird-portable-linux
           path: ladybird-portable-linux.zip
 
-      # ----------------------------
+      # -------------------------------------------------
       # RELEASE (TAGS ONLY)
-      # ----------------------------
+      # -------------------------------------------------
       - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
