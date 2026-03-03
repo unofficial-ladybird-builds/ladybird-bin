@@ -1,4 +1,4 @@
-name: Build Ladybird Portable (Full Qt6 + Plugins)
+name: Build Ladybird Portable (Arch AUR)
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     container:
       image: archlinux:latest
 
@@ -60,7 +60,7 @@ jobs:
           sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
 
       # ----------------------------
-      # BUILD LADYBIRD
+      # BUILD PACKAGE
       # ----------------------------
       - name: Build Ladybird from AUR
         run: |
@@ -68,11 +68,12 @@ jobs:
           sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
       # ----------------------------
-      # CREATE FULL PORTABLE BUNDLE
+      # CREATE PORTABLE BUNDLE
       # ----------------------------
-      - name: Create portable bundle with full Qt6
+      - name: Create portable bundle
         run: |
           set -e
+
           BINARY=$(find /home/builder/ladybird/pkg -type f -name 'Ladybird')
           echo "Binary found: $BINARY"
 
@@ -84,14 +85,8 @@ jobs:
           # Copy binary
           cp "$BINARY" "$PORTABLE/bin/"
 
-          # Copy all Qt6 libraries
-          echo "Copying Qt6 libraries..."
-          for lib in /usr/lib/qt6/*/lib/*.so* /usr/lib/qt6/lib/*.so*; do
-            [ -f "$lib" ] && cp -v --parents "$lib" "$PORTABLE/lib/"
-          done
-
-          # Copy other runtime dependencies
-          echo "Copying other shared libraries..."
+          # Copy ALL runtime shared libraries (flat, no --parents)
+          echo "Copying runtime libraries..."
           ldd "$BINARY" | awk '{print $3}' | grep '^/' | while read lib; do
             case "$lib" in
               */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
@@ -99,45 +94,61 @@ jobs:
                 ;;
               *)
                 echo "Copying $lib"
-                cp -v --parents "$lib" "$PORTABLE/lib/"
+                cp -v "$lib" "$PORTABLE/lib/"
                 ;;
             esac
           done
 
-          # Copy Qt6 plugins
+          # Also copy all Qt6 core libraries explicitly
+          echo "Copying Qt6 libraries..."
+          for lib in /usr/lib/libQt6*.so*; do
+            [ -f "$lib" ] && cp -v "$lib" "$PORTABLE/lib/"
+          done
+
+          # Copy Qt6 plugins (all common ones)
           echo "Copying Qt6 plugins..."
-          PLUGIN_DIRS=("platforms" "wayland" "imageformats" "iconengines" "styles" "mediaservice" "audio" "printsupport" "accessible")
+          PLUGIN_DIRS=(
+            platforms
+            wayland
+            imageformats
+            iconengines
+            styles
+            mediaservice
+            audio
+            printsupport
+            accessible
+          )
+
           for dir in "${PLUGIN_DIRS[@]}"; do
             SRC="/usr/lib/qt6/plugins/$dir"
             DEST="$PORTABLE/plugins/$dir"
             if [ -d "$SRC" ]; then
               mkdir -p "$DEST"
               cp -r "$SRC"/* "$DEST/"
-              echo "Copied Qt6 plugin directory: $dir"
-            else
-              echo "Plugin directory missing: $dir (skipped)"
+              echo "Copied plugin directory: $dir"
             fi
           done
 
-          # Patch RPATH
+          # Patch RPATH so binary prefers bundled libs
           echo "Setting RPATH..."
           patchelf --set-rpath '$ORIGIN/../lib' "$PORTABLE/bin/Ladybird"
 
-          # Create launcher
-          echo "Creating launcher script..."
+          # Create launcher script
+          echo "Creating launcher..."
           cat > "$PORTABLE/Ladybird.sh" << 'EOF'
           #!/usr/bin/env bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="$DIR/lib"
           export QT_PLUGIN_PATH="$DIR/plugins"
           exec "$DIR/bin/Ladybird" "$@"
           EOF
+
           chmod +x "$PORTABLE/Ladybird.sh"
 
       # ----------------------------
-      # ZIP PORTABLE ARTIFACT
+      # PACKAGE ZIP
       # ----------------------------
-      - name: Package Ladybird portable zip
+      - name: Package portable zip
         run: |
           cd /home/builder
           zip -r "$GITHUB_WORKSPACE/ladybird-portable-linux.zip" Ladybird-portable
