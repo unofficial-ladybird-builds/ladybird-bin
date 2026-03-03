@@ -1,194 +1,136 @@
-name: Build Ladybird AppImage
+name: Build Ladybird Portable
 
 on:
   push:
     branches: ["*"]
   pull_request:
     branches: ["*"]
-  workflow_dispatch:
   schedule:
     - cron: '0 */48 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-
-    container:
-      image: ubuntu:22.04   # REQUIRED for portable AppImage (glibc 2.35)
+    runs-on: ubuntu-22.04
 
     steps:
-      # --------------------------------------------------
-      # BASE DEPENDENCIES
-      # --------------------------------------------------
-      - name: Install base dependencies
+      # ----------------------------
+      # BASE SYSTEM
+      # ----------------------------
+      - name: Update and install dependencies
         run: |
-          apt update
-          DEBIAN_FRONTEND=noninteractive apt install -y \
-            autoconf autoconf-archive automake build-essential \
-            ccache curl fonts-liberation2 git libdrm-dev \
-            libgl1-mesa-dev libtool nasm ninja-build pkg-config \
-            python3-venv qt6-base-dev qt6-tools-dev-tools \
-            qt6-wayland qt6-multimedia-dev \
-            libpulse-dev \
-            tar unzip zip wget imagemagick \
-            software-properties-common gnupg ca-certificates libfmt-dev
+          sudo apt update
+          sudo apt install -y \
+            build-essential \
+            git \
+            ninja-build \
+            cmake \
+            curl \
+            qt6-base-dev \
+            qt6-wayland-dev \
+            qt6-multimedia-dev \
+            libgl1-mesa-dev \
+            ffmpeg \
+            fonts-liberation \
+            nasm \
+            unzip \
+            zip \
+            patchelf \
+            imagemagick \
+            wget
 
-      # --------------------------------------------------
-      # CMAKE 3.30+
-      # --------------------------------------------------
-      - name: Install modern CMake
+      # ----------------------------
+      # BUILDER USER
+      # ----------------------------
+      - name: Create builder user
         run: |
-          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-            | gpg --dearmor - \
-            | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          sudo useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
 
-          echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] \
-            https://apt.kitware.com/ubuntu/ jammy main" \
-            > /etc/apt/sources.list.d/kitware.list
-
-          apt update
-          apt install -y cmake
-
-      # --------------------------------------------------
-      # LLVM 21
-      # --------------------------------------------------
-      - name: Install LLVM 21
+      # ----------------------------
+      # FIX WORKSPACE PERMISSIONS
+      # ----------------------------
+      - name: Fix workspace ownership
         run: |
-          wget -O /usr/share/keyrings/llvm-snapshot.gpg.key \
-            https://apt.llvm.org/llvm-snapshot.gpg.key
+          sudo chown -R builder:builder "$GITHUB_WORKSPACE"
 
-          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg.key] \
-            https://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
-            > /etc/apt/sources.list.d/llvm.list
-
-          apt update
-          apt install -y \
-            clang-21 clangd-21 clang-tools-21 \
-            clang-format-21 clang-tidy-21 \
-            lld-21
-
-      # --------------------------------------------------
-      # RUST
-      # --------------------------------------------------
-      - name: Install Rust
+      # ----------------------------
+      # CLONE LADYBIRD SOURCE
+      # ----------------------------
+      - name: Clone Ladybird source
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          sudo -u builder git clone https://aur.archlinux.org/ladybird.git
 
-      # --------------------------------------------------
-      # INSTALL simdutf
-      # --------------------------------------------------
-      - name: Install simdutf
-        run: |
-          git clone https://github.com/simdutf/simdutf.git
-          cd simdutf
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
-          cmake --install build
-
-      # --------------------------------------------------
-      # INSTALL FastFloat
-      # --------------------------------------------------
-      - name: Install FastFloat
-        run: |
-          git clone https://github.com/fastfloat/fast_float.git
-          cd fast_float
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
-          cmake --install build
-
-      # --------------------------------------------------
-      # CLONE LADYBIRD
-      # --------------------------------------------------
-      - name: Clone Ladybird
-        run: |
-          git clone https://github.com/LadybirdBrowser/ladybird.git
-          cd ladybird
-          git submodule update --init --recursive
-
-      # --------------------------------------------------
+      # ----------------------------
       # BUILD LADYBIRD
-      # --------------------------------------------------
-      - name: Build Ladybird
+      # ----------------------------
+      - name: Build Ladybird from AUR
         run: |
           cd ladybird
+          sudo -u builder env MAKEFLAGS="-j$(nproc)" makepkg -s --noconfirm
 
-          export CC=clang-21
-          export CXX=clang++-21
-
-          cmake -B build -S . \
-            -GNinja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_LINKER=lld-21 \
-            -DCMAKE_PREFIX_PATH=/usr/local
-
-          ninja -C build
-
-      # --------------------------------------------------
-      # PREPARE AppDir
-      # --------------------------------------------------
-      - name: Prepare AppDir
+      # ----------------------------
+      # CREATE PORTABLE BUNDLE
+      # ----------------------------
+      - name: Create portable bundle
         run: |
           set -e
-          APPDIR=ladybird/AppDir
 
-          mkdir -p "$APPDIR/usr/bin"
-          cp ladybird/build/bin/Ladybird "$APPDIR/usr/bin/"
+          BINARY=$(find ladybird/pkg -type f -name 'Ladybird')
+          echo "Found binary: $BINARY"
 
-          mkdir -p "$APPDIR/usr/share/applications"
-          cat > "$APPDIR/usr/share/applications/Ladybird.desktop" <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=Ladybird
-          Exec=Ladybird
-          Icon=ladybird
-          Comment=Ladybird web browser
-          Categories=Network;WebBrowser;
-          Terminal=false
+          PORTABLE=Ladybird-portable
+          mkdir -p "$PORTABLE/bin"
+          mkdir -p "$PORTABLE/lib"
+          mkdir -p "$PORTABLE/plugins"
+
+          cp "$BINARY" "$PORTABLE/bin/"
+
+          # Copy required shared libraries
+          ldd "$BINARY" | awk '{print $3}' | grep '/' | while read lib; do
+            echo "Copying $lib"
+            cp -v "$lib" "$PORTABLE/lib/" || true
+          done
+
+          # Copy Qt6 plugins
+          if [ -d "/usr/lib/qt6/plugins" ]; then
+            cp -r /usr/lib/qt6/plugins/* "$PORTABLE/plugins/"
+          fi
+
+          # Patch rpath so binary looks in ./lib
+          patchelf --set-rpath '$ORIGIN/../lib' "$PORTABLE/bin/Ladybird"
+
+          # Create launcher
+          cat > "$PORTABLE/Ladybird.sh" << 'EOF'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
+          export QT_PLUGIN_PATH="$DIR/plugins"
+          exec "$DIR/bin/Ladybird" "$@"
           EOF
 
-          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-          convert -size 256x256 xc:none \
-            "$APPDIR/usr/share/icons/hicolor/256x256/apps/ladybird.png" || true
+          chmod +x "$PORTABLE/Ladybird.sh"
 
-      # --------------------------------------------------
-      # DOWNLOAD linuxdeployqt
-      # --------------------------------------------------
-      - name: Download linuxdeployqt
-        run: |
-          wget -O linuxdeployqt.AppImage \
-            https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
-          chmod +x linuxdeployqt.AppImage
+          # Compress the portable bundle
+          tar -czf ladybird-linux-x86_64.tar.gz "$PORTABLE"
 
-      # --------------------------------------------------
-      # BUILD AppImage (no FUSE)
-      # --------------------------------------------------
-      - name: Create AppImage
-        run: |
-          export QT_QPA_PLATFORM=xcb
-
-          ./linuxdeployqt.AppImage --appimage-extract
-          ./squashfs-root/AppRun \
-            ladybird/AppDir/usr/share/applications/Ladybird.desktop \
-            -appimage
-
-      # --------------------------------------------------
-      # UPLOAD ARTIFACT
-      # --------------------------------------------------
-      - name: Upload artifact
+      # ----------------------------
+      # UPLOAD PORTABLE ARTIFACT
+      # ----------------------------
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ladybird-AppImage
-          path: "*.AppImage"
+          name: ladybird-linux-x86_64
+          path: ladybird-linux-x86_64.tar.gz
 
-      # --------------------------------------------------
-      # RELEASE ON TAG
-      # --------------------------------------------------
-      - name: Release (tags only)
+      # ----------------------------
+      # RELEASE (TAGS ONLY)
+      # ----------------------------
+      - name: Upload to GitHub Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: "*.AppImage"
+          files: ladybird-linux-x86_64.tar.gz
