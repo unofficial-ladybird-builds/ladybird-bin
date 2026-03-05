@@ -37,7 +37,7 @@ jobs:
 
       - name: Build Ladybird AppImage
         run: |
-          nix build github:nix-community/nix-environments#ladybird
+          nix build --no-write-lock-file github:nix-community/nix-environments#ladybird
 
       - name: Rename artifact
         run: |
