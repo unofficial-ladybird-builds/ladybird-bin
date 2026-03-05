@@ -19,146 +19,41 @@ jobs:
       image: archlinux:latest
 
     steps:
-      - name: Initialize Arch Linux
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Show system info
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed \
-            base-devel \
-            git \
-            sudo \
-            ninja \
-            cmake \
-            curl \
-            qt6-base \
-            qt6-tools \
-            qt6-wayland \
-            qt6-multimedia \
-            libgl \
-            ffmpeg \
-            ttf-liberation \
-            nasm \
-            unzip \
-            zip \
-            patchelf
+          echo "Runner architecture:"
+          uname -a
+          echo "CPU info:"
+          lscpu
+          echo "Nix version:"
+          nix --version
 
-      - name: Create builder user
+      - name: Build AppImage
         run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          nix build .#ladybird-appimage
 
-      - name: Set CPU compatibility flags
+      - name: Rename artifact
         run: |
-          echo "Setting generic x86-64 compilation flags..."
-          echo 'export CFLAGS="-march=x86-64 -O2"' >> /home/builder/.bashrc
-          echo 'export CXXFLAGS="-march=x86-64 -O2"' >> /home/builder/.bashrc
-          export CFLAGS="-march=x86-64 -O2"
-          export CXXFLAGS="-march=x86-64 -O2"
-          echo "CFLAGS=$CFLAGS"
-          echo "CXXFLAGS=$CXXFLAGS"
-          echo "Compiler target:"
-          gcc -v 2>&1 | grep "Target:"
-          g++ -v 2>&1 | grep "Target:"
+          mkdir dist
+          cp result/bin/Ladybird*.AppImage dist/Ladybird-x86_64.AppImage
 
-      - name: Show runner info
-        run: |
-          echo "=== Runner CPU info ==="
-          lscpu | grep -E 'Architecture|Model name|CPU MHz|Flags'
-          echo "=== Compiler versions ==="
-          gcc --version
-          g++ --version
-
-      - name: Clone Ladybird AUR
-        run: |
-          sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
-
-      - name: Build Ladybird from AUR
-        run: |
-          cd /home/builder/ladybird
-          sudo -u builder env MAKEFLAGS="-j$(nproc)" CFLAGS="-march=x86-64 -O2" CXXFLAGS="-march=x86-64 -O2" makepkg -s --noconfirm
-
-      - name: Create portable bundle
-        run: |
-          set -e
-          PKG_DIR=$(find /home/builder/ladybird/pkg -type d -name "usr")
-          PORTABLE=/home/builder/Ladybird-portable
-          mkdir -p "$PORTABLE/bin" "$PORTABLE/lib" "$PORTABLE/plugins" "$PORTABLE/share/ladybird"
-
-          echo "Copying executables..."
-          cp -r "$PKG_DIR/bin/"* "$PORTABLE/bin/"
-
-          echo "Copying lib and helpers..."
-          if [ -d "$PKG_DIR/lib/ladybird" ]; then
-            mkdir -p "$PORTABLE/lib/ladybird"
-            cp -r "$PKG_DIR/lib/ladybird/"* "$PORTABLE/lib/ladybird/"
-          fi
-
-          echo "Copying resources..."
-          if [ -d "$PKG_DIR/share/ladybird" ]; then
-            cp -r "$PKG_DIR/share/ladybird/"* "$PORTABLE/share/ladybird/"
-          fi
-
-          echo "Copying runtime shared libraries..."
-          find "$PORTABLE" -type f | while read file; do
-            if file "$file" | grep -q ELF; then
-              ldd "$file" | awk '{print $3}' | grep '^/' | while read lib; do
-                case "$lib" in
-                  */ld-linux*|*/libc.so*|*/libm.so*|*/libpthread.so*|*/librt.so*|*/libdl.so*)
-                    ;;
-                  *)
-                    cp -n "$lib" "$PORTABLE/lib/" 2>/dev/null || true
-                    ;;
-                esac
-              done
-            fi
-          done
-
-          echo "Copying Qt6 libraries..."
-          for lib in /usr/lib/libQt6*.so*; do
-            [ -f "$lib" ] && cp -n "$lib" "$PORTABLE/lib/"
-          done
-
-          echo "Copying Qt6 plugins..."
-          for dir in platforms imageformats iconengines styles mediaservice audio printsupport accessible; do
-            SRC="/usr/lib/qt6/plugins/$dir"
-            DEST="$PORTABLE/plugins/$dir"
-            if [ -d "$SRC" ]; then
-              mkdir -p "$DEST"
-              cp -r "$SRC"/* "$DEST/"
-            fi
-          done
-
-          echo "Patching RPATH on all ELF files..."
-          find "$PORTABLE" -type f | while read file; do
-            if file "$file" | grep -q ELF; then
-              patchelf --set-rpath '$ORIGIN/../lib' "$file" || true
-            fi
-          done
-
-      - name: Create launcher
-        run: |
-          PORTABLE=/home/builder/Ladybird-portable
-          echo "#!/usr/bin/env bash" > "$PORTABLE/Ladybird.sh"
-          echo 'DIR="$(cd "$(dirname "$0")" && pwd)"' >> "$PORTABLE/Ladybird.sh"
-          echo 'export LD_LIBRARY_PATH="$DIR/lib"' >> "$PORTABLE/Ladybird.sh"
-          echo 'export QT_PLUGIN_PATH="$DIR/plugins"' >> "$PORTABLE/Ladybird.sh"
-          echo 'export QT_QPA_PLATFORM=xcb' >> "$PORTABLE/Ladybird.sh"
-          echo 'exec "$DIR/bin/Ladybird" "$@"' >> "$PORTABLE/Ladybird.sh"
-          chmod +x "$PORTABLE/Ladybird.sh"
-          echo "Launcher created: $PORTABLE/Ladybird.sh"
-
-      - name: Package portable zip
-        run: |
-          cd /home/builder
-          zip -r "$GITHUB_WORKSPACE/ladybird-portable-linux.zip" Ladybird-portable
-
-      - name: Upload portable artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ladybird-portable-linux
-          path: ladybird-portable-linux.zip
+          name: Ladybird-AppImage
+          path: dist/Ladybird-x86_64.AppImage
 
-      - name: Upload to GitHub Release (on tag)
+      - name: Upload to Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ladybird-portable-linux.zip
+          files: dist/Ladybird-x86_64.AppImage
