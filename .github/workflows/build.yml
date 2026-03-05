@@ -19,14 +19,6 @@ jobs:
       image: archlinux:latest
 
     steps:
-      - name: Show runner info
-        run: |
-          echo "=== Runner CPU info ==="
-          lscpu | grep -E 'Architecture|Model name|CPU MHz|Flags'
-          echo "=== Compiler versions ==="
-          gcc --version
-          g++ --version
-
       - name: Initialize Arch Linux
         run: |
           pacman -Syu --noconfirm
@@ -66,6 +58,14 @@ jobs:
           echo "Compiler target:"
           gcc -v 2>&1 | grep "Target:"
           g++ -v 2>&1 | grep "Target:"
+
+      - name: Show runner info
+        run: |
+          echo "=== Runner CPU info ==="
+          lscpu | grep -E 'Architecture|Model name|CPU MHz|Flags'
+          echo "=== Compiler versions ==="
+          gcc --version
+          g++ --version
 
       - name: Clone Ladybird AUR
         run: |
