@@ -1,4 +1,4 @@
-name: Build Ladybird Portable (Arch AUR Hardened)
+name: Build Ladybird Portable (Nix AppImage)
 
 on:
   push:
@@ -15,16 +15,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    container:
-      image: archlinux:latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Sudo
-        run: |
-          apt install sudo -y
 
       - name: Install Nix
         uses: cachix/install-nix-action@v27
@@ -41,13 +35,13 @@ jobs:
           echo "Nix version:"
           nix --version
 
-      - name: Build AppImage
+      - name: Build Ladybird AppImage
         run: |
           nix build .#ladybird-appimage
 
       - name: Rename artifact
         run: |
-          mkdir dist
+          mkdir -p dist
           cp result/bin/Ladybird*.AppImage dist/Ladybird-x86_64.AppImage
 
       - name: Upload artifact
@@ -61,6 +55,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Ladybird-x86_64.AppImage
-
-
-          
