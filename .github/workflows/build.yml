@@ -22,6 +22,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Sudo
+        run: |
+          apt install sudo -y
+
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
