@@ -57,3 +57,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Ladybird-x86_64.AppImage
+
+
+          
