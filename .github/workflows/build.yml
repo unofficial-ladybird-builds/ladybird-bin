@@ -5,9 +5,9 @@ on:
     branches: ["*"]
   pull_request:
     branches: ["*"]
+  workflow_dispatch:
   schedule:
     - cron: "0 */48 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,7 +37,7 @@ jobs:
 
       - name: Build Ladybird AppImage
         run: |
-          nix build .#ladybird-appimage
+          nix build github:nix-community/nix-environments#ladybird
 
       - name: Rename artifact
         run: |
