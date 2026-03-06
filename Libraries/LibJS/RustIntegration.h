@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/HashTable.h>
+#include <AK/NonnullRefPtr.h>
 #include <AK/Optional.h>
 #include <AK/Result.h>
 #include <AK/Utf16FlyString.h>
@@ -17,9 +18,18 @@
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/FunctionKind.h>
 #include <LibJS/Script.h>
+#include <LibJS/SourceCode.h>
 #include <LibJS/SourceTextModule.h>
 
+// Opaque parsed program handle from the Rust pipeline.
+struct RustParsedProgram;
+
 namespace JS::RustIntegration {
+
+enum class ProgramType : u8 {
+    Script = 0,
+    Module = 1,
+};
 
 // Result type for compile_script().
 // NB: Uses GC::Root to prevent collection while the result is in transit
@@ -69,9 +79,21 @@ struct ModuleResult {
     GC::Root<SharedFunctionInstanceData> tla_shared_data;
 };
 
+// Check if the Rust pipeline is available for off-thread parsing.
+// Returns false when LIBJS_CPP=1 or LIBJS_COMPARE_PIPELINES=1.
+JS_API bool rust_pipeline_available();
+
+// Parse a program (script or module) without GC interaction. Thread-safe.
+// Returns nullptr if Rust is not available.
+JS_API RustParsedProgram* parse_program(u16 const* utf16_data, size_t length_in_code_units, ProgramType type, size_t line_number_offset = 0);
+
+// Compile a previously parsed script. Must be called on the main thread.
+// Consumes and frees the RustParsedProgram.
+// Returns nullopt if Rust is not available.
+Optional<Result<ScriptResult, Vector<ParserError>>> compile_parsed_script(RustParsedProgram* parsed, NonnullRefPtr<SourceCode const> source_code, Realm& realm);
+
 // Compile a script. Returns nullopt if Rust is not available.
-Optional<Result<ScriptResult, Vector<ParserError>>> compile_script(
-    StringView source_text, Realm& realm, StringView filename, size_t line_number_offset);
+Optional<Result<ScriptResult, Vector<ParserError>>> compile_script(StringView source_text, Realm& realm, StringView filename, size_t line_number_offset);
 
 // Compile eval code. Returns nullopt if Rust is not available.
 // On success, the executable's name is set to "eval".
@@ -85,9 +107,13 @@ Optional<Result<EvalResult, String>> compile_eval(
 Optional<Result<EvalResult, String>> compile_shadow_realm_eval(
     PrimitiveString& source_text, VM& vm);
 
+// Compile a previously parsed module. Must be called on the main thread.
+// Consumes and frees the RustParsedProgram.
+// Returns nullopt if Rust is not available.
+Optional<Result<ModuleResult, Vector<ParserError>>> compile_parsed_module(RustParsedProgram* parsed, NonnullRefPtr<SourceCode const> source_code, Realm& realm);
+
 // Compile a module. Returns nullopt if Rust is not available.
-Optional<Result<ModuleResult, Vector<ParserError>>> compile_module(
-    StringView source_text, Realm& realm, StringView filename);
+Optional<Result<ModuleResult, Vector<ParserError>>> compile_module(StringView source_text, Realm& realm, StringView filename);
 
 // Compile a dynamic function (new Function()). Returns nullopt if Rust is not available.
 // On success, returns a SharedFunctionInstanceData with source_text set.

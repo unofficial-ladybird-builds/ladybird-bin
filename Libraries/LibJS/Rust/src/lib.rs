@@ -92,12 +92,32 @@ pub(crate) fn u32_from_usize(value: usize) -> u32 {
 }
 
 use ast::StatementKind;
-use parser::{Parser, ProgramType};
+use parser::{ParseError, Parser, ProgramType};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+
+// =============================================================================
+// ParsedProgram: GC-free parse result for off-thread parsing
+// =============================================================================
+
+/// A parsed program (script or module) that can be compiled later.
+/// Contains no GC references, so it can safely be transferred between threads.
+pub struct ParsedProgram {
+    program: ast::Statement,
+    function_table: ast::FunctionTable,
+    scope_ref: Rc<RefCell<ast::ScopeData>>,
+    is_strict_mode: bool,
+    has_top_level_await: bool,
+    errors: Vec<ParseError>,
+    ast_dump: Option<Vec<u8>>,
+    deferred_regexes: Vec<parser::DeferredRegex>,
+}
+
+// SAFETY: Full ownership transfer between threads, never concurrent access.
+unsafe impl Send for ParsedProgram {}
 
 // =============================================================================
 // Internal helpers
@@ -336,6 +356,12 @@ pub unsafe extern "C" fn rust_compile_program(
 
             let program = parser.parse_program(starts_in_strict_mode);
 
+            // Compile deferred regex literals.
+            let regex_errors = Parser::compile_deferred_regexes(parser.take_deferred_regexes());
+            if !regex_errors.is_empty() {
+                return std::ptr::null_mut();
+            }
+
             if check_errors(&mut parser) {
                 return std::ptr::null_mut();
             }
@@ -362,14 +388,240 @@ pub unsafe extern "C" fn rust_compile_program(
     }
 }
 
+/// Parse a program (script or module) without any GC interaction.
+///
+/// Lexes, parses, and runs scope analysis. The result is a `ParsedProgram`
+/// that can be compiled later via `rust_compile_parsed_script()` or
+/// `rust_compile_parsed_module()`.
+///
+/// `program_type`: 0 = Script, 1 = Module.
+///
+/// Returns nullptr if `source` is null. Otherwise returns a non-null
+/// pointer. Caller must check for errors via
+/// `rust_parsed_program_has_errors()` before compiling.
+///
+/// # Safety
+/// - `source` must point to a valid UTF-16 buffer of `source_len` elements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_parse_program(
+    source: *const u16,
+    source_len: usize,
+    program_type: u8,
+    initial_line_number: usize,
+    dump_ast: bool,
+    use_color: bool,
+) -> *mut ParsedProgram {
+    unsafe {
+        abort_on_panic(|| {
+            let pt = match program_type {
+                0 => ProgramType::Script,
+                1 => ProgramType::Module,
+                _ => ProgramType::Script,
+            };
+
+            let Some(source_slice) = source_from_raw(source, source_len) else {
+                return std::ptr::null_mut();
+            };
+
+            let mut parser = if pt == ProgramType::Script {
+                Parser::new_with_line_offset(source_slice, pt, u32_from_usize(initial_line_number))
+            } else {
+                Parser::new(source_slice, pt)
+            };
+
+            let program = parser.parse_program(false);
+
+            // Collect errors from both parser and scope collector.
+            let mut errors = parser.take_errors();
+            if errors.is_empty() {
+                errors = parser.scope_collector.drain_errors();
+            }
+
+            if errors.is_empty() {
+                parser.scope_collector.analyze(false);
+            }
+
+            // Dump AST if requested (after scope analysis).
+            if dump_ast && errors.is_empty() {
+                ast_dump::dump_program(&program, use_color, &parser.function_table);
+            }
+
+            let (scope_ref, is_strict, has_tla) = if errors.is_empty() {
+                if let StatementKind::Program(ref data) = program.inner {
+                    (
+                        data.scope.clone(),
+                        data.is_strict_mode,
+                        data.has_top_level_await,
+                    )
+                } else {
+                    let scope = Rc::new(RefCell::new(ast::ScopeData::default()));
+                    (scope, false, false)
+                }
+            } else {
+                let scope = Rc::new(RefCell::new(ast::ScopeData::default()));
+                (scope, false, false)
+            };
+
+            let deferred_regexes = parser.take_deferred_regexes();
+
+            let parsed = ParsedProgram {
+                program,
+                function_table: std::mem::take(&mut parser.function_table),
+                scope_ref,
+                is_strict_mode: is_strict,
+                has_top_level_await: has_tla,
+                errors,
+                ast_dump: None,
+                deferred_regexes,
+            };
+
+            Box::into_raw(Box::new(parsed))
+        })
+    }
+}
+
+/// Check whether a ParsedProgram has parse errors.
+///
+/// # Safety
+/// `parsed` must be a valid pointer from `rust_parse_program()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_parsed_program_has_errors(parsed: *const ParsedProgram) -> bool {
+    unsafe { !(*parsed).errors.is_empty() }
+}
+
+/// Report parse errors from a ParsedProgram via callback, then clear them.
+///
+/// Calls `error_callback` for each error with the same signature as
+/// `RustParseErrorCallback`.
+///
+/// # Safety
+/// - `parsed` must be a valid pointer from `rust_parse_program()`.
+/// - `error_callback` must be a valid function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_parsed_program_take_errors(
+    parsed: *mut ParsedProgram,
+    error_context: *mut c_void,
+    error_callback: ParseErrorCallback,
+) {
+    unsafe {
+        let parsed = &mut *parsed;
+        for err in parsed.errors.drain(..) {
+            let msg = err.message.as_bytes();
+            error_callback(error_context, msg.as_ptr(), msg.len(), err.line, err.column);
+        }
+    }
+}
+
+/// Compile deferred regex literals in a ParsedProgram.
+///
+/// Must be called on the main thread (LibRegex is not thread-safe).
+/// Any regex compilation errors are added to the ParsedProgram's error list,
+/// so the caller should check `rust_parsed_program_has_errors()` afterwards.
+///
+/// # Safety
+/// `parsed` must be a valid pointer from `rust_parse_program()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_parsed_program_compile_regexes(parsed: *mut ParsedProgram) {
+    unsafe {
+        let parsed = &mut *parsed;
+        let deferred = std::mem::take(&mut parsed.deferred_regexes);
+        parsed
+            .errors
+            .extend(Parser::compile_deferred_regexes(deferred));
+    }
+}
+
+/// Free a ParsedProgram without compiling it.
+///
+/// # Safety
+/// `parsed` must be a valid pointer from `rust_parse_program()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_free_parsed_program(parsed: *mut ParsedProgram) {
+    unsafe {
+        drop(Box::from_raw(parsed));
+    }
+}
+
+/// Get the AST dump string from a ParsedProgram.
+///
+/// Generates the dump on first call and caches it. Writes the pointer
+/// and length to the provided out-parameters. The string is owned by
+/// the ParsedProgram and freed when it is freed or compiled.
+///
+/// # Safety
+/// - `parsed` must be a valid pointer from `rust_parse_program()` with no errors.
+/// - `output_ptr` and `output_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_parsed_program_ast_dump(
+    parsed: *mut ParsedProgram,
+    output_ptr: *mut *const u8,
+    output_len: *mut usize,
+) {
+    unsafe {
+        let parsed = &mut *parsed;
+        let dump = parsed.ast_dump.get_or_insert_with(|| {
+            ast_dump::dump_program_to_string(&parsed.program, &parsed.function_table).into_bytes()
+        });
+        *output_ptr = dump.as_ptr();
+        *output_len = dump.len();
+    }
+}
+
+/// Compile a previously parsed script. Consumes and frees the ParsedProgram.
+///
+/// Performs codegen and GDI extraction. Requires VM and GC access.
+///
+/// Returns the `Executable*` as `void*`, or nullptr on failure.
+///
+/// # Safety
+/// - `parsed` must be a valid pointer from `rust_parse_program()` with no errors.
+/// - `vm_ptr` must be a valid `JS::VM*`.
+/// - `source_code_ptr` must be a valid `JS::SourceCode const*`.
+/// - `gdi_context` must be a valid pointer to a C++ ScriptGdiBuilder.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_compile_parsed_script(
+    parsed: *mut ParsedProgram,
+    vm_ptr: *mut c_void,
+    source_code_ptr: *const c_void,
+    gdi_context: *mut c_void,
+    source_len: usize,
+) -> *mut c_void {
+    unsafe {
+        abort_on_panic(|| {
+            let mut parsed = Box::from_raw(parsed);
+
+            let mut generator =
+                new_program_generator(parsed.is_strict_mode, vm_ptr, source_code_ptr, source_len);
+            generator.function_table = std::mem::take(&mut parsed.function_table);
+            let exec_ptr = compile_program_body(
+                &mut generator,
+                &parsed.program,
+                &parsed.scope_ref,
+                vm_ptr,
+                source_code_ptr,
+            );
+            if exec_ptr.is_null() {
+                return std::ptr::null_mut();
+            }
+
+            extract_script_gdi(
+                &parsed.scope_ref.borrow(),
+                parsed.is_strict_mode,
+                vm_ptr,
+                source_code_ptr,
+                gdi_context,
+                &mut generator.function_table,
+            );
+
+            exec_ptr
+        })
+    }
+}
+
 /// Compile a script and extract GDI (GlobalDeclarationInstantiation) metadata.
 ///
-/// This is the path for scripts. It:
-/// 1. Parses the program
-/// 2. Runs scope analysis
-/// 3. Generates bytecode → creates Executable
-/// 4. Extracts GDI metadata from the program AST
-/// 5. Populates the C++ ScriptGdiBuilder via callbacks
+/// This is the combined parse+compile path for scripts. Internally calls
+/// `rust_parse_program()` + `rust_compile_parsed_script()`.
 ///
 /// Returns the `Executable*` as `void*`, or nullptr on failure.
 ///
@@ -395,65 +647,38 @@ pub unsafe extern "C" fn rust_compile_script(
 ) -> *mut c_void {
     unsafe {
         abort_on_panic(|| {
-            let Some(source_slice) = source_from_raw(source, source_len) else {
-                return std::ptr::null_mut();
-            };
-            let mut parser = Parser::new_with_line_offset(
-                source_slice,
-                ProgramType::Script,
-                u32_from_usize(initial_line_number),
+            let parsed = rust_parse_program(
+                source,
+                source_len,
+                0,
+                initial_line_number,
+                dump_ast,
+                use_color,
             );
 
-            let program = parser.parse_program(false);
-
-            if check_errors_with_callback(&mut parser, error_context, error_callback) {
+            if parsed.is_null() {
                 return std::ptr::null_mut();
             }
 
-            parser.scope_collector.analyze(false);
+            // Compile deferred regex literals before checking for errors.
+            rust_parsed_program_compile_regexes(parsed);
 
-            // Dump AST if requested (after scope analysis so identifier metadata is populated).
-            if dump_ast {
-                ast_dump::dump_program(&program, use_color, &parser.function_table);
+            if rust_parsed_program_has_errors(parsed) {
+                if let Some(cb) = error_callback {
+                    rust_parsed_program_take_errors(parsed, error_context, cb);
+                }
+                rust_free_parsed_program(parsed);
+                return std::ptr::null_mut();
             }
 
             write_ast_dump_output(
-                &program,
-                &parser.function_table,
+                &(*parsed).program,
+                &(*parsed).function_table,
                 ast_dump_output,
                 ast_dump_output_len,
             );
 
-            let (scope_ref, is_strict) = if let StatementKind::Program(ref data) = program.inner {
-                (data.scope.clone(), data.is_strict_mode)
-            } else {
-                return std::ptr::null_mut();
-            };
-
-            let mut generator =
-                new_program_generator(is_strict, vm_ptr, source_code_ptr, source_len);
-            generator.function_table = std::mem::take(&mut parser.function_table);
-            let exec_ptr = compile_program_body(
-                &mut generator,
-                &program,
-                &scope_ref,
-                vm_ptr,
-                source_code_ptr,
-            );
-            if exec_ptr.is_null() {
-                return std::ptr::null_mut();
-            }
-
-            extract_script_gdi(
-                &scope_ref.borrow(),
-                is_strict,
-                vm_ptr,
-                source_code_ptr,
-                gdi_context,
-                &mut generator.function_table,
-            );
-
-            exec_ptr
+            rust_compile_parsed_script(parsed, vm_ptr, source_code_ptr, gdi_context, source_len)
         })
     }
 }
@@ -504,6 +729,18 @@ pub unsafe extern "C" fn rust_compile_eval(
             parser.flags.in_class_field_initializer = in_class_field_initializer;
 
             let program = parser.parse_program(starts_in_strict_mode);
+
+            // Compile deferred regex literals.
+            let regex_errors = Parser::compile_deferred_regexes(parser.take_deferred_regexes());
+            if !regex_errors.is_empty() {
+                if let Some(cb) = error_callback {
+                    for err in &regex_errors {
+                        let msg = err.message.as_bytes();
+                        cb(error_context, msg.as_ptr(), msg.len(), err.line, err.column);
+                    }
+                }
+                return std::ptr::null_mut();
+            }
 
             if check_errors_with_callback(&mut parser, error_context, error_callback) {
                 return std::ptr::null_mut();
@@ -689,6 +926,18 @@ pub unsafe extern "C" fn rust_compile_dynamic_function(
             let mut parser = Parser::new(full_slice, ProgramType::Script);
             let program = parser.parse_program(false);
 
+            // Compile deferred regex literals.
+            let regex_errors = Parser::compile_deferred_regexes(parser.take_deferred_regexes());
+            if !regex_errors.is_empty() {
+                if let Some(cb) = error_callback {
+                    for err in &regex_errors {
+                        let msg = err.message.as_bytes();
+                        cb(error_context, msg.as_ptr(), msg.len(), err.line, err.column);
+                    }
+                }
+                return std::ptr::null_mut();
+            }
+
             if check_errors_with_callback(&mut parser, error_context, error_callback) {
                 return std::ptr::null_mut();
             }
@@ -801,6 +1050,16 @@ pub unsafe extern "C" fn rust_compile_builtin_file(
             let mut parser = Parser::new(source_slice, ProgramType::Script);
             let program = parser.parse_program(true); // strict mode
 
+            // Compile deferred regex literals.
+            let regex_errors = Parser::compile_deferred_regexes(parser.take_deferred_regexes());
+            if !regex_errors.is_empty() {
+                let errors: Vec<String> = regex_errors
+                    .iter()
+                    .map(|e| format!("{}:{}: {}", e.line, e.column, e.message))
+                    .collect();
+                panic!("Regex errors in builtin file: {}", errors.join("; "));
+            }
+
             if parser.has_errors() {
                 let errors: Vec<String> = parser
                     .errors()
@@ -855,6 +1114,92 @@ pub unsafe extern "C" fn rust_compile_builtin_file(
                 }
             }
         });
+    }
+}
+
+// =============================================================================
+// Module compilation
+// =============================================================================
+
+/// Compile a previously parsed module. Consumes and frees the ParsedProgram.
+///
+/// Extracts import/export metadata, compiles the module body to bytecode,
+/// and extracts declaration data needed for initialize_environment().
+///
+/// Returns `Executable*` for non-TLA modules (tla_executable_out is null),
+/// or nullptr for TLA modules (tla_executable_out is set to the async wrapper).
+///
+/// # Safety
+/// - `parsed` must be a valid pointer from `rust_parse_program()` with no errors.
+/// - `vm_ptr` must be a valid `JS::VM*`.
+/// - `source_code_ptr` must be a valid `JS::SourceCode const*`.
+/// - `module_context` must be a valid `ModuleBuilder*`.
+/// - `callbacks` must point to a valid `ModuleCallbacks`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_compile_parsed_module(
+    parsed: *mut ParsedProgram,
+    vm_ptr: *mut c_void,
+    source_code_ptr: *const c_void,
+    module_context: *mut c_void,
+    callbacks: *const ModuleCallbacks,
+    tla_executable_out: *mut *mut c_void,
+    source_len: usize,
+) -> *mut c_void {
+    unsafe {
+        abort_on_panic(|| {
+            let mut parsed = Box::from_raw(parsed);
+            let cb = &*callbacks;
+
+            // 1. Report has_top_level_await.
+            (cb.set_has_top_level_await)(module_context, parsed.has_top_level_await);
+
+            // 2. Process imports and exports.
+            extract_module_metadata(&parsed.scope_ref.borrow(), module_context, cb);
+
+            // 3. Extract var declared names and lexical bindings.
+            extract_module_declarations(
+                &parsed.scope_ref.borrow(),
+                vm_ptr,
+                source_code_ptr,
+                module_context,
+                cb,
+                &mut parsed.function_table,
+            );
+
+            // 4. Compute requested modules (sorted by source offset).
+            extract_requested_modules(&parsed.scope_ref.borrow(), module_context, cb);
+
+            // 5. Compile module body.
+            if parsed.has_top_level_await {
+                let exec_ptr = compile_module_as_async(
+                    &parsed.program,
+                    &parsed.scope_ref,
+                    vm_ptr,
+                    source_code_ptr,
+                    std::ptr::null(),
+                    source_len,
+                    std::mem::take(&mut parsed.function_table),
+                );
+                if !tla_executable_out.is_null() {
+                    *tla_executable_out = exec_ptr;
+                }
+                std::ptr::null_mut()
+            } else {
+                if !tla_executable_out.is_null() {
+                    *tla_executable_out = std::ptr::null_mut();
+                }
+                let mut generator =
+                    new_program_generator(true, vm_ptr, source_code_ptr, source_len);
+                generator.function_table = std::mem::take(&mut parsed.function_table);
+                compile_program_body(
+                    &mut generator,
+                    &parsed.program,
+                    &parsed.scope_ref,
+                    vm_ptr,
+                    source_code_ptr,
+                )
+            }
+        })
     }
 }
 
@@ -994,9 +1339,8 @@ unsafe fn call_export_callback(
 
 /// Compile an ES module using the parser and bytecode generator.
 ///
-/// Parses the source as a module, extracts import/export metadata,
-/// compiles the module body to bytecode, and extracts declaration data
-/// needed for initialize_environment().
+/// This is the combined parse+compile path for modules. Internally calls
+/// `rust_parse_program()` + `rust_compile_parsed_module()`.
 ///
 /// Returns `Executable*` for non-TLA modules (tla_executable_out is null),
 /// or nullptr for TLA modules (tla_executable_out is set to the async wrapper executable).
@@ -1025,96 +1369,39 @@ pub unsafe extern "C" fn rust_compile_module(
 ) -> *mut c_void {
     unsafe {
         abort_on_panic(|| {
-            let Some(source_slice) = source_from_raw(source, source_len) else {
-                return std::ptr::null_mut();
-            };
+            let parsed = rust_parse_program(source, source_len, 1, 0, dump_ast, use_color);
 
-            let cb = &*callbacks;
-
-            // 1. Parse as module.
-            let mut parser = Parser::new(source_slice, ProgramType::Module);
-            let program = parser.parse_program(false);
-
-            if check_errors_with_callback(&mut parser, error_context, error_callback) {
+            if parsed.is_null() {
                 return std::ptr::null_mut();
             }
 
-            parser.scope_collector.analyze(false);
+            // Compile deferred regex literals before checking for errors.
+            rust_parsed_program_compile_regexes(parsed);
 
-            // Dump AST if requested (after scope analysis so identifier metadata is populated).
-            if dump_ast {
-                ast_dump::dump_program(&program, use_color, &parser.function_table);
+            if rust_parsed_program_has_errors(parsed) {
+                if let Some(cb) = error_callback {
+                    rust_parsed_program_take_errors(parsed, error_context, cb);
+                }
+                rust_free_parsed_program(parsed);
+                return std::ptr::null_mut();
             }
 
             write_ast_dump_output(
-                &program,
-                &parser.function_table,
+                &(*parsed).program,
+                &(*parsed).function_table,
                 ast_dump_output,
                 ast_dump_output_len,
             );
 
-            let program_data = if let StatementKind::Program(ref data) = program.inner {
-                data
-            } else {
-                return std::ptr::null_mut();
-            };
-
-            let scope_ref = program_data.scope.clone();
-            let has_top_level_await = program_data.has_top_level_await;
-
-            let mut function_table = std::mem::take(&mut parser.function_table);
-
-            // 2. Report has_top_level_await.
-            (cb.set_has_top_level_await)(module_context, has_top_level_await);
-
-            // 3. Process imports and exports.
-            extract_module_metadata(&scope_ref.borrow(), module_context, cb);
-
-            // 4. Extract var declared names and lexical bindings.
-            extract_module_declarations(
-                &scope_ref.borrow(),
+            rust_compile_parsed_module(
+                parsed,
                 vm_ptr,
                 source_code_ptr,
                 module_context,
-                cb,
-                &mut function_table,
-            );
-
-            // 5. Compute requested modules (sorted by source offset).
-            extract_requested_modules(&scope_ref.borrow(), module_context, cb);
-
-            // 6. Compile module body.
-            if has_top_level_await {
-                // Compile as an async wrapper function.
-                let exec_ptr = compile_module_as_async(
-                    &program,
-                    &scope_ref,
-                    vm_ptr,
-                    source_code_ptr,
-                    source,
-                    source_len,
-                    function_table,
-                );
-                if !tla_executable_out.is_null() {
-                    *tla_executable_out = exec_ptr;
-                }
-                std::ptr::null_mut()
-            } else {
-                // Compile as a regular program.
-                if !tla_executable_out.is_null() {
-                    *tla_executable_out = std::ptr::null_mut();
-                }
-                let mut generator =
-                    new_program_generator(true, vm_ptr, source_code_ptr, source_len);
-                generator.function_table = function_table;
-                compile_program_body(
-                    &mut generator,
-                    &program,
-                    &scope_ref,
-                    vm_ptr,
-                    source_code_ptr,
-                )
-            }
+                callbacks,
+                tla_executable_out,
+                source_len,
+            )
         })
     }
 }

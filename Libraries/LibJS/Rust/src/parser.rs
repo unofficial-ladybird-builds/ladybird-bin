@@ -37,8 +37,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ast::{
-    BindingPattern, Expression, ExpressionKind, FunctionParameter, FunctionTable, Identifier,
-    PrivateIdentifier, ProgramData, ScopeData, SourceRange, Statement, StatementKind, Utf16String,
+    BindingPattern, CompiledRegex, Expression, ExpressionKind, FunctionParameter, FunctionTable,
+    Identifier, PrivateIdentifier, ProgramData, ScopeData, SourceRange, Statement, StatementKind,
+    Utf16String,
 };
 use crate::lexer::{Lexer, ch};
 use crate::scope_collector::{ScopeCollector, ScopeCollectorState};
@@ -173,7 +174,7 @@ impl ForbiddenTokens {
     }
 }
 
-pub struct ParserError {
+pub struct ParseError {
     pub message: String,
     pub line: u32,
     pub column: u32,
@@ -202,12 +203,22 @@ pub(crate) struct ParserFlags {
     pub in_property_key_context: bool,
 }
 
+/// A regex literal whose compilation is deferred until after parsing.
+pub struct DeferredRegex {
+    pub compiled_regex: Rc<CompiledRegex>,
+    pub pattern: Vec<u16>,
+    pub flags: Vec<u16>,
+    pub line: u32,
+    pub column: u32,
+}
+
 /// Snapshot of parser state for speculative parsing (backtracking).
 struct SavedState {
     token: Token,
     errors_len: usize,
     flags: ParserFlags,
     scope_collector_state: ScopeCollectorState,
+    deferred_regexes_len: usize,
 }
 
 /// The main JavaScript parser.
@@ -218,7 +229,7 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     /// `consume()` returns this and advances to the next token.
     current_token: Token,
-    errors: Vec<ParserError>,
+    errors: Vec<ParseError>,
     saved_states: Vec<SavedState>,
     program_type: ProgramType,
     /// UTF-16 source text.
@@ -290,6 +301,9 @@ pub struct Parser<'a> {
     /// `(a=(b=(c=0)))` where each failed arrow attempt would otherwise
     /// re-attempt inner positions during grouping expression re-parse.
     arrow_function_failed_positions: HashSet<usize>,
+
+    /// Regex literals whose compilation is deferred until after parsing.
+    deferred_regexes: Vec<DeferredRegex>,
 }
 
 impl<'a> Parser<'a> {
@@ -336,6 +350,7 @@ impl<'a> Parser<'a> {
             exported_names: HashSet::new(),
             function_table: FunctionTable::new(),
             arrow_function_failed_positions: HashSet::new(),
+            deferred_regexes: Vec::new(),
         }
     }
 
@@ -597,7 +612,7 @@ impl<'a> Parser<'a> {
     // === Error reporting ===
 
     pub(crate) fn syntax_error(&mut self, message: &str) {
-        self.errors.push(ParserError {
+        self.errors.push(ParseError {
             message: message.to_string(),
             line: self.current_token.line_number,
             column: self.current_token.line_column,
@@ -605,7 +620,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn syntax_error_at(&mut self, message: &str, line: u32, column: u32) {
-        self.errors.push(ParserError {
+        self.errors.push(ParseError {
             message: message.to_string(),
             line,
             column,
@@ -661,20 +676,28 @@ impl<'a> Parser<'a> {
         self.syntax_error(&msg);
     }
 
-    /// Compile a regex pattern+flags and return the opaque compiled handle.
-    /// On error, reports a syntax error and returns null.
-    pub(crate) fn compile_regex_pattern(
-        &mut self,
-        pattern: &[u16],
-        flags: &[u16],
-    ) -> *mut std::ffi::c_void {
-        match crate::bytecode::ffi::compile_regex(pattern, flags) {
-            Ok(handle) => handle,
-            Err(msg) => {
-                self.syntax_error(&msg);
-                std::ptr::null_mut()
+    /// Take the deferred regex literals collected during parsing.
+    /// The caller is responsible for compiling them (on the main thread).
+    pub(crate) fn take_deferred_regexes(&mut self) -> Vec<DeferredRegex> {
+        std::mem::take(&mut self.deferred_regexes)
+    }
+
+    /// Batch-compile deferred regex literals. On error, returns the errors.
+    pub(crate) fn compile_deferred_regexes(deferred: Vec<DeferredRegex>) -> Vec<ParseError> {
+        let mut errors = Vec::new();
+        for d in deferred {
+            match crate::bytecode::ffi::compile_regex(&d.pattern, &d.flags) {
+                Ok(handle) => d.compiled_regex.set(handle),
+                Err(msg) => {
+                    errors.push(ParseError {
+                        message: msg,
+                        line: d.line,
+                        column: d.column,
+                    });
+                }
             }
         }
+        errors
     }
 
     pub(crate) fn validate_regex_flags(&mut self, flags: &[u16]) {
@@ -712,8 +735,12 @@ impl<'a> Parser<'a> {
         !self.errors.is_empty()
     }
 
-    pub fn errors(&self) -> &[ParserError] {
+    pub fn errors(&self) -> &[ParseError] {
         &self.errors
+    }
+
+    pub fn take_errors(&mut self) -> Vec<ParseError> {
+        std::mem::take(&mut self.errors)
     }
 
     pub fn error_messages(&self) -> Vec<String> {
@@ -732,6 +759,7 @@ impl<'a> Parser<'a> {
             errors_len: self.errors.len(),
             flags: self.flags,
             scope_collector_state: self.scope_collector.save_state(),
+            deferred_regexes_len: self.deferred_regexes.len(),
         });
     }
 
@@ -739,6 +767,7 @@ impl<'a> Parser<'a> {
         let state = self.saved_states.pop().expect("No saved state to restore");
         self.current_token = state.token;
         self.errors.truncate(state.errors_len);
+        self.deferred_regexes.truncate(state.deferred_regexes_len);
         self.flags = state.flags;
         self.scope_collector.load_state(state.scope_collector_state);
         self.lexer.load_state();
