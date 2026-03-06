@@ -1,0 +1,9 @@
+Harness status: OK
+
+Found 4 tests
+
+4 Pass
+Pass	indexedDB.delete called from upgradeneeded handler
+Pass	Abort transaction before deleting database in upgradeneeded handler
+Pass	Abort transaction after deleting database in upgradeneeded event handler
+Pass	transaction oncomplete ordering relative to open request onsuccess

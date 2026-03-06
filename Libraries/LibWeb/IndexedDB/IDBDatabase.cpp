@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/AnyOf.h>
 #include <LibWeb/Bindings/IDBDatabasePrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Crypto/Crypto.h>
@@ -11,13 +12,10 @@
 #include <LibWeb/IndexedDB/IDBDatabase.h>
 #include <LibWeb/IndexedDB/IDBObjectStore.h>
 #include <LibWeb/IndexedDB/Internal/Algorithms.h>
-#include <LibWeb/IndexedDB/Internal/IDBDatabaseObserver.h>
-#include <LibWeb/IndexedDB/Internal/IDBTransactionObserver.h>
 
 namespace Web::IndexedDB {
 
 GC_DEFINE_ALLOCATOR(IDBDatabase);
-GC_DEFINE_ALLOCATOR(IDBDatabase::TransactionFinishState);
 
 IDBDatabase::IDBDatabase(JS::Realm& realm, Database& db)
     : EventTarget(realm)
@@ -45,11 +43,14 @@ void IDBDatabase::initialize(JS::Realm& realm)
 void IDBDatabase::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_database_observers_being_notified);
     visitor.visit(m_object_store_set);
     visitor.visit(m_associated_database);
     visitor.visit(m_transactions);
-    visitor.visit(m_transaction_finish_queue);
+
+    for (auto& wait : m_pending_transaction_waits) {
+        visitor.visit(wait.transactions);
+        visitor.visit(wait.callback);
+    }
 }
 
 void IDBDatabase::set_onabort(WebIDL::CallbackType* event_handler)
@@ -247,84 +248,115 @@ WebIDL::ExceptionOr<GC::Ref<IDBTransaction>> IDBDatabase::transaction(Variant<St
     // 8. Set transaction’s cleanup event loop to the current event loop.
     transaction->set_cleanup_event_loop(HTML::main_thread_event_loop());
 
+    block_on_conflicting_transactions(transaction);
+
     // 9. Return an IDBTransaction object representing transaction.
     return transaction;
-}
-
-void IDBDatabase::register_database_observer(Badge<IDBDatabaseObserver>, IDBDatabaseObserver& database_observer)
-{
-    auto result = m_database_observers.set(database_observer);
-    VERIFY(result == AK::HashSetResult::InsertedNewEntry);
-}
-
-void IDBDatabase::unregister_database_observer(Badge<IDBDatabaseObserver>, IDBDatabaseObserver& database_observer)
-{
-    bool was_removed = m_database_observers.remove(database_observer);
-    VERIFY(was_removed);
 }
 
 void IDBDatabase::set_state(ConnectionState state)
 {
     m_state = state;
-    notify_each_database_observer([](IDBDatabaseObserver const& request_observer) {
-        return request_observer.connection_state_changed_observer();
-    });
 }
 
 void IDBDatabase::wait_for_transactions_to_finish(ReadonlySpan<GC::Ref<IDBTransaction>> transactions, GC::Ref<GC::Function<void()>> on_complete)
 {
-    GC::Ptr<TransactionFinishState> transaction_finish_state;
-
-    for (auto const& entry : transactions) {
-        if (!entry->is_finished()) {
-            if (!transaction_finish_state) {
-                transaction_finish_state = heap().allocate<TransactionFinishState>();
+    auto all_finished = [&] {
+        for (auto const& entry : transactions) {
+            if (!entry->is_finished()) {
+                return false;
+                break;
             }
-
-            transaction_finish_state->add_transaction_to_observe(entry);
         }
-    }
+        return true;
+    }();
 
-    if (transaction_finish_state) {
-        transaction_finish_state->after_all = GC::create_function(heap(), [this, transaction_finish_state, on_complete] {
-            bool was_removed = m_transaction_finish_queue.remove_first_matching([transaction_finish_state](GC::Ref<TransactionFinishState> pending_transaction_finish_state) {
-                return pending_transaction_finish_state == transaction_finish_state;
-            });
-            VERIFY(was_removed);
-            queue_a_database_task(on_complete);
-        });
-        m_transaction_finish_queue.append(transaction_finish_state.as_nonnull());
-    } else {
+    if (all_finished) {
         queue_a_database_task(on_complete);
+        return;
+    }
+
+    m_pending_transaction_waits.append(PendingTransactionWait {
+        .transactions = Vector<GC::Ref<IDBTransaction>> { transactions },
+        .callback = on_complete,
+    });
+}
+
+void IDBDatabase::check_pending_transaction_waits()
+{
+    for (size_t i = 0; i < m_pending_transaction_waits.size();) {
+        auto all_finished = [&] {
+            for (auto const& transaction : m_pending_transaction_waits[i].transactions) {
+                if (!transaction->is_finished())
+                    return false;
+            }
+            return true;
+        }();
+        if (all_finished) {
+            auto callback = m_pending_transaction_waits.take(i).callback;
+            callback->function()();
+            continue;
+        }
+
+        i++;
     }
 }
 
-void IDBDatabase::TransactionFinishState::visit_edges(Visitor& visitor)
+// https://w3c.github.io/IndexedDB/#transaction-scheduling
+void IDBDatabase::block_on_conflicting_transactions(GC::Ref<IDBTransaction> transaction)
 {
-    Base::visit_edges(visitor);
-    visitor.visit(transaction_observers);
-    visitor.visit(after_all);
-}
+    // The following constraints define when a transaction can be started:
 
-void IDBDatabase::TransactionFinishState::add_transaction_to_observe(GC::Ref<IDBTransaction> transaction)
-{
-    auto transaction_observer = heap().allocate<IDBTransactionObserver>(transaction);
-    transaction_observer->set_transaction_finished_observer(GC::create_function(heap(), [this] {
-        transaction_observers.remove_all_matching([](GC::Ref<IDBTransactionObserver> const& transaction_observer) {
-            if (transaction_observer->transaction()->is_finished()) {
-                transaction_observer->unobserve();
-                return true;
-            }
+    // - A read-only transactions tx can start when there are no read/write transactions which:
+    // - A read/write transaction tx can start when there are no transactions which:
 
-            return false;
+    Vector<GC::Ref<IDBTransaction>> blocking;
+    for (auto const& other : m_transactions) {
+        // - Were created before tx; and
+        if (other.ptr() == transaction.ptr())
+            break;
+
+        // NB: According to the above conditions, we only block on transactions if one is read/write.
+        if (transaction->is_readonly() && other->is_readonly())
+            continue;
+
+        // - have overlapping scopes with tx; and
+        bool have_overlapping_scopes = any_of(transaction->scope(), [&](auto const& store) {
+            return other->scope().contains_slow(store);
         });
+        if (!have_overlapping_scopes)
+            continue;
 
-        if (transaction_observers.is_empty()) {
-            queue_a_database_task(after_all.as_nonnull());
+        // - are not finished.
+        if (other->is_finished())
+            continue;
+
+        blocking.append(other);
+    }
+
+    if (blocking.is_empty())
+        return;
+
+    transaction->request_list().block_execution();
+    wait_for_transactions_to_finish(blocking, GC::create_function(realm().heap(), [transaction] {
+        VERIFY(transaction->state() != IDBTransaction::TransactionState::Active);
+        if (transaction->request_list().is_empty()) {
+            // https://w3c.github.io/IndexedDB/#transaction-commit
+            // The implementation must attempt to commit an inactive transaction when all requests placed
+            // against the transaction have completed and their returned results handled, no new requests have
+            // been placed against the transaction, and the transaction has not been aborted
+
+            // If we were blocked, that means that the JS task has had its chance to make requests. If the request
+            // list is empty, then the cleanup in the microtask checkpoint already ran, but skipped auto-committing.
+            // We have to do it here instead.
+
+            // FIXME: Update if this becomes explicit:
+            //        https://github.com/w3c/IndexedDB/issues/489#issuecomment-3994928473
+            commit_a_transaction(transaction->realm(), transaction);
+            return;
         }
+        transaction->request_list().unblock_execution();
     }));
-
-    transaction_observers.append(transaction_observer);
 }
 
 }
