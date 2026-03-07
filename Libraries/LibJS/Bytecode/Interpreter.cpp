@@ -10,6 +10,7 @@
 #include <AK/TemporaryChange.h>
 #include <LibGC/RootHashMap.h>
 #include <LibJS/AST.h>
+#include <LibJS/Bytecode/AsmInterpreter/AsmInterpreter.h>
 #include <LibJS/Bytecode/BasicBlock.h>
 #include <LibJS/Bytecode/FormatOperand.h>
 #include <LibJS/Bytecode/Generator.h>
@@ -91,16 +92,6 @@ ALWAYS_INLINE static ThrowCompletionOr<bool> strict_equals(VM&, Value src1, Valu
 Interpreter::Interpreter() = default;
 
 Interpreter::~Interpreter() = default;
-
-ALWAYS_INLINE Value Interpreter::get(Operand op) const
-{
-    return m_running_execution_context->registers_and_constants_and_locals_and_arguments()[op.raw()];
-}
-
-ALWAYS_INLINE void Interpreter::set(Operand op, Value value)
-{
-    m_running_execution_context->registers_and_constants_and_locals_and_arguments()[op.raw()] = value;
-}
 
 ALWAYS_INLINE Value Interpreter::do_yield(Value value, Optional<Label> continuation)
 {
@@ -445,6 +436,16 @@ void Interpreter::run_bytecode(size_t entry_point)
 {
     if (vm().interpreter_stack().is_exhausted() || vm().did_reach_stack_space_limit()) [[unlikely]] {
         reg(Register::exception()) = vm().throw_completion<InternalError>(ErrorType::CallStackSizeExceeded).value();
+        return;
+    }
+
+    static bool const use_cpp_interpreter = []() {
+        auto const* env = getenv("LIBJS_USE_CPP_INTERPRETER");
+        return env && env[0] == '1';
+    }();
+
+    if (!use_cpp_interpreter && AsmInterpreter::is_available()) {
+        AsmInterpreter::run(*this, entry_point);
         return;
     }
 
