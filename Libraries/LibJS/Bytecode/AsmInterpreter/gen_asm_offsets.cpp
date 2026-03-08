@@ -8,7 +8,6 @@
 // Compiled with the same flags as LibJS so layouts match exactly.
 
 #include <AK/Format.h>
-#include <LibGC/Weak.h>
 #include <LibJS/Bytecode/Builtins.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Bytecode/Interpreter.h>
@@ -54,10 +53,6 @@ int main()
     EMIT_OFFSET(SHAPE_PROTOTYPE, Shape, m_prototype);
     EMIT_OFFSET(SHAPE_DICTIONARY_GENERATION, Shape, m_dictionary_generation);
     EMIT_SIZEOF(SHAPE_SIZE, Shape);
-
-    // WeakImpl layout
-    outln("\n# WeakImpl layout");
-    EMIT_OFFSET(WEAK_IMPL_POINTER, GC::WeakImpl, m_ptr);
 
     // PropertyLookupCache layout
     outln("\n# PropertyLookupCache layout");
@@ -125,10 +120,6 @@ int main()
         outln("const OBJECT_STORAGE_SIZE = {}", offsetof(Object, m_storage) + vec_size);
         // Composite offsets for SimpleIndexedPropertyStorage.m_packed_elements data pointer
         outln("const SIMPLE_INDEXED_PROPERTY_STORAGE_PACKED_DATA = {}", offsetof(SimpleIndexedPropertyStorage, m_packed_elements) + vec_data);
-        // Composite offset for Executable.property_lookup_caches data pointer
-        outln("const EXECUTABLE_PROPERTY_LOOKUP_CACHES_DATA = {}", offsetof(Executable, property_lookup_caches) + vec_data);
-        // Composite offset for Executable.global_variable_caches data pointer
-        outln("const EXECUTABLE_GLOBAL_VARIABLE_CACHES_DATA = {}", offsetof(Executable, global_variable_caches) + vec_data);
         // Composite offset for Executable.bytecode data pointer
         outln("const EXECUTABLE_BYTECODE_DATA = {}", offsetof(Executable, bytecode) + vec_data);
     }
@@ -146,6 +137,7 @@ int main()
     EMIT_OFFSET(GLOBAL_VARIABLE_CACHE_ENVIRONMENT_SERIAL, GlobalVariableCache, environment_serial_number);
     EMIT_OFFSET(GLOBAL_VARIABLE_CACHE_ENVIRONMENT_BINDING_INDEX, GlobalVariableCache, environment_binding_index);
     EMIT_OFFSET(GLOBAL_VARIABLE_CACHE_HAS_ENVIRONMENT_BINDING, GlobalVariableCache, has_environment_binding_index);
+    EMIT_OFFSET(GLOBAL_VARIABLE_CACHE_IN_MODULE_ENVIRONMENT, GlobalVariableCache, in_module_environment);
     EMIT_SIZEOF(GLOBAL_VARIABLE_CACHE_SIZE, GlobalVariableCache);
 
     // Builtin enum values

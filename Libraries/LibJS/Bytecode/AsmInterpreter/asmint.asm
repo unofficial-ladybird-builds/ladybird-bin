@@ -316,8 +316,7 @@ end
 
 # Dispatch using the instruction's m_length field (for variable-length instructions).
 macro dispatch_callbuiltin_size()
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_length]
+    load32 t0, [pb, pc, m_length]
     dispatch_variable t0
 end
 
@@ -1421,20 +1420,13 @@ handler GetById
     unbox_object t3, t1
     # Load Object.m_shape
     load64 t4, [t3, OBJECT_SHAPE]
-    # Get PropertyLookupCache*
-    load64 t0, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
-    load64 t5, [t0, EXECUTABLE_PROPERTY_LOOKUP_CACHES_DATA]
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_cache_index]
-    mul t0, t0, PROPERTY_LOOKUP_CACHE_SIZE
-    add t5, t0
-    # Check entry[0].shape matches Object's shape (via WeakImpl -> m_ptr)
+    # Get PropertyLookupCache* (direct pointer from instruction stream)
+    load64 t5, [pb, pc, m_cache]
+    # Check entry[0].shape matches Object's shape (direct pointer compare)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_ne t0, t4, .try_cache
     # Check entry[0].prototype (null = own property, non-null = prototype chain)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_nonzero t0, .proto
     # Check dictionary generation matches
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_DICTIONARY_GENERATION]
@@ -1451,9 +1443,8 @@ handler GetById
     dispatch_next
 .proto:
     # t0 = prototype Object*, t4 = object's shape, t5 = PLC base
-    # Check prototype chain validity
+    # Check prototype chain validity (direct pointer, null = invalid)
     load64 t1, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE_CHAIN_VALIDITY]
-    load64 t1, [t1, WEAK_IMPL_POINTER]
     branch_zero t1, .try_cache
     load8 t2, [t1, PROTOTYPE_CHAIN_VALIDITY_VALID]
     branch_zero t2, .try_cache
@@ -1490,20 +1481,13 @@ handler PutById
     unbox_object t3, t1
     # Load Object.m_shape
     load64 t4, [t3, OBJECT_SHAPE]
-    # Get PropertyLookupCache*
-    load64 t0, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
-    load64 t5, [t0, EXECUTABLE_PROPERTY_LOOKUP_CACHES_DATA]
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_cache_index]
-    mul t0, t0, PROPERTY_LOOKUP_CACHE_SIZE
-    add t5, t0
-    # Check entry[0].shape matches Object's shape (via WeakImpl -> m_ptr)
+    # Get PropertyLookupCache* (direct pointer from instruction stream)
+    load64 t5, [pb, pc, m_cache]
+    # Check entry[0].shape matches Object's shape (direct pointer compare)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_ne t0, t4, .try_cache
     # Check entry[0].prototype is null (own-property store only)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_nonzero t0, .try_cache
     # Check dictionary generation matches
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_DICTIONARY_GENERATION]
@@ -1568,9 +1552,8 @@ handler GetByValue
     # Check value is not empty (sparse hole)
     mov t5, EMPTY_TAG_SHIFTED
     branch_eq t0, t5, .slow
-    # Check not accessor
-    extract_tag t5, t0
-    branch_eq t5, ACCESSOR_TAG, .slow
+    # NB: No accessor check needed -- SimpleIndexedPropertyStorage
+    #     can only hold default-attributed data properties.
     store_operand m_dst, t0
     dispatch_next
 .try_typed_array:
@@ -1693,19 +1676,12 @@ handler GetLength
     branch_bits_set t0, OBJECT_FLAG_HAS_MAGICAL_LENGTH, .magical_length
     # Non-magical length: IC fast path (same as GetById)
     load64 t4, [t3, OBJECT_SHAPE]
-    load64 t0, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
-    load64 t5, [t0, EXECUTABLE_PROPERTY_LOOKUP_CACHES_DATA]
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_cache_index]
-    mul t0, t0, PROPERTY_LOOKUP_CACHE_SIZE
-    add t5, t0
-    # Check entry[0].shape matches
+    load64 t5, [pb, pc, m_cache]
+    # Check entry[0].shape matches (direct pointer compare)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_ne t0, t4, .slow
     # Check entry[0].prototype is null (own-property only)
     load64 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_nonzero t0, .slow
     # Check dictionary generation
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_DICTIONARY_GENERATION]
@@ -1752,13 +1728,8 @@ handler GetGlobal
     # Load global_declarative_environment and global_object
     load64 t1, [exec_ctx, EXECUTION_CONTEXT_GLOBAL_DECLARATIVE_ENVIRONMENT]
     load64 t2, [exec_ctx, EXECUTION_CONTEXT_GLOBAL_OBJECT]
-    # Get GlobalVariableCache*
-    load64 t3, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
-    load64 t3, [t3, EXECUTABLE_GLOBAL_VARIABLE_CACHES_DATA]
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_cache_index]
-    mul t0, t0, GLOBAL_VARIABLE_CACHE_SIZE
-    add t3, t0
+    # Get GlobalVariableCache* (direct pointer from instruction stream)
+    load64 t3, [pb, pc, m_cache]
     # Check environment_serial_number matches
     load64 t0, [t3, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_SERIAL]
     load64 t4, [t1, DECLARATIVE_ENVIRONMENT_SERIAL]
@@ -1767,7 +1738,6 @@ handler GetGlobal
     # (falls through to env binding path on shape mismatch)
     load64 t4, [t2, OBJECT_SHAPE]
     load64 t0, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_ne t0, t4, .try_env_binding
     # Check dictionary generation
     load32 t0, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_DICTIONARY_GENERATION]
@@ -1786,7 +1756,23 @@ handler GetGlobal
     # Check if cache has an environment binding index (global let/const)
     load8 t0, [t3, GLOBAL_VARIABLE_CACHE_HAS_ENVIRONMENT_BINDING]
     branch_zero t0, .slow
-    # Use C++ helper for the env binding path (handles TDZ + module envs)
+    # Bail to C++ for module environments (rare)
+    load8 t0, [t3, GLOBAL_VARIABLE_CACHE_IN_MODULE_ENVIRONMENT]
+    branch_nonzero t0, .slow_env
+    # Inline env binding: index into global_declarative_environment bindings
+    # t1 = global_declarative_environment (loaded at handler entry)
+    load32 t0, [t3, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_BINDING_INDEX]
+    load64 t4, [t1, BINDINGS_DATA_PTR]
+    mul t0, t0, SIZEOF_BINDING
+    add t4, t0
+    # Check binding is initialized (TDZ)
+    load8 t0, [t4, BINDING_INITIALIZED]
+    branch_zero t0, .slow
+    # Load binding value
+    load64 t0, [t4, BINDING_VALUE]
+    store_operand m_dst, t0
+    dispatch_next
+.slow_env:
     call_interp asm_try_get_global_env_binding
     branch_nonzero t0, .slow
     dispatch_next
@@ -1799,13 +1785,8 @@ handler SetGlobal
     # Load global_declarative_environment and global_object
     load64 t1, [exec_ctx, EXECUTION_CONTEXT_GLOBAL_DECLARATIVE_ENVIRONMENT]
     load64 t2, [exec_ctx, EXECUTION_CONTEXT_GLOBAL_OBJECT]
-    # Get GlobalVariableCache*
-    load64 t3, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
-    load64 t3, [t3, EXECUTABLE_GLOBAL_VARIABLE_CACHES_DATA]
-    lea t0, [pb, pc]
-    load32 t0, [t0, m_cache_index]
-    mul t0, t0, GLOBAL_VARIABLE_CACHE_SIZE
-    add t3, t0
+    # Get GlobalVariableCache* (direct pointer from instruction stream)
+    load64 t3, [pb, pc, m_cache]
     # Check environment_serial_number matches
     load64 t0, [t3, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_SERIAL]
     load64 t4, [t1, DECLARATIVE_ENVIRONMENT_SERIAL]
@@ -1814,7 +1795,6 @@ handler SetGlobal
     # (falls through to env binding path on shape mismatch)
     load64 t4, [t2, OBJECT_SHAPE]
     load64 t0, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE]
-    load64 t0, [t0, WEAK_IMPL_POINTER]
     branch_ne t0, t4, .try_env_binding
     # Check dictionary generation
     load32 t0, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_DICTIONARY_GENERATION]
@@ -1835,7 +1815,25 @@ handler SetGlobal
     # Check if cache has an environment binding index (global let/const)
     load8 t0, [t3, GLOBAL_VARIABLE_CACHE_HAS_ENVIRONMENT_BINDING]
     branch_zero t0, .slow
-    # Use C++ helper for the env binding path (handles module envs + strict)
+    # Bail to C++ for module environments (rare)
+    load8 t0, [t3, GLOBAL_VARIABLE_CACHE_IN_MODULE_ENVIRONMENT]
+    branch_nonzero t0, .slow_env
+    # Inline env binding: index into global_declarative_environment bindings
+    # t1 = global_declarative_environment (loaded at handler entry)
+    load32 t0, [t3, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_BINDING_INDEX]
+    load64 t4, [t1, BINDINGS_DATA_PTR]
+    mul t0, t0, SIZEOF_BINDING
+    add t4, t0
+    # Check binding is initialized (TDZ) and mutable
+    load8 t0, [t4, BINDING_INITIALIZED]
+    branch_zero t0, .slow
+    load8 t0, [t4, BINDING_MUTABLE]
+    branch_zero t0, .slow
+    # Store value into binding
+    load_operand t0, m_src
+    store64 [t4, BINDING_VALUE], t0
+    dispatch_next
+.slow_env:
     call_interp asm_try_set_global_env_binding
     branch_nonzero t0, .slow
     dispatch_next
@@ -1875,8 +1873,7 @@ handler CallBuiltin
     branch_zero t3, .slow
     # Compare FunctionObject::m_builtin value with instruction's m_builtin
     load8 t3, [t2, FUNCTION_OBJECT_BUILTIN_VALUE]
-    lea t0, [pb, pc]
-    load8 t4, [t0, m_builtin]
+    load8 t4, [pb, pc, m_builtin]
     branch_ne t3, t4, .slow
     # Callee validated. Now dispatch on the builtin enum (already in t4).
     branch_eq t4, BUILTIN_MATH_ABS, .math_abs
