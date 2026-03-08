@@ -49,54 +49,41 @@
 #   call_helper and call_interp are NON-TERMINAL: the handler continues after.
 
 
-# Extract the NaN-boxing tag (upper 16 bits) from a value.
-macro extract_tag(dst, src)
-    mov dst, src
-    shr dst, 48
-end
-
-# Box a raw 32-bit integer into a NaN-boxed int32 Value.
-# Clobbers t0. src must not be t0.
-macro box_int32(dst, src)
-    mov dst, src
-    and dst, 0xFFFFFFFF
-    mov t0, INT32_TAG_SHIFTED
-    or dst, t0
-end
-
-# Sign-extend the low 32 bits of a NaN-boxed int32 value.
-macro unbox_int32(dst, src)
-    movsxd dst, src
-end
-
-# Extract Object* from a NaN-boxed object value (zero-extend lower 48 bits).
-# NB: Use logical shift (shr), not arithmetic (sar), because aarch64
-# user-space addresses can have bit 47 set (e.g. under ASAN).
-macro unbox_object(dst, src)
-    mov dst, src
-    shl dst, 16
-    shr dst, 16
-end
+# NOTE: extract_tag, unbox_int32, unbox_object, box_int32, and
+# box_int32_clean are codegen instructions (not macros), allowing each
+# backend to emit optimal platform-specific code.
+#
+# extract_tag dst, src       -- Extract upper 16-bit NaN-boxing tag.
+# unbox_int32 dst, src       -- Sign-extend low 32 bits to 64.
+# unbox_object dst, src      -- Zero-extend lower 48 bits (extract pointer).
+# box_int32 dst, src         -- NaN-box a raw int32 (masks low 32, sets tag).
+# box_int32_clean dst, src   -- NaN-box an already zero-extended int32.
 
 # Check if a value is a double (not a NaN-boxed tagged value).
-# Clobbers t3, t4. Jumps to fail if not a double.
+# All tagged types have (tag & NAN_BASE_TAG) == NAN_BASE_TAG in their upper 16 bits.
+# Clobbers t3. Jumps to fail if not a double.
 macro check_is_double(reg, fail)
-    mov t3, CANON_NAN_BITS
-    mov t4, reg
-    and t4, t3
-    branch_eq t4, t3, fail
+    extract_tag t3, reg
+    and t3, NAN_BASE_TAG
+    branch_eq t3, NAN_BASE_TAG, fail
+end
+
+# Check if an already-extracted tag represents a non-double type.
+# Clobbers the tag register. Jumps to fail if not a double.
+macro check_tag_is_double(tag, fail)
+    and tag, NAN_BASE_TAG
+    branch_eq tag, NAN_BASE_TAG, fail
 end
 
 # Check if both values are doubles.
 # Clobbers t3, t4. Jumps to fail if either is not a double.
 macro check_both_double(lhs, rhs, fail)
-    mov t3, CANON_NAN_BITS
-    mov t4, lhs
-    and t4, t3
-    branch_eq t4, t3, fail
-    mov t4, rhs
-    and t4, t3
-    branch_eq t4, t3, fail
+    extract_tag t3, lhs
+    and t3, NAN_BASE_TAG
+    branch_eq t3, NAN_BASE_TAG, fail
+    extract_tag t4, rhs
+    and t4, NAN_BASE_TAG
+    branch_eq t4, NAN_BASE_TAG, fail
 end
 
 # Coerce two operands (already in t1/t2) to numeric types for arithmetic/comparison.
@@ -114,16 +101,19 @@ macro coerce_to_doubles(both_int_label, fail)
     unbox_int32 t4, t2
     jmp both_int_label
 .int_rhs_maybe_double:
-    check_is_double t2, fail
+    # t4 already has rhs tag, known != INT32_TAG
+    check_tag_is_double t4, fail
     unbox_int32 t3, t1
     int_to_double ft0, t3
     fp_mov ft1, t2
     jmp .coerced
 .lhs_not_int:
-    check_is_double t1, fail
+    # t3 already has lhs tag, known != INT32_TAG
+    check_tag_is_double t3, fail
     extract_tag t4, t2
     branch_eq t4, INT32_TAG, .double_rhs_int
-    check_is_double t2, fail
+    # t4 already has rhs tag, known != INT32_TAG
+    check_tag_is_double t4, fail
     fp_mov ft0, t1
     fp_mov ft1, t2
     jmp .coerced
@@ -192,17 +182,21 @@ macro strict_equality_core(equal_label, not_equal_label, slow_label)
     branch_eq t3, INT32_TAG, .lhs_int32_diff
     branch_eq t4, INT32_TAG, .rhs_int32_diff
     # Neither is int32. If both are doubles, compare. Otherwise not equal.
-    check_both_double t1, t2, not_equal_label
+    # t3/t4 already have the tags, check them directly.
+    check_tag_is_double t3, not_equal_label
+    check_tag_is_double t4, not_equal_label
     jmp .double_compare
 .lhs_int32_diff:
-    check_is_double t2, not_equal_label
+    # t4 already has rhs tag
+    check_tag_is_double t4, not_equal_label
     unbox_int32 t3, t1
     int_to_double ft0, t3
     fp_mov ft1, t2
     branch_fp_equal ft0, ft1, equal_label
     jmp not_equal_label
 .rhs_int32_diff:
-    check_is_double t1, not_equal_label
+    # t3 already has lhs tag
+    check_tag_is_double t3, not_equal_label
     fp_mov ft0, t1
     unbox_int32 t4, t2
     int_to_double ft1, t4
@@ -259,7 +253,9 @@ macro numeric_compare(int_cc, double_cc, true_label, false_label, slow_label)
     int_cc t3, t4, true_label
     jmp false_label
 .try_double:
-    check_both_double t1, t2, slow_label
+    # t3 already has lhs tag
+    check_tag_is_double t3, slow_label
+    check_is_double t2, slow_label
     fp_mov ft0, t1
     fp_mov ft1, t2
     branch_fp_unordered ft0, ft1, false_label
@@ -396,10 +392,9 @@ handler Add
     dispatch_next
 .both_int:
     # t3=lhs (sign-extended), t4=rhs (sign-extended)
-    add t3, t4
-    unbox_int32 t5, t3
-    branch_ne t3, t5, .overflow
-    box_int32 t5, t3
+    # 32-bit add with hardware overflow detection
+    add32_overflow t3, t4, .overflow
+    box_int32_clean t5, t3
     store_operand m_dst, t5
     dispatch_next
 .overflow:
@@ -428,10 +423,8 @@ handler Sub
     dispatch_next
 .both_int:
     # t3=lhs (sign-extended), t4=rhs (sign-extended)
-    sub t3, t4
-    unbox_int32 t5, t3
-    branch_ne t3, t5, .overflow
-    box_int32 t5, t3
+    sub32_overflow t3, t4, .overflow
+    box_int32_clean t5, t3
     store_operand m_dst, t5
     dispatch_next
 .overflow:
@@ -460,16 +453,14 @@ handler Mul
     dispatch_next
 .both_int:
     # t3=lhs (sign-extended), t4=rhs (sign-extended)
-    mul t3, t4
-    unbox_int32 t5, t3
-    branch_ne t3, t5, .overflow
+    mul32_overflow t3, t4, .overflow
     branch_nonzero t3, .store_int
     # Result is 0: check if either operand was negative -> -0.0
     unbox_int32 t5, t1
     or t5, t4
     branch_negative t5, .negative_zero
 .store_int:
-    box_int32 t5, t3
+    box_int32_clean t5, t3
     store_operand m_dst, t5
     dispatch_next
 .negative_zero:
@@ -516,9 +507,9 @@ handler JumpIf
     branch_bits_set t1, 1, .take_true
     jmp .take_false
 .is_int32:
-    mov t3, t1
-    and t3, 0xFFFFFFFF
-    branch_nonzero t3, .take_true
+    # Test low 32 bits directly (the int32 payload); t1 is dead after this.
+    and t1, 0xFFFFFFFF
+    branch_nonzero t1, .take_true
     jmp .take_false
 .take_true:
     load_label t0, m_true_target
@@ -540,9 +531,9 @@ handler JumpTrue
     branch_bits_set t1, 1, .take
     dispatch_next
 .is_int32:
-    mov t3, t1
-    and t3, 0xFFFFFFFF
-    branch_nonzero t3, .take
+    # Test low 32 bits directly (the int32 payload); t1 is dead after this.
+    and t1, 0xFFFFFFFF
+    branch_nonzero t1, .take
     dispatch_next
 .take:
     load_label t0, m_target
@@ -561,9 +552,9 @@ handler JumpFalse
     branch_bits_clear t1, 1, .take
     dispatch_next
 .is_int32:
-    mov t3, t1
-    and t3, 0xFFFFFFFF
-    branch_zero t3, .take
+    # Test low 32 bits directly (the int32 payload); t1 is dead after this.
+    and t1, 0xFFFFFFFF
+    branch_zero t1, .take
     dispatch_next
 .take:
     load_label t0, m_target
@@ -662,10 +653,8 @@ handler Increment
     extract_tag t2, t1
     branch_ne t2, INT32_TAG, .slow
     unbox_int32 t3, t1
-    add t3, 1
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .overflow
-    box_int32 t4, t3
+    add32_overflow t3, 1, .overflow
+    box_int32_clean t4, t3
     store_operand m_dst, t4
     dispatch_next
 .overflow:
@@ -687,10 +676,8 @@ handler Decrement
     extract_tag t2, t1
     branch_ne t2, INT32_TAG, .slow
     unbox_int32 t3, t1
-    sub t3, 1
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .overflow
-    box_int32 t4, t3
+    sub32_overflow t3, 1, .overflow
+    box_int32_clean t4, t3
     store_operand m_dst, t4
     dispatch_next
 .overflow:
@@ -726,9 +713,9 @@ handler Not
     branch_bits_clear t1, 1, .store_true
     jmp .store_false
 .is_int32:
-    mov t3, t1
-    and t3, 0xFFFFFFFF
-    branch_zero t3, .store_true
+    # Test low 32 bits directly (the int32 payload); t1 is dead after this.
+    and t1, 0xFFFFFFFF
+    branch_zero t1, .store_true
     jmp .store_false
 .store_true:
     mov t0, BOOLEAN_TRUE
@@ -890,10 +877,8 @@ handler PostfixIncrement
     store_operand m_dst, t1
     # Increment in-place: src = src + 1
     unbox_int32 t3, t1
-    add t3, 1
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .overflow_after_store
-    box_int32 t4, t3
+    add32_overflow t3, 1, .overflow_after_store
+    box_int32_clean t4, t3
     store_operand m_src, t4
     dispatch_next
 .overflow_after_store:
@@ -918,7 +903,8 @@ handler Div
     load_operand t2, m_rhs
     extract_tag t3, t1
     branch_eq t3, INT32_TAG, .lhs_is_int32
-    check_is_double t1, .slow
+    # t3 already has lhs tag
+    check_tag_is_double t3, .slow
     fp_mov ft0, t1
     jmp .lhs_ok
 .lhs_is_int32:
@@ -928,7 +914,8 @@ handler Div
     # ft0 = lhs as double
     extract_tag t3, t2
     branch_eq t3, INT32_TAG, .rhs_is_int32
-    check_is_double t2, .slow
+    # t3 already has rhs tag
+    check_tag_is_double t3, .slow
     fp_mov ft1, t2
     jmp .do_div
 .rhs_is_int32:
@@ -1004,8 +991,8 @@ handler UnaryPlus
     # Check if int32
     extract_tag t0, t1
     branch_eq t0, INT32_TAG, .done
-    # Check if double
-    check_is_double t1, .slow
+    # t0 already has tag; check if double
+    check_tag_is_double t0, .slow
 .done:
     store_operand m_dst, t1
     dispatch_next
@@ -1049,11 +1036,10 @@ handler BitwiseNot
     load_operand t1, m_src
     extract_tag t2, t1
     branch_ne t2, INT32_TAG, .slow
-    # Extract int32, NOT it, re-box
-    unbox_int32 t3, t1
-    not t3
-    and t3, 0xFFFFFFFF
-    box_int32 t3, t3
+    # NOT the low 32 bits (not32 zeros upper 32), then re-box
+    mov t3, t1
+    not32 t3
+    box_int32_clean t3, t3
     store_operand m_dst, t3
     dispatch_next
 .slow:
@@ -1122,7 +1108,7 @@ handler UnsignedRightShift
     shr t3, t4
     # If result > INT32_MAX, store as double
     branch_bit_set t3, 31, .as_double
-    box_int32 t3, t3
+    box_int32_clean t3, t3
     store_operand m_dst, t3
     dispatch_next
 .as_double:
@@ -1220,11 +1206,9 @@ handler UnaryMinus
     unbox_int32 t3, t1
     # -0 check: if value is 0, result is -0.0 (double)
     branch_zero t3, .negative_zero
-    neg t3
-    # Check overflow (INT32_MIN)
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .overflow
-    box_int32 t4, t3
+    # 32-bit negate with overflow detection (INT32_MIN)
+    neg32_overflow t3, .overflow
+    box_int32_clean t4, t3
     store_operand m_dst, t4
     dispatch_next
 .negative_zero:
@@ -1238,7 +1222,8 @@ handler UnaryMinus
     store_operand m_dst, t4
     dispatch_next
 .try_double:
-    check_is_double t1, .slow
+    # t2 already has tag
+    check_tag_is_double t2, .slow
     # Negate double: flip sign bit (bit 63)
     toggle_bit t1, 63
     store_operand m_dst, t1
@@ -1256,10 +1241,8 @@ handler PostfixDecrement
     store_operand m_dst, t1
     # Decrement in-place: src = src - 1
     unbox_int32 t3, t1
-    sub t3, 1
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .overflow_after_store
-    box_int32 t4, t3
+    sub32_overflow t3, 1, .overflow_after_store
+    box_int32_clean t4, t3
     store_operand m_src, t4
     dispatch_next
 .overflow_after_store:
@@ -1283,7 +1266,9 @@ handler ToInt32
     store_operand m_dst, t1
     dispatch_next
 .try_double:
-    check_is_double t1, .try_boolean
+    # t2 already has tag; check if double (copy first, t2 needed at .try_boolean)
+    mov t3, t2
+    check_tag_is_double t3, .try_boolean
     # Convert double to int32 using JS ToInt32 semantics.
     # With FEAT_JSCVT: fjcvtzs handles everything in one instruction.
     # Without: truncate + round-trip check, slow path on mismatch.
@@ -1683,7 +1668,7 @@ handler GetByValue
     store_operand m_dst, t0
     dispatch_next
 .ta_box_int32:
-    box_int32 t3, t0
+    box_int32_clean t3, t0
     store_operand m_dst, t3
     dispatch_next
 .try_typed_array_slow:
@@ -1913,12 +1898,9 @@ handler CallBuiltin
     # abs(int32): negate if negative
     unbox_int32 t3, t1
     branch_not_negative t3, .abs_positive
-    neg t3
-    # Check if result fits in int32 (abs(INT32_MIN) = 2147483648 doesn't)
-    unbox_int32 t4, t3
-    branch_ne t3, t4, .abs_overflow
+    neg32_overflow t3, .abs_overflow
 .abs_positive:
-    box_int32 t4, t3
+    box_int32_clean t4, t3
     store_operand m_dst, t4
     dispatch_callbuiltin_size
 .abs_overflow:

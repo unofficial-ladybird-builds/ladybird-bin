@@ -6,7 +6,7 @@
 
 use crate::parser::{AsmInstruction, Handler, Operand, Program};
 use crate::registers::{resolve_register, Arch};
-use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, w};
+use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, w, HandlerState};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -229,10 +229,16 @@ fn generate_handler(out: &mut String, handler: &Handler, program: &Program) {
     w!(out, ".p2align 4");
     w!(out, "asm_handler_{}:", handler.name);
 
-    let mut label_counter: usize = 0;
+    let mut state = HandlerState::new();
+
     // Expand macros and emit instructions
     for insn in &handler.instructions {
-        emit_instruction(out, insn, handler, program, &mut label_counter);
+        emit_instruction(out, insn, handler, program, &mut state);
+    }
+
+    // Emit cold fixup blocks after the main handler body
+    if !state.cold_blocks.is_empty() {
+        out.push_str(&state.cold_blocks);
     }
 
     w!(out);
@@ -298,7 +304,7 @@ fn resolve_op(op: &Operand, handler: &Handler, program: &Program) -> String {
     }
 }
 
-fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, program: &Program, label_counter: &mut usize) {
+fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, program: &Program, state: &mut HandlerState) {
     let m = &insn.mnemonic;
 
     match m.as_str() {
@@ -326,7 +332,7 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
             // Expand macro body
             for body_insn in &mac.body {
                 let expanded = substitute_macro(body_insn, &param_map);
-                emit_instruction(out, &expanded, handler, program, label_counter);
+                emit_instruction(out, &expanded, handler, program, state);
             }
         }
 
@@ -537,7 +543,8 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
 
         // canonicalize_nan dst_gpr, src_fpr
         // If src is NaN, write CANON_NAN_BITS to dst. Otherwise bitwise-copy src to dst.
-        // Clobbers r11 as scratch.
+        // Uses a cold fixup block to keep the movabs off the hot path, since NaN
+        // results are extremely rare. The hot path is just: movq + ucomisd + jp.
         "canonicalize_nan" => {
             if insn.operands.len() == 2 {
                 let dst = resolve_op(&insn.operands[0], handler, program);
@@ -547,10 +554,64 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                     .get("CANON_NAN_BITS")
                     .copied()
                     .expect("CANON_NAN_BITS constant required for canonicalize_nan");
+                let id = state.unique_counter;
+                state.unique_counter += 1;
+                let fixup_label = format!(".Lasm_{}.canon_nan_{id}", handler.name);
+                let ret_label = format!(".Lasm_{}.canon_nan_{id}_ret", handler.name);
                 w!(out, "    movq {dst}, {src}");
                 w!(out, "    ucomisd {src}, {src}");
-                w!(out, "    movabs r11, {canon}");
-                w!(out, "    cmovp {dst}, r11");
+                w!(out, "    jp {fixup_label}");
+                w!(out, "{ret_label}:");
+                // Cold fixup block: only reached when result is NaN
+                w!(state.cold_blocks, "{fixup_label}:");
+                w!(state.cold_blocks, "    movabs {dst}, {canon}");
+                w!(state.cold_blocks, "    jmp {ret_label}");
+            }
+        }
+
+        // 32-bit arithmetic with overflow detection.
+        // These perform the operation on the low 32 bits and branch on signed overflow.
+        // On x86_64, writing a 32-bit register zeros the upper 32 bits.
+        "add32_overflow" | "sub32_overflow" | "mul32_overflow" => {
+            if insn.operands.len() == 3 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let dst32 = to_32bit_reg(&dst);
+                let label = resolve_label(&insn.operands[2], handler);
+                let x86_op = match m.as_str() {
+                    "add32_overflow" => "add",
+                    "sub32_overflow" => "sub",
+                    "mul32_overflow" => "imul",
+                    _ => unreachable!(),
+                };
+                if let Some(val) = get_immediate_value(&insn.operands[1], program) {
+                    w!(out, "    {x86_op} {dst32}, {val}");
+                } else {
+                    let src = resolve_op(&insn.operands[1], handler, program);
+                    let src32 = to_32bit_reg(&src);
+                    w!(out, "    {x86_op} {dst32}, {src32}");
+                }
+                w!(out, "    jo {label}");
+            }
+        }
+
+        // neg32_overflow dst, fail_label
+        // Negate the low 32 bits, branch on overflow (INT32_MIN).
+        "neg32_overflow" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let dst32 = to_32bit_reg(&dst);
+                let label = resolve_label(&insn.operands[1], handler);
+                w!(out, "    neg {dst32}");
+                w!(out, "    jo {label}");
+            }
+        }
+
+        // not32 dst - Bitwise NOT on the low 32 bits, zeroing the upper 32.
+        "not32" => {
+            if insn.operands.len() == 1 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let dst32 = to_32bit_reg(&dst);
+                w!(out, "    not {dst32}");
             }
         }
 
@@ -711,21 +772,27 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
             }
         }
 
-        // mov with large immediate needs movabs on x86_64
+        // mov with large immediate needs movabs on x86_64.
+        // Values in 0..0x7FFFFFFF fit in sign-extended imm32 (mov r64, imm32).
+        // Values in 0x80000000..0xFFFFFFFF use mov r32, imm32 (zero-extends to 64-bit).
+        // Values outside both ranges need movabs r64, imm64 (10 bytes).
         "mov" => {
             if insn.operands.len() == 2 {
                 let dst = resolve_op(&insn.operands[0], handler, program);
-                let src = resolve_op(&insn.operands[1], handler, program);
-                // Check if src is a large immediate that needs movabs
                 if let Some(val) = get_immediate_value(&insn.operands[1], program) {
                     let uval = val as u64;
-                    if uval > 0x7FFFFFFF && uval < 0xFFFFFFFF80000000 {
-                        // Need movabs for 64-bit immediate
-                        w!(out, "    movabs {dst}, {val}");
+                    if uval <= 0x7FFFFFFF || val < 0 && val >= -0x80000000 {
+                        // Fits in sign-extended imm32
+                        w!(out, "    mov {dst}, {val}");
+                    } else if uval <= 0xFFFFFFFF {
+                        // Fits in unsigned 32-bit: use mov r32, imm32 (zero-extends)
+                        let dst32 = to_32bit_reg(&dst);
+                        w!(out, "    mov {dst32}, {val}");
                     } else {
-                        w!(out, "    mov {dst}, {src}");
+                        w!(out, "    movabs {dst}, {val}");
                     }
                 } else {
+                    let src = resolve_op(&insn.operands[1], handler, program);
                     w!(out, "    mov {dst}, {src}");
                 }
             }
@@ -738,6 +805,83 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                 let src = resolve_op(&insn.operands[1], handler, program);
                 let src32 = to_32bit_reg(&src);
                 w!(out, "    movsxd {dst}, {src32}");
+            }
+        }
+
+        // extract_tag dst, src -- Extract upper 16-bit NaN-boxing tag.
+        // On x86_64: mov + shr (2 instructions, same as the old macro).
+        "extract_tag" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                if dst != src {
+                    w!(out, "    mov {dst}, {src}");
+                }
+                w!(out, "    shr {dst}, 48");
+            }
+        }
+
+        // unbox_int32 dst, src -- Sign-extend low 32 bits to 64.
+        "unbox_int32" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let src32 = to_32bit_reg(&src);
+                w!(out, "    movsxd {dst}, {src32}");
+            }
+        }
+
+        // unbox_object dst, src -- Zero-extend lower 48 bits (extract pointer).
+        // On x86_64: mov + shl + shr (3 instructions, same as the old macro).
+        "unbox_object" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                if dst != src {
+                    w!(out, "    mov {dst}, {src}");
+                }
+                w!(out, "    shl {dst}, 16");
+                w!(out, "    shr {dst}, 16");
+            }
+        }
+
+        // box_int32 dst, src -- NaN-box a raw int32 (mask low 32, set tag).
+        // On x86_64: mov r32 (zero-extends) + movabs tag + or.
+        "box_int32" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let dst32 = to_32bit_reg(&dst);
+                let src32 = to_32bit_reg(&src);
+                let tag_shifted = program
+                    .constants
+                    .get("INT32_TAG_SHIFTED")
+                    .copied()
+                    .expect("INT32_TAG_SHIFTED constant required for box_int32");
+                // NB: The mov r32 is always emitted even when dst == src, because
+                // writing a 32-bit register zeros the upper 32 bits.
+                w!(out, "    mov {dst32}, {src32}");
+                w!(out, "    movabs rax, {tag_shifted}");
+                w!(out, "    or {dst}, rax");
+            }
+        }
+
+        // box_int32_clean dst, src -- NaN-box an already zero-extended int32.
+        // On x86_64: same as box_int32 but skip the zero-extension.
+        "box_int32_clean" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let tag_shifted = program
+                    .constants
+                    .get("INT32_TAG_SHIFTED")
+                    .copied()
+                    .expect("INT32_TAG_SHIFTED constant required for box_int32_clean");
+                if dst != src {
+                    w!(out, "    mov {dst}, {src}");
+                }
+                w!(out, "    movabs rax, {tag_shifted}");
+                w!(out, "    or {dst}, rax");
             }
         }
 
@@ -893,6 +1037,8 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
         }
 
         // Floating-point compare-and-branch operations.
+        // Consecutive branch_fp_* with the same operands share one ucomisd,
+        // since ucomisd sets all the flags these branches test.
         "branch_fp_unordered" | "branch_fp_equal" | "branch_fp_less"
         | "branch_fp_less_or_equal" | "branch_fp_greater"
         | "branch_fp_greater_or_equal" => {
@@ -900,35 +1046,36 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                 let a = resolve_op(&insn.operands[0], handler, program);
                 let b = resolve_op(&insn.operands[1], handler, program);
                 let label = resolve_label(&insn.operands[2], handler);
-                w!(out, "    ucomisd {a}, {b}");
-                if m == "branch_fp_equal" {
-                    // ucomisd sets both ZF=1 and PF=1 for unordered (NaN) operands.
-                    // A plain `je` would incorrectly branch on NaN since it only
-                    // checks ZF. Emit `jp` to skip over the `je` when unordered.
-                    let skip = *label_counter;
-                    *label_counter += 1;
-                    let handler_name = &handler.name;
-                    w!(out, "    jp .Lnan_skip_{handler_name}_{skip}");
-                    w!(out, "    je {label}");
-                    w!(out, ".Lnan_skip_{handler_name}_{skip}:");
-                } else {
-                    let cc = match m.as_str() {
-                        "branch_fp_unordered" => "jp",
-                        "branch_fp_less" => "jb",
-                        "branch_fp_less_or_equal" => "jbe",
-                        "branch_fp_greater" => "ja",
-                        "branch_fp_greater_or_equal" => "jae",
-                        _ => unreachable!(),
-                    };
-                    w!(out, "    {cc} {label}");
+                let cc = match m.as_str() {
+                    "branch_fp_unordered" => "jp",
+                    "branch_fp_equal" => "je",
+                    "branch_fp_less" => "jb",
+                    "branch_fp_less_or_equal" => "jbe",
+                    "branch_fp_greater" => "ja",
+                    "branch_fp_greater_or_equal" => "jae",
+                    _ => unreachable!(),
+                };
+                let need_compare = match &state.last_fp_compare {
+                    Some((prev_a, prev_b)) => *prev_a != a || *prev_b != b,
+                    None => true,
+                };
+                if need_compare {
+                    w!(out, "    ucomisd {a}, {b}");
+                    state.last_fp_compare = Some((a, b));
                 }
+                w!(out, "    {cc} {label}");
             }
+            return;
         }
 
         _ => {
             panic!("Unknown instruction '{m}' in handler '{}'", handler.name);
         }
     }
+
+    // Any non-branch_fp instruction may clobber flags, invalidating the
+    // cached FP comparison. branch_fp_* returns early above to skip this.
+    state.last_fp_compare = None;
 }
 
 /// Convert a 64-bit register name to its 8-bit counterpart.

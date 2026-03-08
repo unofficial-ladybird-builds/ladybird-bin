@@ -6,7 +6,7 @@
 
 use crate::parser::{AsmInstruction, Handler, ObjectFormat, Operand, Program};
 use crate::registers::{resolve_register, Arch};
-use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, w};
+use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, w, HandlerState};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -105,20 +105,28 @@ fn generate_entry_point(out: &mut String, program: &Program) {
 
     // Save callee-saved registers and link register.
     // Pinned: x19(dispatch), x20(interp), x25(pc), x26(pb), x27(values), x28(exec_ctx)
-    // Also save x21-x24 (callee-saved, not used by us, but must be preserved).
-    w!(out, "    stp x29, x30, [sp, #-96]!");
+    // x21 = ip (instruction pointer = pb + pc), set at each handler entry, survives calls.
+    // Also save x22-x24 (callee-saved, not used by us, but must be preserved).
+    // d8 is pinned to hold CANON_NAN_BITS (callee-saved FP register).
+    w!(out, "    stp x29, x30, [sp, #-112]!");
     w!(out, "    mov x29, sp");
     w!(out, "    stp x25, x26, [sp, #16]");
     w!(out, "    stp x27, x28, [sp, #32]");
     w!(out, "    stp x19, x20, [sp, #48]");
     w!(out, "    stp x21, x22, [sp, #64]");
     w!(out, "    stp x23, x24, [sp, #80]");
+    w!(out, "    str d8, [sp, #96]");
 
     // Set up pinned registers
     // x0=bytecode (pb), w1=entry_point (pc), x2=values, x3=interp
     let interp_ctx = program
         .constants
         .get("INTERPRETER_RUNNING_EXECUTION_CONTEXT")
+        .copied()
+        .unwrap_or(0);
+    let canon_nan = program
+        .constants
+        .get("CANON_NAN_BITS")
         .copied()
         .unwrap_or(0);
     w!(out, "    mov x26, x0              // pb = bytecode base");
@@ -130,10 +138,14 @@ fn generate_entry_point(out: &mut String, program: &Program) {
     w!(out, "    // x28 = exec_ctx");
     emit_symbol_addr(out, "x19", "asm_dispatch_table", program.object_format);
     w!(out, "    // x19 = dispatch table");
+    // Pin canonical NaN bits in d8 (callee-saved FP register).
+    // Used by canonicalize_nan to avoid materializing the constant each time.
+    emit_mov_imm(out, "x9", canon_nan);
+    w!(out, "    fmov d8, x9              // d8 = CANON_NAN_BITS");
 
-    // Dispatch to first instruction
-    w!(out, "    add x9, x26, x25         // x9 = pb + pc");
-    w!(out, "    ldrb w9, [x9]            // w9 = opcode byte");
+    // Dispatch to first instruction (sets x21 = pb + pc for the handler)
+    w!(out, "    add x21, x26, x25        // x21 = pb + pc");
+    w!(out, "    ldrb w9, [x21]           // w9 = opcode byte");
     w!(out, "    ldr x10, [x19, x9, lsl #3]");
     w!(out, "    br x10");
     w!(out);
@@ -162,7 +174,8 @@ fn generate_fallback_handler(out: &mut String, program: &Program) {
     w!(out, "    ldp x19, x20, [sp, #48]");
     w!(out, "    ldp x21, x22, [sp, #64]");
     w!(out, "    ldp x23, x24, [sp, #80]");
-    w!(out, "    ldp x29, x30, [sp], #96");
+    w!(out, "    ldr d8, [sp, #96]");
+    w!(out, "    ldp x29, x30, [sp], #112");
     w!(out, "    ret");
     w!(out);
 }
@@ -197,9 +210,10 @@ fn emit_state_reload(out: &mut String, program: &Program) {
 }
 
 /// Emit a dispatch sequence: load opcode from [pb + pc], look up in table, branch.
+/// Also updates x21 (cached instruction pointer) for the next handler.
 fn emit_dispatch(out: &mut String) {
-    w!(out, "    add x9, x26, x25"); // x9 = pb + pc
-    w!(out, "    ldrb w9, [x9]"); // w9 = opcode
+    w!(out, "    add x21, x26, x25"); // x21 = pb + pc
+    w!(out, "    ldrb w9, [x21]"); // w9 = opcode
     emit_dispatch_tail(out);
 }
 
@@ -210,8 +224,12 @@ fn emit_dispatch_tail(out: &mut String) {
 }
 
 fn emit_dispatch_with_size(out: &mut String, size: u32) {
+    // x21 = pb + old_pc (set during dispatch, callee-saved).
+    // Next opcode is at x21 + size; load it before advancing x21/pc.
+    w!(out, "    ldrb w9, [x21, #{size}]");
+    w!(out, "    add x21, x21, #{size}");
     emit_add_imm32(out, "w25", "w25", size as i64);
-    emit_dispatch(out);
+    emit_dispatch_tail(out);
 }
 
 /// Get the handler's instruction size: from explicit size= attribute, or from Bytecode.def.
@@ -236,9 +254,18 @@ fn handler_size(handler: &Handler, program: &Program) -> u32 {
 fn generate_handler(out: &mut String, handler: &Handler, program: &Program) {
     w!(out, ".p2align 4");
     w!(out, "asm_handler_{}:", handler.name);
+    // x21 = pb + pc is set by the dispatch sequence that branches here.
+    // It is callee-saved, so it survives C++ calls within the handler.
+
+    let mut state = HandlerState::new();
 
     for insn in &handler.instructions {
-        emit_instruction(out, insn, handler, program);
+        emit_instruction(out, insn, handler, program, &mut state);
+    }
+
+    // Emit cold fixup blocks after the main handler body
+    if !state.cold_blocks.is_empty() {
+        out.push_str(&state.cold_blocks);
     }
 
     w!(out);
@@ -707,6 +734,7 @@ fn emit_instruction(
     insn: &AsmInstruction,
     handler: &Handler,
     program: &Program,
+    state: &mut HandlerState,
 ) {
     let m = &insn.mnemonic;
 
@@ -721,6 +749,12 @@ fn emit_instruction(
             }
         }
 
+        // dispatch_current: dispatch the instruction at current pc (without advancing).
+        // Overrides the DSL macro to ensure x21 is set for the next handler.
+        "dispatch_current" => {
+            emit_dispatch(out);
+        }
+
         // Macro invocations
         _ if program.macros.contains_key(m) => {
             let mac = program.macros[m].clone();
@@ -732,7 +766,7 @@ fn emit_instruction(
             }
             for body_insn in &mac.body {
                 let expanded = substitute_macro(body_insn, &param_map);
-                emit_instruction(out, &expanded, handler, program);
+                emit_instruction(out, &expanded, handler, program, state);
             }
         }
 
@@ -904,26 +938,26 @@ fn emit_instruction(
 
         // canonicalize_nan dst_gpr, src_fpr
         // If src is NaN, write CANON_NAN_BITS to dst. Otherwise bitwise-copy src to dst.
-        // Uses x9 as scratch and d16 to hold the canonical NaN.
-        // NB: d16 is caller-saved, unlike d8-d15 which are callee-saved.
+        // Uses a cold fixup block to keep the constant load off the hot path, since NaN
+        // results are extremely rare. The hot path is just: fmov + fcmp + b.vs.
+        // d8 holds CANON_NAN_BITS (pinned at entry), so the cold block is just fmov + b.
         "canonicalize_nan" => {
             if insn.operands.len() == 2 {
                 let dst = resolve_op(&insn.operands[0], handler, program);
                 let src = resolve_op(&insn.operands[1], handler, program);
-                let canon = program
-                    .constants
-                    .get("CANON_NAN_BITS")
-                    .copied()
-                    .expect("CANON_NAN_BITS constant required for canonicalize_nan");
-                // Load canonical NaN bits and convert to FP for fcsel
-                emit_mov_imm(out, "x9", canon);
-                w!(out, "    fmov d16, x9");
-                // Compare src with itself: unordered (VS) if NaN
-                w!(out, "    fcmp {src}, {src}");
-                // Select: if ordered (VC), keep src; if unordered (VS), use canonical NaN
-                w!(out, "    fcsel {src}, {src}, d16, vc");
-                // Move result to integer register
+                let id = state.unique_counter;
+                state.unique_counter += 1;
+                let fixup_label = format!(".Lasm_{}.canon_nan_{id}", handler.name);
+                let ret_label = format!(".Lasm_{}.canon_nan_{id}_ret", handler.name);
+                // Hot path: move to GPR, check for NaN, branch to cold fixup if NaN
                 w!(out, "    fmov {dst}, {src}");
+                w!(out, "    fcmp {src}, {src}");
+                w!(out, "    b.vs {fixup_label}");
+                w!(out, "{ret_label}:");
+                // Cold fixup block: d8 holds CANON_NAN_BITS (pinned at entry)
+                w!(state.cold_blocks, "{fixup_label}:");
+                w!(state.cold_blocks, "    fmov {dst}, d8");
+                w!(state.cold_blocks, "    b {ret_label}");
             }
         }
 
@@ -1056,9 +1090,8 @@ fn emit_instruction(
                 let dst = resolve_op(&insn.operands[0], handler, program);
                 let offset = resolve_op(&insn.operands[1], handler, program);
                 let offset_val: i64 = offset.parse().unwrap_or(0);
-                // x9 = pb + pc + offset -> load w9 from there (operand index)
-                w!(out, "    add x9, x26, x25");
-                emit_ldr32(out, "w9", "x9", offset_val);
+                // x21 = pb + pc (pinned at handler entry); load operand index
+                emit_ldr32(out, "w9", "x21", offset_val);
                 // dst = values[w9] (scaled by 8)
                 w!(out, "    ldr {dst}, [x27, x9, lsl #3]");
             }
@@ -1070,9 +1103,8 @@ fn emit_instruction(
                 let offset = resolve_op(&insn.operands[0], handler, program);
                 let src = resolve_op(&insn.operands[1], handler, program);
                 let offset_val: i64 = offset.parse().unwrap_or(0);
-                // x9 = pb + pc + offset -> load w9 from there (operand index)
-                w!(out, "    add x9, x26, x25");
-                emit_ldr32(out, "w9", "x9", offset_val);
+                // x21 = pb + pc (pinned at handler entry); load operand index
+                emit_ldr32(out, "w9", "x21", offset_val);
                 // values[w9] = src
                 w!(out, "    str {src}, [x27, x9, lsl #3]");
             }
@@ -1085,8 +1117,8 @@ fn emit_instruction(
                 let offset = resolve_op(&insn.operands[1], handler, program);
                 let offset_val: i64 = offset.parse().unwrap_or(0);
                 let wdst = to_w_reg(&dst);
-                w!(out, "    add x9, x26, x25");
-                emit_ldr32(out, &wdst, "x9", offset_val);
+                // x21 = pb + pc (pinned at handler entry)
+                emit_ldr32(out, &wdst, "x21", offset_val);
             }
         }
 
@@ -1120,6 +1152,74 @@ fn emit_instruction(
                 let src = resolve_op(&insn.operands[1], handler, program);
                 let wsrc = to_w_reg(&src);
                 w!(out, "    sxtw {dst}, {wsrc}");
+            }
+        }
+
+        // extract_tag dst, src -- Extract upper 16-bit NaN-boxing tag.
+        // On aarch64: single `lsr xD, xS, #48`.
+        "extract_tag" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                w!(out, "    lsr {dst}, {src}, #48");
+            }
+        }
+
+        // unbox_int32 dst, src -- Sign-extend low 32 bits to 64.
+        "unbox_int32" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let wsrc = to_w_reg(&src);
+                w!(out, "    sxtw {dst}, {wsrc}");
+            }
+        }
+
+        // unbox_object dst, src -- Zero-extend lower 48 bits (extract pointer).
+        // On aarch64: single `and` with 48-bit logical immediate.
+        "unbox_object" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                w!(out, "    and {dst}, {src}, #0xffffffffffff");
+            }
+        }
+
+        // box_int32 dst, src -- NaN-box a raw int32 (mask low 32 bits, set tag).
+        // On aarch64: `mov wD, wS` (zero-extends) + `movk xD, #tag, lsl #48`.
+        "box_int32" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let wdst = to_w_reg(&dst);
+                let wsrc = to_w_reg(&src);
+                let tag = program
+                    .constants
+                    .get("INT32_TAG")
+                    .copied()
+                    .expect("INT32_TAG constant required for box_int32");
+                // NB: The mov wD is always emitted even when dst == src, because
+                // writing a 32-bit register zeros the upper 32 bits.
+                w!(out, "    mov {wdst}, {wsrc}");
+                w!(out, "    movk {dst}, #0x{tag:x}, lsl #48");
+            }
+        }
+
+        // box_int32_clean dst, src -- NaN-box an already zero-extended int32.
+        // Upper 32 bits are known zero, so just set the tag.
+        "box_int32_clean" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let tag = program
+                    .constants
+                    .get("INT32_TAG")
+                    .copied()
+                    .expect("INT32_TAG constant required for box_int32_clean");
+                if dst != src {
+                    w!(out, "    mov {dst}, {src}");
+                }
+                w!(out, "    movk {dst}, #0x{tag:x}, lsl #48");
             }
         }
 
@@ -1231,6 +1331,65 @@ fn emit_instruction(
             if insn.operands.len() == 1 {
                 let dst = resolve_op(&insn.operands[0], handler, program);
                 w!(out, "    mvn {dst}, {dst}");
+            }
+        }
+
+        // 32-bit arithmetic with overflow detection.
+        // These perform the operation on the low 32 bits and branch on signed overflow.
+        "add32_overflow" | "sub32_overflow" => {
+            if insn.operands.len() == 3 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let wdst = to_w_reg(&dst);
+                let label = resolve_label(&insn.operands[2], handler);
+                let op = if m == "add32_overflow" { "adds" } else { "subs" };
+                if let Some(val) = get_immediate_value(&insn.operands[1], program) {
+                    if val > 0 && val <= 4095 {
+                        w!(out, "    {op} {wdst}, {wdst}, #{val}");
+                    } else {
+                        emit_mov_imm(out, "w9", val);
+                        w!(out, "    {op} {wdst}, {wdst}, w9");
+                    }
+                } else {
+                    let src = resolve_op(&insn.operands[1], handler, program);
+                    let wsrc = to_w_reg(&src);
+                    w!(out, "    {op} {wdst}, {wdst}, {wsrc}");
+                }
+                w!(out, "    b.vs {label}");
+            }
+        }
+
+        "mul32_overflow" => {
+            if insn.operands.len() == 3 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let wdst = to_w_reg(&dst);
+                let label = resolve_label(&insn.operands[2], handler);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                let wsrc = to_w_reg(&src);
+                // ARM64 mul doesn't set overflow flag, so we use smull + check.
+                // smull gives full 64-bit result of 32x32 signed multiply.
+                w!(out, "    smull {dst}, {wdst}, {wsrc}");
+                w!(out, "    sxtw x9, {wdst}");
+                w!(out, "    cmp {dst}, x9");
+                w!(out, "    b.ne {label}");
+            }
+        }
+
+        "neg32_overflow" => {
+            if insn.operands.len() == 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let wdst = to_w_reg(&dst);
+                let label = resolve_label(&insn.operands[1], handler);
+                w!(out, "    negs {wdst}, {wdst}");
+                w!(out, "    b.vs {label}");
+            }
+        }
+
+        // not32 dst - Bitwise NOT on the low 32 bits, zeroing the upper 32.
+        "not32" => {
+            if insn.operands.len() == 1 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let wdst = to_w_reg(&dst);
+                w!(out, "    mvn {wdst}, {wdst}");
             }
         }
 
@@ -1349,6 +1508,9 @@ fn emit_instruction(
                                 // PC-relative address load
                                 let symbol = if mem.base == "rip" { idx } else { &mem.base };
                                 emit_symbol_addr(out, &dst, symbol, program.object_format);
+                            } else if mem.base == "x26" && idx == "x25" {
+                                // pb + pc is cached in x21 (set at handler entry)
+                                w!(out, "    mov {dst}, x21");
                             } else {
                                 w!(out, "    add {dst}, {}, {idx}", mem.base);
                             }
@@ -1595,6 +1757,8 @@ fn emit_instruction(
         }
 
         // Floating-point compare-and-branch operations.
+        // Consecutive branch_fp_* with the same operands share one fcmp,
+        // since fcmp sets all the flags these branches test.
         "branch_fp_unordered" | "branch_fp_equal" | "branch_fp_less"
         | "branch_fp_less_or_equal" | "branch_fp_greater"
         | "branch_fp_greater_or_equal" => {
@@ -1611,15 +1775,27 @@ fn emit_instruction(
                     "branch_fp_greater_or_equal" => "b.ge",
                     _ => unreachable!(),
                 };
-                w!(out, "    fcmp {a}, {b}");
+                let need_compare = match &state.last_fp_compare {
+                    Some((prev_a, prev_b)) => *prev_a != a || *prev_b != b,
+                    None => true,
+                };
+                if need_compare {
+                    w!(out, "    fcmp {a}, {b}");
+                    state.last_fp_compare = Some((a, b));
+                }
                 w!(out, "    {cc} {label}");
             }
+            return;
         }
 
         _ => {
             panic!("Unknown instruction '{m}' in handler '{}'", handler.name);
         }
     }
+
+    // Any non-branch_fp instruction may clobber flags, invalidating the
+    // cached FP comparison. branch_fp_* returns early above to skip this.
+    state.last_fp_compare = None;
 }
 
 /// Emit a memory load with the appropriate ARM64 instruction based on size.
