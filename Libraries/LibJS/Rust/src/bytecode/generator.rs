@@ -435,12 +435,13 @@ impl Generator {
         &mut self,
         operand: &ScopedOperand,
     ) -> ScopedOperand {
-        if operand.operand().is_local() {
-            let reg = self.allocate_register();
-            self.emit_mov(&reg, operand);
-            reg
-        } else {
-            operand.clone()
+        match operand.operand().operand_type() {
+            OperandType::Register | OperandType::Constant => operand.clone(),
+            OperandType::Local | OperandType::Argument => {
+                let reg = self.allocate_register();
+                self.emit_mov(&reg, operand);
+                reg
+            }
         }
     }
 

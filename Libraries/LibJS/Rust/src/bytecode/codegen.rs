@@ -438,6 +438,31 @@ fn generate_unary_expression(
     Some(dst)
 }
 
+fn might_contain_assignment_expression(expression: &Expression) -> bool {
+    match &expression.inner {
+        ExpressionKind::NumericLiteral(_)
+        | ExpressionKind::StringLiteral(_)
+        | ExpressionKind::BooleanLiteral(_)
+        | ExpressionKind::NullLiteral
+        | ExpressionKind::Identifier(_) => false,
+        ExpressionKind::Unary { op: _, operand } => might_contain_assignment_expression(operand),
+        ExpressionKind::Binary { op: _, lhs, rhs } => {
+            might_contain_assignment_expression(lhs) || might_contain_assignment_expression(rhs)
+        }
+        ExpressionKind::Member {
+            object,
+            property,
+            computed: _,
+        } => {
+            might_contain_assignment_expression(object)
+                || might_contain_assignment_expression(property)
+        }
+        // Conservatively consider everything else, including assignments themselves as potentially
+        // assigning.
+        _ => true,
+    }
+}
+
 fn generate_binary_expression(
     generator: &mut Generator,
     op: BinaryOp,
@@ -476,6 +501,19 @@ fn generate_binary_expression(
         }
         _ => generate_expression(lhs, generator, None)?,
     };
+
+    // OPTIMIZATION: We do need to make a copy of the LHS here in case evaluation of the RHS
+    // reassigns it. However, binary expressions are a pretty common thing, so doing the copy
+    // unconditionally is a noticable performance hit, especially because in practice, the copy is
+    // almost never needed. We add a small heuristic here that detects the most common cases.
+    // FIXME: This is a pretty narrow optimization. Maybe instead, it would make sense to have a
+    // more general "remove unnecessary mov-operations" as part of a bytecode optimization pass.
+    let lhs_val = if might_contain_assignment_expression(rhs) {
+        generator.copy_if_needed_to_preserve_evaluation_order(&lhs_val)
+    } else {
+        lhs_val
+    };
+
     let rhs_val = match op {
         BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
             if let ExpressionKind::NumericLiteral(n) = &rhs.inner {
@@ -3575,6 +3613,7 @@ fn generate_assignment_expression(
 
                 // Load LHS value first (needed for both compound and logical assignments).
                 let lhs_val = generate_identifier(ident, generator, None)?;
+                let lhs_val = generator.copy_if_needed_to_preserve_evaluation_order(&lhs_val);
 
                 let is_logical = matches!(
                     op,
@@ -5312,6 +5351,7 @@ fn generate_object_expression(
         let effectively_computed = property.is_computed && !is_string_literal_key;
         let computed_key = if effectively_computed || !is_string_key {
             let key = generate_expression_or_undefined(&property.key, generator, None);
+            let key = generator.copy_if_needed_to_preserve_evaluation_order(&key);
             generator.emit(Instruction::ToPrimitiveWithStringHint {
                 dst: key.operand(),
                 value: key.operand(),
