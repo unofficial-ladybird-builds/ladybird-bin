@@ -304,7 +304,7 @@ String CalendarPattern::to_pattern() const
     if (minute.has_value()) {
         switch (*minute) {
         case CalendarPatternStyle::Numeric:
-            builder.append("m"sv);
+            builder.append(time_zone_name.has_value() ? "mm"sv : "m"sv);
             break;
         case CalendarPatternStyle::TwoDigit:
             builder.append("mm"sv);
@@ -316,7 +316,7 @@ String CalendarPattern::to_pattern() const
     if (second.has_value()) {
         switch (*second) {
         case CalendarPatternStyle::Numeric:
-            builder.append("s"sv);
+            builder.append(time_zone_name.has_value() ? "ss"sv : "s"sv);
             break;
         case CalendarPatternStyle::TwoDigit:
             builder.append("ss"sv);
@@ -627,16 +627,7 @@ static void apply_time_zone_to_formatter(icu::SimpleDateFormat& formatter, icu::
     auto* calendar = icu::Calendar::createInstance(time_zone_data->time_zone(), locale, status);
     verify_icu_success(status);
 
-    if (calendar->getDynamicClassID() == icu::GregorianCalendar::getStaticClassID()) {
-        // https://tc39.es/ecma262/#sec-time-values-and-time-range
-        // A time value supports a slightly smaller range of -8,640,000,000,000,000 to 8,640,000,000,000,000 milliseconds.
-        static constexpr double ECMA_262_MINIMUM_TIME = -8.64E15;
-
-        auto* gregorian_calendar = static_cast<icu::GregorianCalendar*>(calendar);
-        gregorian_calendar->setGregorianChange(ECMA_262_MINIMUM_TIME, status);
-        verify_icu_success(status);
-    }
-
+    CalendarData::adjust_time_range_for_proleptic_calendar(*calendar);
     formatter.adoptCalendar(calendar);
 }
 
