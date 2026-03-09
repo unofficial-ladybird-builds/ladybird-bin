@@ -112,7 +112,7 @@ fn generate_entry_point(out: &mut String, program: &Program) {
         .constants
         .get("INTERPRETER_RUNNING_EXECUTION_CONTEXT")
         .copied()
-        .unwrap_or(0);
+        .expect("INTERPRETER_RUNNING_EXECUTION_CONTEXT constant required");
     w!(
         out,
         "    mov QWORD PTR [rbp - 48], rcx  # save Interpreter*"
@@ -173,22 +173,22 @@ fn emit_state_reload(out: &mut String, program: &Program) {
         .constants
         .get("INTERPRETER_RUNNING_EXECUTION_CONTEXT")
         .copied()
-        .unwrap_or(0);
+        .expect("INTERPRETER_RUNNING_EXECUTION_CONTEXT constant required");
     let exec_executable = program
         .constants
         .get("EXECUTION_CONTEXT_EXECUTABLE")
         .copied()
-        .unwrap_or(0);
+        .expect("EXECUTION_CONTEXT_EXECUTABLE constant required");
     let exec_bytecode = program
         .constants
         .get("EXECUTABLE_BYTECODE_DATA")
         .copied()
-        .unwrap_or(0);
+        .expect("EXECUTABLE_BYTECODE_DATA constant required");
     let sizeof_execctx = program
         .constants
         .get("SIZEOF_EXECUTION_CONTEXT")
         .copied()
-        .unwrap_or(0);
+        .expect("SIZEOF_EXECUTION_CONTEXT constant required");
     w!(out, "    mov rcx, QWORD PTR [rbp - 48]");
     w!(out, "    mov rbx, QWORD PTR [rcx + {interp_ctx}]");
     w!(out, "    mov rcx, QWORD PTR [rbx + {exec_executable}]");
@@ -270,7 +270,7 @@ fn resolve_op(op: &Operand, handler: &Handler, program: &Program) -> String {
                             .constants
                             .get(sc.as_str())
                             .copied()
-                            .unwrap_or_else(|| sc.parse().unwrap_or(1));
+                            .unwrap_or_else(|| sc.parse().expect("invalid scale value"));
                         format!("[{base_r} + {idx_r} * {sc_val}]")
                     }
                 }
@@ -346,7 +346,7 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                 .constants
                 .get("INTERPRETER_RUNNING_EXECUTION_CONTEXT")
                 .copied()
-                .unwrap_or(0);
+                .expect("INTERPRETER_RUNNING_EXECUTION_CONTEXT constant required");
             w!(out, "    mov rcx, QWORD PTR [rbp - 48]");
             w!(out, "    mov rbx, QWORD PTR [rcx + {interp_ctx}]");
         }
@@ -994,6 +994,22 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                     _ => unreachable!(),
                 };
                 w!(out, "    test {a}, {a}");
+                w!(out, "    {cc} {label}");
+            }
+        }
+
+        // branch_zero32 / branch_nonzero32: test only the low 32 bits.
+        "branch_zero32" | "branch_nonzero32" => {
+            if insn.operands.len() == 2 {
+                let a = resolve_op(&insn.operands[0], handler, program);
+                let a32 = to_32bit_reg(&a);
+                let label = resolve_label(&insn.operands[1], handler);
+                let cc = match m.as_str() {
+                    "branch_zero32" => "jz",
+                    "branch_nonzero32" => "jnz",
+                    _ => unreachable!(),
+                };
+                w!(out, "    test {a32}, {a32}");
                 w!(out, "    {cc} {label}");
             }
         }
