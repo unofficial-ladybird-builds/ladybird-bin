@@ -1659,7 +1659,12 @@ bool Document::layout_is_up_to_date() const
     CSS::RequiredInvalidationAfterStyleChange node_invalidation;
     if (is<Element>(node)) {
         auto& element = static_cast<Element&>(node);
-        if (needs_full_style_update || node.needs_style_update() || parent_display_changed || (recompute_elements_depending_on_custom_properties && element.style_uses_var_css_function())) {
+
+        // FIXME: We can avoid some unnecessary re-computations by, skipping if a) the contained if() functions don't
+        //        include media conditions, or b) the data used to resolve media queries hasn't changed.
+        bool const needs_style_update_due_to_if_media = element.style_uses_if_css_function();
+
+        if (needs_full_style_update || node.needs_style_update() || parent_display_changed || (recompute_elements_depending_on_custom_properties && element.style_uses_var_css_function()) || needs_style_update_due_to_if_media) {
             node_invalidation = element.recompute_style(did_change_custom_properties);
         } else if (needs_inherited_style_update) {
             node_invalidation = element.recompute_inherited_style();
@@ -1824,6 +1829,15 @@ bool Document::element_needs_style_update(AbstractElement const& abstract_elemen
             return true;
         if (ancestor->element().entire_subtree_needs_style_update())
             return true;
+    }
+
+    // If the navigable has a container and that container needs a style update, then we need one as well, since the
+    // container's style can affect this element (e.g. via media queries or viewport units).
+    if (auto navigable = this->navigable()) {
+        if (auto container = navigable->container()) {
+            if (container->document().element_needs_style_update(AbstractElement { *container }))
+                return true;
+        }
     }
 
     return false;

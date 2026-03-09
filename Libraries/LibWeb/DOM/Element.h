@@ -296,8 +296,6 @@ public:
     void set_custom_property_data(Optional<CSS::PseudoElement>, RefPtr<CSS::CustomPropertyData const>);
     [[nodiscard]] RefPtr<CSS::CustomPropertyData const> custom_property_data(Optional<CSS::PseudoElement>) const;
 
-    // FIXME: None of these flags ever get unset should this element's style change so that it no longer relies on these
-    //        things - doing so would potentially improve performance by avoiding unnecessary style invalidations.
     bool style_uses_attr_css_function() const { return m_style_uses_attr_css_function; }
     void set_style_uses_attr_css_function() { m_style_uses_attr_css_function = true; }
     bool style_uses_var_css_function() const { return m_style_uses_var_css_function; }
@@ -310,6 +308,8 @@ public:
 
         m_style_uses_tree_counting_function = true;
     }
+    bool style_uses_if_css_function() const { return m_style_uses_if_css_function; }
+    void set_style_uses_if_css_function() { m_style_uses_if_css_function = true; }
 
     bool child_style_uses_tree_counting_function() const { return m_child_style_uses_tree_counting_function; }
     void set_child_style_uses_tree_counting_function() { m_child_style_uses_tree_counting_function = true; }
@@ -687,6 +687,7 @@ private:
     bool m_style_uses_attr_css_function : 1 { false };
     bool m_style_uses_var_css_function : 1 { false };
     bool m_style_uses_tree_counting_function : 1 { false };
+    bool m_style_uses_if_css_function : 1 { false };
     bool m_child_style_uses_tree_counting_function : 1 { false };
     bool m_affected_by_has_pseudo_class_in_subject_position : 1 { false };
     bool m_affected_by_has_pseudo_class_in_non_subject_position : 1 { false };

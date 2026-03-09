@@ -168,16 +168,14 @@ public:
 
     [[nodiscard]] LengthOrCalculated parse_as_sizes_attribute(DOM::Element const& element, HTML::HTMLImageElement const* img = nullptr);
 
-    enum class StopAtComma : u8 {
-        No,
-        Yes,
-    };
-    static Optional<Vector<ComponentValue>> parse_declaration_value(TokenStream<ComponentValue>&, StopAtComma = StopAtComma::No);
+    static Optional<Vector<ComponentValue>> parse_declaration_value(TokenStream<ComponentValue>&, Optional<Token::Type> end_token_type = {});
 
     NonnullRefPtr<StyleValue const> parse_with_a_syntax(Vector<ComponentValue> const& input, SyntaxNode const& syntax, Optional<DOM::AbstractElement> const& element = {});
 
     RefPtr<CalculatedStyleValue const> parse_calculated_value(ComponentValue const&);
     RefPtr<TreeCountingFunctionStyleValue const> parse_tree_counting_function(TokenStream<ComponentValue>&, TreeCountingFunctionStyleValue::ComputedType);
+
+    OwnPtr<BooleanExpression> parse_if_condition(TokenStream<ComponentValue>&);
 
 private:
     Parser(ParsingParams const&, Vector<Token>);
@@ -586,6 +584,7 @@ private:
     OwnPtr<BooleanExpression> parse_boolean_expression(TokenStream<ComponentValue>&, MatchResult result_for_general_enclosed, ParseTest parse_test);
     OwnPtr<BooleanExpression> parse_boolean_expression_group(TokenStream<ComponentValue>&, MatchResult result_for_general_enclosed, ParseTest parse_test);
 
+    OwnPtr<BooleanExpression> parse_supports_condition(TokenStream<ComponentValue>&);
     OwnPtr<BooleanExpression> parse_supports_feature(TokenStream<ComponentValue>&);
     OwnPtr<Supports::Declaration> parse_supports_declaration(TokenStream<ComponentValue>&);
 
