@@ -22,34 +22,7 @@ namespace JS {
 
 using ScriptOrModule = Variant<Empty, GC::Ref<Script>, GC::Ref<Module>>;
 
-class CachedSourceRange final : public GC::Cell {
-    GC_CELL(CachedSourceRange, GC::Cell);
-    GC_DECLARE_ALLOCATOR(CachedSourceRange);
-
-public:
-    CachedSourceRange(size_t program_counter, Variant<UnrealizedSourceRange, SourceRange> source_range)
-        : program_counter(program_counter)
-        , source_range(move(source_range))
-    {
-    }
-
-    SourceRange const& realize_source_range()
-    {
-        static SourceRange dummy_source_range { SourceCode::create({}, {}), {}, {} };
-
-        if (auto* unrealized = source_range.get_pointer<UnrealizedSourceRange>()) {
-            if (unrealized->source_code) {
-                source_range = unrealized->realize();
-            } else {
-                source_range = dummy_source_range;
-            }
-        }
-        return source_range.get<SourceRange>();
-    }
-
-    size_t program_counter { 0 };
-    Variant<UnrealizedSourceRange, SourceRange> source_range;
-};
+[[nodiscard]] JS_API ScriptOrModule script_or_module_from_cell(GC::Ptr<Cell>);
 
 // 9.4 Execution Contexts, https://tc39.es/ecma262/#sec-execution-contexts
 struct JS_API ExecutionContext {
@@ -66,30 +39,24 @@ private:
 public:
     // NB: The layout is: [registers | locals | constants | arguments]
     //     We only initialize registers and locals to empty, since constants are copied in right after.
-    ALWAYS_INLINE ExecutionContext(u32 registers_and_locals_count, u32 constants_count, u32 arguments_count)
+    ALWAYS_INLINE ExecutionContext(u32 registers_and_locals_count, u32 constants_count, u32 arguments_count_)
     {
-        VERIFY(!Checked<u32>::addition_would_overflow(registers_and_locals_count, constants_count, arguments_count));
-        registers_and_constants_and_locals_and_arguments_count = registers_and_locals_count + constants_count + arguments_count;
-        auto registers_and_locals_and_constants_count = registers_and_locals_count + constants_count;
+        VERIFY(!Checked<u32>::addition_would_overflow(registers_and_locals_count, constants_count, arguments_count_));
+        registers_and_constants_and_locals_and_arguments_count = registers_and_locals_count + constants_count + arguments_count_;
+        argument_count = arguments_count_;
         auto* values = registers_and_constants_and_locals_and_arguments();
         for (size_t i = 0; i < registers_and_locals_count; ++i)
             values[i] = js_special_empty_value();
-        arguments = { values + registers_and_locals_and_constants_count, arguments_count };
     }
 
     void operator delete(void* ptr);
 
     GC::Ptr<FunctionObject> function;                // [[Function]]
     GC::Ptr<Realm> realm;                            // [[Realm]]
-    ScriptOrModule script_or_module;                 // [[ScriptOrModule]]
+    GC::Ptr<Cell> script_or_module;                  // [[ScriptOrModule]] — points to Script or Module
     GC::Ptr<Environment> lexical_environment;        // [[LexicalEnvironment]]
     GC::Ptr<Environment> variable_environment;       // [[VariableEnvironment]]
     GC::Ptr<PrivateEnvironment> private_environment; // [[PrivateEnvironment]]
-
-    GC::Ptr<Object> global_object;
-    GC::Ptr<DeclarativeEnvironment> global_declarative_environment;
-    Utf16FlyString const* identifier_table { nullptr };
-    PropertyKey const* property_key_table { nullptr };
 
     u32 program_counter { 0 };
 
@@ -113,26 +80,37 @@ public:
 
     Value argument(size_t index) const
     {
-        if (index >= arguments.size()) [[unlikely]]
+        if (index >= argument_count) [[unlikely]]
             return js_undefined();
-        return arguments.data()[index];
+        return arguments_data()[index];
     }
 
-    Span<Value> arguments;
+    Span<Value> arguments_span()
+    {
+        return { arguments_data(), argument_count };
+    }
 
-    mutable GC::Ptr<CachedSourceRange> cached_source_range;
+    ReadonlySpan<Value> arguments_span() const
+    {
+        return { arguments_data(), argument_count };
+    }
 
-    // Non-standard: This points at something that owns this ExecutionContext, in case it needs to be protected from GC.
-    GC::Ptr<GC::Cell> context_owner;
+    Value* arguments_data()
+    {
+        return registers_and_constants_and_locals_and_arguments() + (registers_and_constants_and_locals_and_arguments_count - argument_count);
+    }
 
-    u32 passed_argument_count { 0 };
+    Value const* arguments_data() const
+    {
+        return registers_and_constants_and_locals_and_arguments() + (registers_and_constants_and_locals_and_arguments_count - argument_count);
+    }
 
     // Non-standard: Inline frame linkage for the bytecode interpreter.
     // When a JS-to-JS call is inlined in the dispatch loop, these fields
     // allow the Return handler to restore the caller's frame.
     ExecutionContext* caller_frame { nullptr };
+    u32 passed_argument_count { 0 };
     u32 caller_return_pc { 0 };
-    GC::Ptr<Bytecode::Executable> caller_executable;
     u32 caller_dst_raw { 0 };
     bool caller_is_construct { false };
 
@@ -145,13 +123,16 @@ private:
     }
 
     u32 registers_and_constants_and_locals_and_arguments_count { 0 };
+
+public:
+    u32 argument_count { 0 };
 };
 
 static_assert(IsTriviallyDestructible<ExecutionContext>);
 
 struct StackTraceElement {
     ExecutionContext* execution_context { nullptr };
-    GC::Ptr<CachedSourceRange> source_range;
+    Optional<SourceRange> source_range;
 };
 
 }

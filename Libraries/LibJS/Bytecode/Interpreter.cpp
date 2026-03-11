@@ -149,7 +149,7 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
     script_context->realm = &script_record.realm();
 
     // 5. Set the ScriptOrModule of scriptContext to scriptRecord.
-    script_context->script_or_module = GC::Ref<Script>(script_record);
+    script_context->script_or_module = &script_record;
 
     // 6. Set the VariableEnvironment of scriptContext to globalEnv.
     script_context->variable_environment = &global_environment;
@@ -271,7 +271,7 @@ ExecutionContext* Interpreter::push_inline_frame(
         return nullptr;
 
     // Copy arguments from caller's registers into callee's argument slots.
-    auto* callee_argument_values = callee_context->arguments.data();
+    auto* callee_argument_values = callee_context->arguments_data();
     for (u32 i = 0; i < insn_argument_count; ++i)
         callee_argument_values[i] = get(arguments[i]);
     for (size_t i = insn_argument_count; i < argument_count; ++i)
@@ -280,7 +280,6 @@ ExecutionContext* Interpreter::push_inline_frame(
 
     // Set up caller linkage so Return can restore the caller frame.
     callee_context->caller_frame = m_running_execution_context;
-    callee_context->caller_executable = m_running_execution_context->executable;
     callee_context->caller_dst_raw = dst_raw;
     callee_context->caller_return_pc = return_pc;
     callee_context->caller_is_construct = is_construct;
@@ -316,11 +315,6 @@ ExecutionContext* Interpreter::push_inline_frame(
     //     and global_declarative_environment, since the caller's realm may differ
     //     in cross-realm calls (e.g. iframe <-> parent).
     callee_context->executable = callee_executable;
-    auto& callee_realm = *callee_context->realm;
-    callee_context->global_object = callee_realm.global_object();
-    callee_context->global_declarative_environment = callee_realm.global_environment().declarative_record();
-    callee_context->identifier_table = callee_executable.identifier_table->identifiers().data();
-    callee_context->property_key_table = callee_executable.property_key_table->property_keys().data();
 
     // Copy constants (memcpy avoids aliasing issues with the scalar loop).
     auto* values = callee_context->registers_and_constants_and_locals_and_arguments();
@@ -808,12 +802,17 @@ void Interpreter::run_bytecode(size_t entry_point)
 
 Utf16FlyString const& Interpreter::get_identifier(IdentifierTableIndex index) const
 {
-    return m_running_execution_context->identifier_table[index.value];
+    return m_running_execution_context->executable->get_identifier(index);
 }
 
 PropertyKey const& Interpreter::get_property_key(PropertyKeyTableIndex index) const
 {
-    return m_running_execution_context->property_key_table[index.value];
+    return m_running_execution_context->executable->get_property_key(index);
+}
+
+DeclarativeEnvironment& Interpreter::global_declarative_environment()
+{
+    return realm().global_declarative_environment();
 }
 
 ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, Executable& executable, Optional<size_t> entry_point)
@@ -824,10 +823,6 @@ ThrowCompletionOr<Value> Interpreter::run_executable(ExecutionContext& context, 
     TemporaryChange restore_running_execution_context { m_running_execution_context, &context };
 
     context.executable = executable;
-    context.global_object = realm().global_object();
-    context.global_declarative_environment = realm().global_environment().declarative_record();
-    context.identifier_table = executable.identifier_table->identifiers().data();
-    context.property_key_table = executable.property_key_table->property_keys().data();
 
     VERIFY(executable.registers_and_locals_count + executable.constants.size() == executable.registers_and_locals_and_constants_count);
     VERIFY(executable.registers_and_locals_and_constants_count <= context.registers_and_constants_and_locals_and_arguments_span().size());
@@ -1076,8 +1071,8 @@ inline ThrowCompletionOr<Value> get_global(Interpreter& interpreter, IdentifierT
         //               we can use the cached environment binding index.
         if (cache.has_environment_binding_index) {
             if (cache.in_module_environment) {
-                auto module = vm.running_execution_context().script_or_module.get_pointer<GC::Ref<Module>>();
-                return (*module)->environment()->get_binding_value_direct(vm, cache.environment_binding_index);
+                auto* module = as_if<Module>(vm.running_execution_context().script_or_module.ptr());
+                return module->environment()->get_binding_value_direct(vm, cache.environment_binding_index);
             }
             return declarative_record.get_binding_value_direct(vm, cache.environment_binding_index);
         }
@@ -1087,10 +1082,10 @@ inline ThrowCompletionOr<Value> get_global(Interpreter& interpreter, IdentifierT
 
     auto& identifier = interpreter.get_identifier(identifier_index);
 
-    if (auto* module = vm.running_execution_context().script_or_module.get_pointer<GC::Ref<Module>>()) {
+    if (auto* module = as_if<Module>(vm.running_execution_context().script_or_module.ptr())) {
         // NOTE: GetGlobal is used to access variables stored in the module environment and global environment.
         //       The module environment is checked first since it precedes the global environment in the environment chain.
-        auto& module_environment = *(*module)->environment();
+        auto& module_environment = *module->environment();
         Optional<size_t> index;
         if (TRY(module_environment.has_binding(identifier, &index))) {
             if (index.has_value()) {
@@ -2307,8 +2302,8 @@ ThrowCompletionOr<void> SetGlobal::execute_impl(Bytecode::Interpreter& interpret
         //               we can use the cached environment binding index.
         if (cache.has_environment_binding_index) {
             if (cache.in_module_environment) {
-                auto module = vm.running_execution_context().script_or_module.get_pointer<GC::Ref<Module>>();
-                TRY((*module)->environment()->set_mutable_binding_direct(vm, cache.environment_binding_index, src, strict() == Strict::Yes));
+                auto* module = as_if<Module>(vm.running_execution_context().script_or_module.ptr());
+                TRY(module->environment()->set_mutable_binding_direct(vm, cache.environment_binding_index, src, strict() == Strict::Yes));
             } else {
                 TRY(declarative_record.set_mutable_binding_direct(vm, cache.environment_binding_index, src, strict() == Strict::Yes));
             }
@@ -2320,10 +2315,10 @@ ThrowCompletionOr<void> SetGlobal::execute_impl(Bytecode::Interpreter& interpret
 
     auto& identifier = interpreter.get_identifier(m_identifier);
 
-    if (auto* module = vm.running_execution_context().script_or_module.get_pointer<GC::Ref<Module>>()) {
+    if (auto* module = as_if<Module>(vm.running_execution_context().script_or_module.ptr())) {
         // NOTE: GetGlobal is used to access variables stored in the module environment and global environment.
         //       The module environment is checked first since it precedes the global environment in the environment chain.
-        auto& module_environment = *(*module)->environment();
+        auto& module_environment = *module->environment();
         Optional<size_t> index;
         if (TRY(module_environment.has_binding(identifier, &index))) {
             if (index.has_value()) {
@@ -2434,7 +2429,7 @@ ThrowCompletionOr<void> CreateVariable::execute_impl(Bytecode::Interpreter& inte
 
 void CreateRestParams::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    auto const arguments = interpreter.running_execution_context().arguments;
+    auto const arguments = interpreter.running_execution_context().arguments_span();
     auto arguments_count = interpreter.running_execution_context().passed_argument_count;
     auto array = MUST(Array::create(interpreter.realm(), 0));
     for (size_t rest_index = m_rest_index; rest_index < arguments_count; ++rest_index)
@@ -2445,7 +2440,7 @@ void CreateRestParams::execute_impl(Bytecode::Interpreter& interpreter) const
 void CreateArguments::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto const& function = interpreter.running_execution_context().function;
-    auto const arguments = interpreter.running_execution_context().arguments;
+    auto const arguments = interpreter.running_execution_context().arguments_span();
     auto const& environment = interpreter.running_execution_context().lexical_environment;
 
     auto passed_arguments = ReadonlySpan<Value> { arguments.data(), interpreter.running_execution_context().passed_argument_count };
@@ -2773,8 +2768,8 @@ NEVER_INLINE static ThrowCompletionOr<void> execute_call(
         return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
     ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
 
-    auto* callee_context_argument_values = callee_context->arguments.data();
-    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto* callee_context_argument_values = callee_context->arguments_data();
+    auto const callee_context_argument_count = callee_context->argument_count;
     auto const insn_argument_count = arguments.size();
 
     for (size_t i = 0; i < insn_argument_count; ++i)
@@ -2785,7 +2780,7 @@ NEVER_INLINE static ThrowCompletionOr<void> execute_call(
 
     Value retval;
     if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {
-        retval = TRY(perform_eval(vm, !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), strict == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
+        retval = TRY(perform_eval(vm, callee_context->argument_count > 0 ? callee_context->arguments_data()[0] : js_undefined(), strict == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
     } else if (call_type == CallType::Construct) {
         retval = TRY(function.internal_construct(*callee_context, function));
     } else {
@@ -2852,8 +2847,8 @@ NEVER_INLINE static ThrowCompletionOr<void> call_with_argument_array(
         return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
     ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
 
-    auto* callee_context_argument_values = callee_context->arguments.data();
-    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto* callee_context_argument_values = callee_context->arguments_data();
+    auto const callee_context_argument_count = callee_context->argument_count;
     auto const insn_argument_count = argument_array_length;
 
     for (size_t i = 0; i < insn_argument_count; ++i) {
@@ -2868,7 +2863,7 @@ NEVER_INLINE static ThrowCompletionOr<void> call_with_argument_array(
 
     Value retval;
     if (call_type == CallType::DirectEval && callee == interpreter.realm().intrinsics().eval_function()) {
-        retval = TRY(perform_eval(vm, !callee_context->arguments.is_empty() ? callee_context->arguments[0] : js_undefined(), strict == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
+        retval = TRY(perform_eval(vm, callee_context->argument_count > 0 ? callee_context->arguments_data()[0] : js_undefined(), strict == Strict::Yes ? CallerMode::Strict : CallerMode::NonStrict, EvalMode::Direct));
     } else if (call_type == CallType::Construct) {
         retval = TRY(function.internal_construct(*callee_context, function));
     } else {
@@ -2937,8 +2932,8 @@ ThrowCompletionOr<void> SuperCallWithArgumentArray::execute_impl(Bytecode::Inter
         return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
     ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
 
-    auto* callee_context_argument_values = callee_context->arguments.data();
-    auto const callee_context_argument_count = callee_context->arguments.size();
+    auto* callee_context_argument_values = callee_context->arguments_data();
+    auto const callee_context_argument_count = callee_context->argument_count;
     auto const insn_argument_count = argument_array_length;
 
     if (m_is_synthetic) {

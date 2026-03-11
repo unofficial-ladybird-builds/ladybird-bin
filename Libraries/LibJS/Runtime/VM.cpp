@@ -561,14 +561,14 @@ ScriptOrModule VM::get_active_script_or_module() const
 
     // 2. Let ec be the topmost execution context on the execution context stack whose ScriptOrModule component is not null.
     for (auto i = m_execution_context_stack.size() - 1; i > 0; i--) {
-        if (!m_execution_context_stack[i]->script_or_module.has<Empty>())
-            return m_execution_context_stack[i]->script_or_module;
+        if (m_execution_context_stack[i]->script_or_module)
+            return script_or_module_from_cell(m_execution_context_stack[i]->script_or_module);
     }
 
     // 3. If no such execution context exists, return null. Otherwise, return ec's ScriptOrModule.
     // Note: Since it is not empty we have 0 and since we got here all the
     //       above contexts don't have a non-null ScriptOrModule
-    return m_execution_context_stack[0]->script_or_module;
+    return script_or_module_from_cell(m_execution_context_stack[0]->script_or_module);
 }
 
 VM::StoredModule* VM::get_stored_module(ImportedModuleReferrer const&, ByteString const& filename, Utf16String const&)
@@ -797,30 +797,17 @@ void VM::load_imported_module(ImportedModuleReferrer referrer, ModuleRequest con
     finish_loading_imported_module(referrer, module_request, payload, module);
 }
 
-static GC::Ptr<CachedSourceRange> get_source_range(ExecutionContext* context)
+Vector<StackTraceElement> VM::stack_trace() const
 {
-    // native function
-    if (!context->executable)
-        return {};
-
-    if (!context->cached_source_range
-        || context->cached_source_range->program_counter != context->program_counter) {
-        auto unrealized_source_range = context->executable->source_range_at(context->program_counter);
-        context->cached_source_range = context->executable->heap().allocate<CachedSourceRange>(
-            context->program_counter,
-            move(unrealized_source_range));
-    }
-    return context->cached_source_range;
-}
-
-GC::ConservativeVector<StackTraceElement> VM::stack_trace() const
-{
-    GC::ConservativeVector<StackTraceElement> stack_trace(heap());
+    Vector<StackTraceElement> stack_trace;
     stack_trace.ensure_capacity(m_execution_context_stack.size());
     for (auto* context : m_execution_context_stack.in_reverse()) {
+        Optional<SourceRange> source_range;
+        if (context->executable)
+            source_range = context->executable->get_source_range(context->program_counter);
         stack_trace.append({
             .execution_context = context,
-            .source_range = get_source_range(context),
+            .source_range = move(source_range),
         });
     }
 
