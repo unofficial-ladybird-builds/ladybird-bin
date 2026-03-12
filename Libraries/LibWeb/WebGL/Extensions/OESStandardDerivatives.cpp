@@ -9,22 +9,21 @@
 #include <LibWeb/Bindings/OESStandardDerivativesPrototype.h>
 #include <LibWeb/WebGL/Extensions/OESStandardDerivatives.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGLRenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(OESStandardDerivatives);
 
-JS::ThrowCompletionOr<GC::Ptr<OESStandardDerivatives>> OESStandardDerivatives::create(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> OESStandardDerivatives::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<OESStandardDerivatives>(realm, context);
 }
 
-OESStandardDerivatives::OESStandardDerivatives(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+OESStandardDerivatives::OESStandardDerivatives(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_OES_standard_derivatives");
 }
 
 void OESStandardDerivatives::initialize(JS::Realm& realm)

@@ -913,6 +913,16 @@ void Parser::parse_partial_namespace(Interface& parent)
     parent.partial_namespaces.append(move(partial_namespace));
 }
 
+void Parser::parse_callback_interface(HashMap<ByteString, ByteString> extended_attributes, Interface& interface)
+{
+    assert_string("callback"sv);
+    consume_whitespace();
+    assert_string("interface"sv);
+    interface.is_callback_interface = true;
+    interface.extended_attributes = move(extended_attributes);
+    parse_interface(interface);
+}
+
 // https://webidl.spec.whatwg.org/#prod-Enum
 void Parser::parse_enumeration(HashMap<ByteString, ByteString> extended_attributes, Interface& interface)
 {
@@ -1149,6 +1159,8 @@ void Parser::parse_non_interface_entities(bool allow_interface, Interface& inter
             parse_interface_mixin(interface);
         } else if (lexer.next_is("partial namespace"sv)) {
             parse_partial_namespace(interface);
+        } else if (lexer.next_is("callback interface"sv)) {
+            parse_callback_interface(extended_attributes, interface);
         } else if (lexer.next_is("callback"sv)) {
             parse_callback_function(extended_attributes, interface);
         } else if ((allow_interface && !lexer.next_is("interface"sv) && !lexer.next_is("namespace"sv)) || !allow_interface) {
@@ -1277,7 +1289,12 @@ Interface& Parser::parse()
 
     parse_non_interface_entities(false, interface);
 
+    interface.referenced_interfaces.set(interface.name, &interface);
+
     for (auto& import : imports) {
+        interface.referenced_interfaces.set(import.name, &import);
+        interface.referenced_interfaces.update(import.referenced_interfaces);
+
         // FIXME: Instead of copying every imported entity into the current interface, query imports directly
         for (auto& partial_interface : import.partial_interfaces) {
             if (partial_interface->name == interface.name)

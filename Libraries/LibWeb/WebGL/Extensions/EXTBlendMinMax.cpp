@@ -9,22 +9,21 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/WebGL/Extensions/EXTBlendMinMax.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGLRenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(EXTBlendMinMax);
 
-JS::ThrowCompletionOr<GC::Ptr<EXTBlendMinMax>> EXTBlendMinMax::create(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> EXTBlendMinMax::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<EXTBlendMinMax>(realm, context);
 }
 
-EXTBlendMinMax::EXTBlendMinMax(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+EXTBlendMinMax::EXTBlendMinMax(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_EXT_blend_minmax");
 }
 
 void EXTBlendMinMax::initialize(JS::Realm& realm)

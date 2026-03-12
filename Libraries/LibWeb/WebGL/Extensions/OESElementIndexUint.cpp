@@ -9,22 +9,21 @@
 #include <LibWeb/Bindings/OESElementIndexUintPrototype.h>
 #include <LibWeb/WebGL/Extensions/OESElementIndexUint.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGLRenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(OESElementIndexUint);
 
-JS::ThrowCompletionOr<GC::Ptr<OESElementIndexUint>> OESElementIndexUint::create(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> OESElementIndexUint::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<OESElementIndexUint>(realm, context);
 }
 
-OESElementIndexUint::OESElementIndexUint(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+OESElementIndexUint::OESElementIndexUint(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_OES_element_index_uint");
 }
 
 void OESElementIndexUint::initialize(JS::Realm& realm)

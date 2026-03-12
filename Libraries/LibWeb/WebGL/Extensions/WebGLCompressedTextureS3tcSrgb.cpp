@@ -4,17 +4,21 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/WebGLCompressedTextureS3tcSrgbPrototype.h>
 #include <LibWeb/WebGL/Extensions/WebGLCompressedTextureS3tcSrgb.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(WebGLCompressedTextureS3tcSrgb);
 
-JS::ThrowCompletionOr<GC::Ptr<WebGLCompressedTextureS3tcSrgb>> WebGLCompressedTextureS3tcSrgb::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> WebGLCompressedTextureS3tcSrgb::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<WebGLCompressedTextureS3tcSrgb>(realm, context);
 }
@@ -23,7 +27,10 @@ WebGLCompressedTextureS3tcSrgb::WebGLCompressedTextureS3tcSrgb(JS::Realm& realm,
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_EXT_texture_compression_s3tc_srgb");
+    m_context->enable_compressed_texture_format(GL_COMPRESSED_SRGB_S3TC_DXT1_EXT);
+    m_context->enable_compressed_texture_format(GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT);
+    m_context->enable_compressed_texture_format(GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT);
+    m_context->enable_compressed_texture_format(GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT);
 }
 
 void WebGLCompressedTextureS3tcSrgb::initialize(JS::Realm& realm)

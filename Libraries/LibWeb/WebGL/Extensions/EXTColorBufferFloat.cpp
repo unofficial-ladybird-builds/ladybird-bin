@@ -9,22 +9,21 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/WebGL/Extensions/EXTColorBufferFloat.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGL2RenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(EXTColorBufferFloat);
 
-JS::ThrowCompletionOr<GC::Ptr<EXTColorBufferFloat>> EXTColorBufferFloat::create(JS::Realm& realm, GC::Ref<WebGL2RenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> EXTColorBufferFloat::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<EXTColorBufferFloat>(realm, context);
 }
 
-EXTColorBufferFloat::EXTColorBufferFloat(JS::Realm& realm, GC::Ref<WebGL2RenderingContext> context)
+EXTColorBufferFloat::EXTColorBufferFloat(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_EXT_color_buffer_float");
 }
 
 void EXTColorBufferFloat::initialize(JS::Realm& realm)

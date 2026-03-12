@@ -9,7 +9,7 @@
 #include <LibWeb/Bindings/WebGLDrawBuffersPrototype.h>
 #include <LibWeb/WebGL/Extensions/WebGLDrawBuffers.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGLRenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 #define GL_GLEXT_PROTOTYPES 1
 #include <GLES2/gl2.h>
@@ -19,16 +19,15 @@ namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(WebGLDrawBuffers);
 
-JS::ThrowCompletionOr<GC::Ptr<WebGLDrawBuffers>> WebGLDrawBuffers::create(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> WebGLDrawBuffers::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<WebGLDrawBuffers>(realm, context);
 }
 
-WebGLDrawBuffers::WebGLDrawBuffers(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+WebGLDrawBuffers::WebGLDrawBuffers(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_EXT_draw_buffers");
 }
 
 void WebGLDrawBuffers::draw_buffers_webgl(Vector<GLenum> buffers)

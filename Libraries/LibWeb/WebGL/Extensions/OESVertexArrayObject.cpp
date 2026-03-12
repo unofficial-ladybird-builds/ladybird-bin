@@ -10,7 +10,7 @@
 #include <LibWeb/WebGL/Extensions/OESVertexArrayObject.h>
 #include <LibWeb/WebGL/Extensions/WebGLVertexArrayObjectOES.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
-#include <LibWeb/WebGL/WebGLRenderingContext.h>
+#include <LibWeb/WebGL/WebGLRenderingContextBase.h>
 
 #define GL_GLEXT_PROTOTYPES 1
 #include <GLES2/gl2.h>
@@ -20,16 +20,15 @@ namespace Web::WebGL::Extensions {
 
 GC_DEFINE_ALLOCATOR(OESVertexArrayObject);
 
-JS::ThrowCompletionOr<GC::Ptr<OESVertexArrayObject>> OESVertexArrayObject::create(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+JS::ThrowCompletionOr<GC::Ref<JS::Object>> OESVertexArrayObject::create(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
 {
     return realm.create<OESVertexArrayObject>(realm, context);
 }
 
-OESVertexArrayObject::OESVertexArrayObject(JS::Realm& realm, GC::Ref<WebGLRenderingContext> context)
+OESVertexArrayObject::OESVertexArrayObject(JS::Realm& realm, GC::Ref<WebGLRenderingContextBase> context)
     : PlatformObject(realm)
     , m_context(context)
 {
-    m_context->context().request_extension("GL_OES_vertex_array_object");
 }
 
 GC::Ref<WebGLVertexArrayObjectOES> OESVertexArrayObject::create_vertex_array_oes()
