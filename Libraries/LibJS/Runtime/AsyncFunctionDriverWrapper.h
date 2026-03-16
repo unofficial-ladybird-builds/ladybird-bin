@@ -25,6 +25,7 @@ public:
     void visit_edges(Cell::Visitor&) override;
 
     void continue_async_execution(VM&, Value, bool is_successful);
+    void schedule_resume(Value, bool is_fulfilled);
 
 private:
     AsyncFunctionDriverWrapper(Realm&, GC::Ref<GeneratorObject>, GC::Ref<Promise> top_level_promise);
@@ -35,8 +36,7 @@ private:
     GC::Ptr<Promise> m_current_promise { nullptr };
     OwnPtr<ExecutionContext> m_suspended_execution_context;
 
-    GC::Ptr<NativeFunction> m_on_fulfilled;
-    GC::Ptr<NativeFunction> m_on_rejected;
+    GC::Ptr<NativeFunction> m_on_settled;
 };
 
 }
