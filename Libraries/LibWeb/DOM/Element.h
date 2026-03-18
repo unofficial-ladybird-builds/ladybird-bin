@@ -19,6 +19,7 @@
 #include <LibWeb/DOM/ParentNode.h>
 #include <LibWeb/DOM/PseudoElement.h>
 #include <LibWeb/DOM/QualifiedName.h>
+#include <LibWeb/DOM/RequestFullscreenError.h>
 #include <LibWeb/DOM/Slottable.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/HTML/AttributeNames.h>
@@ -270,6 +271,9 @@ public:
         WebDriver,
     };
     GC::Ref<WebIDL::Promise> request_fullscreen(FullscreenRequester = FullscreenRequester::Bindings);
+
+    RequestFullscreenError is_element_allowed_to_enter_fullscreen(FullscreenRequester) const;
+    bool is_element_ready_for_fullscreen() const;
 
     void set_fullscreen_flag(bool is_fullscreen) { m_fullscreen_flag = is_fullscreen; }
     bool is_fullscreen_element() const { return m_fullscreen_flag; }
@@ -604,18 +608,7 @@ private:
 
     void invalidate_style_after_attribute_change(FlyString const& attribute_name, Optional<String> const& old_value, Optional<String> const& new_value);
 
-    enum class RequestFullscreenError : u8 {
-        False,
-        ElementReadyCheckFailed,
-        UnsupportedElement,
-        NoTransientUserActivation,
-        ElementNodeDocIsNotPendingDoc
-    };
-    static Utf16String request_fullscreen_error_to_string(RequestFullscreenError);
-
     void exit_fullscreen_on_element_removal();
-    RequestFullscreenError is_element_allowed_to_enter_fullscreen(FullscreenRequester) const;
-    bool is_element_ready_for_fullscreen() const;
 
     WebIDL::ExceptionOr<GC::Ptr<Node>> insert_adjacent(StringView where, GC::Ref<Node> node);
 

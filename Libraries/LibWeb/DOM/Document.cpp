@@ -3691,7 +3691,7 @@ void Document::update_the_visibility_state(HTML::VisibilityState visibility_stat
     dispatch_event(event);
 }
 
-// https://drafts.csswg.org/cssom-view/#run-the-resize-steps
+// https://drafts.csswg.org/cssom-view/#document-run-the-resize-steps
 void Document::run_the_resize_steps()
 {
     // 1. If doc’s viewport has had its width or height changed
@@ -3706,19 +3706,27 @@ void Document::run_the_resize_steps()
     VisualViewportState visual_viewport_state = { visual_viewport.scale(), { visual_viewport.width(), visual_viewport.height() } };
     bool is_initial_size = !m_last_viewport_size.has_value();
 
-    if (m_last_viewport_size == viewport_size && m_last_visual_viewport_state == visual_viewport_state)
+    bool viewport_size_changed = m_last_viewport_size != viewport_size;
+    bool visual_viewport_state_changed = m_last_visual_viewport_state != visual_viewport_state;
+
+    if (!viewport_size_changed && !visual_viewport_state_changed)
         return;
+
     m_last_viewport_size = viewport_size;
     m_last_visual_viewport_state = visual_viewport_state;
 
     if (!is_initial_size) {
-        auto window_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
-        window_resize_event->set_is_trusted(true);
-        window()->dispatch_event(window_resize_event);
+        if (viewport_size_changed) {
+            auto window_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
+            window_resize_event->set_is_trusted(true);
+            window()->dispatch_event(window_resize_event);
+        }
 
-        auto visual_viewport_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
-        visual_viewport_resize_event->set_is_trusted(true);
-        visual_viewport.dispatch_event(visual_viewport_resize_event);
+        if (visual_viewport_state_changed) {
+            auto visual_viewport_resize_event = DOM::Event::create(realm(), UIEvents::EventNames::resize);
+            visual_viewport_resize_event->set_is_trusted(true);
+            visual_viewport.dispatch_event(visual_viewport_resize_event);
+        }
     }
 }
 
@@ -5027,6 +5035,14 @@ void Document::make_active()
     auto navigable = this->navigable();
     if (navigable) {
         m_visibility_state = navigable->traversable_navigable()->system_visibility_state();
+
+        // AD-HOC: Record the initial viewport and visual viewport state so that if the viewport changes before the
+        //         first rendering update (e.g. in our fullscreen tests), change events are still fired.
+        if (!m_last_viewport_size.has_value()) {
+            m_last_viewport_size = viewport_rect().size().to_type<int>();
+            auto& current_visual_viewport = *visual_viewport();
+            m_last_visual_viewport_state = VisualViewportState { current_visual_viewport.scale(), { current_visual_viewport.width(), current_visual_viewport.height() } };
+        }
     }
 
     // TODO: 4. Queue a new VisibilityStateEntry whose visibility state is document's visibility state and whose timestamp is zero.
@@ -6962,76 +6978,23 @@ GC::Ref<WebIDL::Promise> Document::exit_fullscreen()
     auto top_level_doc = navigable()->top_level_traversable()->active_document();
 
     // 6. If topLevelDoc is in docs, and it is a simple fullscreen document, then set doc to topLevelDoc and resize to true.
-    GC::Ref<Document> document_to_unfullscreen { *this };
+    GC::Ref<Document> doc { *this };
     if (top_level_doc && top_level_doc->is_simple_fullscreen_document() && docs->elements().contains_slow(GC::Ref { *top_level_doc })) {
-        document_to_unfullscreen = *top_level_doc;
+        doc = *top_level_doc;
         resize = true;
     }
 
     // 7. If doc’s fullscreen element is not connected:
-    if (auto fullscreen_element = document_to_unfullscreen->fullscreen_element(); !fullscreen_element->is_connected()) {
+    if (auto fullscreen_element = doc->fullscreen_element(); !fullscreen_element->is_connected()) {
         // 1. Append (fullscreenchange, doc’s fullscreen element) to doc’s list of pending fullscreen events.
-        document_to_unfullscreen->append_pending_fullscreen_change(PendingFullscreenEvent::Type::Change, *fullscreen_element);
+        doc->append_pending_fullscreen_change(PendingFullscreenEvent::Type::Change, *fullscreen_element);
 
         // 2. Unfullscreen doc’s fullscreen element.
-        document_to_unfullscreen->unfullscreen_element(*fullscreen_element);
+        doc->unfullscreen_element(*fullscreen_element);
     }
 
     // 8. Return promise, and run the remaining steps in parallel.
-    Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(heap(), [&realm, document_to_unfullscreen, promise, resize] {
-        HTML::TemporaryExecutionContext context(realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes);
-        // FIXME: 9. Run the fully unlock the screen orientation steps with doc.
-
-        // 10. If resize is true, resize doc’s viewport to its "normal" dimensions.
-        // NB: Fullscreen API is affected by site-isolation and will require additional work once site-isolation is implemented.
-        if (resize)
-            document_to_unfullscreen->page().client().page_did_request_exit_fullscreen();
-
-        // 11. If doc’s fullscreen element is null, then resolve promise with undefined and terminate these steps.
-        if (!document_to_unfullscreen->fullscreen_element()) {
-            WebIDL::resolve_promise(realm, promise, JS::js_undefined());
-            return;
-        }
-
-        // 12. Let exitDocs be the result of collecting documents to unfullscreen given doc.
-        auto exit_docs = document_to_unfullscreen->collect_documents_to_unfullscreen();
-
-        // 13. Let descendantDocs be an ordered set consisting of doc’s descendant navigables' active documents whose
-        //     fullscreen element is non-null, if any, in tree order.
-        auto descendant_docs = realm.heap().allocate<GC::HeapVector<GC::Ref<Document>>>();
-        for (auto& descendant : document_to_unfullscreen->descendant_navigables()) {
-            if (descendant->active_document()->fullscreen_element())
-                descendant_docs->elements().append(*descendant->active_document());
-        }
-
-        // 14. For each exitDoc in exitDocs:
-        for (auto& exit_doc : exit_docs->elements()) {
-            // 1. Append (fullscreenchange, exitDoc’s fullscreen element) to exitDoc’s list of pending fullscreen events.
-            exit_doc->append_pending_fullscreen_change(PendingFullscreenEvent::Type::Change, *exit_doc->fullscreen_element());
-
-            // 2. If resize is true, unfullscreen exitDoc.
-            if (resize)
-                exit_doc->unfullscreen();
-            // 3. Otherwise, unfullscreen exitDoc’s fullscreen element.
-            else
-                exit_doc->unfullscreen_element(*exit_doc->fullscreen_element());
-        }
-
-        // 15. For each descendantDoc in descendantDocs:
-        for (auto& descendant_doc : descendant_docs->elements()) {
-            // 1. Append (fullscreenchange, descendantDoc’s fullscreen element) to descendantDoc’s list of pending fullscreen events.
-            descendant_doc->append_pending_fullscreen_change(PendingFullscreenEvent::Type::Change, *descendant_doc->fullscreen_element());
-
-            // 2. Unfullscreen descendantDoc.
-            descendant_doc->unfullscreen();
-        }
-
-        // Note: The order in which documents are unfullscreened is not observable, because run the fullscreen steps is
-        //       invoked in tree order.
-
-        // 16. Resolve promise with undefined.
-        WebIDL::resolve_promise(realm, promise, JS::js_undefined());
-    }));
+    page().enqueue_fullscreen_exit(doc, resize, promise);
 
     return promise;
 }
