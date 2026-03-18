@@ -34,6 +34,7 @@
 #include <LibWeb/CSS/StyleValues/BorderRadiusRectStyleValue.h>
 #include <LibWeb/CSS/StyleValues/BorderRadiusStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorFunctionStyleValue.h>
+#include <LibWeb/CSS/StyleValues/ColorInterpolationMethodStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorMixStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ConicGradientStyleValue.h>
@@ -2198,63 +2199,60 @@ RefPtr<StyleValue const> Parser::parse_color_function(TokenStream<ComponentValue
         alpha.release_nonnull());
 }
 
+// https://drafts.csswg.org/css-color-5/#color-interpolation-method
+RefPtr<ColorInterpolationMethodStyleValue const> Parser::parse_color_interpolation_method_value(TokenStream<ComponentValue>& tokens)
+{
+    // <rectangular-color-space> = srgb | srgb-linear | display-p3 | display-p3-linear | a98-rgb | prophoto-rgb | rec2020 | lab | oklab | <xyz-space>
+    // <polar-color-space> = hsl | hwb | lch | oklch
+    // <custom-color-space> = <dashed-ident>
+    // <hue-interpolation-method> = [ shorter | longer | increasing | decreasing ] hue
+    // <color-interpolation-method> = in [ <rectangular-color-space> | <polar-color-space> <hue-interpolation-method>? | <custom-color-space> ]
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+    if (!tokens.consume_a_token().is_ident("in"sv))
+        return {};
+
+    tokens.discard_whitespace();
+
+    if (auto maybe_keyword_value = parse_keyword_value(tokens)) {
+        auto keyword = maybe_keyword_value->to_keyword();
+
+        // <rectangular-color-space>
+        if (auto rectangular_color_space = keyword_to_rectangular_color_space(keyword); rectangular_color_space.has_value()) {
+            if (rectangular_color_space == RectangularColorSpace::Xyz)
+                rectangular_color_space = RectangularColorSpace::XyzD65;
+            transaction.commit();
+            return ColorInterpolationMethodStyleValue::create(rectangular_color_space.release_value());
+        }
+
+        // <polar-color-space> <hue-interpolation-method>?
+        if (auto polar_color_space = keyword_to_polar_color_space(keyword); polar_color_space.has_value()) {
+            auto hue_interpolation_method = HueInterpolationMethod::Shorter;
+            tokens.discard_whitespace();
+            if (auto hue_interpolation_method_keyword = parse_keyword_value(tokens)) {
+                auto maybe_hue_interpolation_method = keyword_to_hue_interpolation_method(hue_interpolation_method_keyword->to_keyword());
+                if (!maybe_hue_interpolation_method.has_value())
+                    return {};
+
+                hue_interpolation_method = maybe_hue_interpolation_method.release_value();
+                tokens.discard_whitespace();
+                if (!tokens.consume_a_token().is_ident("hue"sv))
+                    return {};
+            }
+
+            transaction.commit();
+            return ColorInterpolationMethodStyleValue::create(ColorInterpolationMethodStyleValue::PolarColorInterpolationMethod { polar_color_space.release_value(), hue_interpolation_method });
+        }
+    }
+
+    // TODO: Support <custom-color-space> once we support @color-profile rules
+
+    return nullptr;
+}
+
 // https://drafts.csswg.org/css-color-5/#color-mix
 RefPtr<StyleValue const> Parser::parse_color_mix_function(TokenStream<ComponentValue>& tokens)
 {
-    auto parse_color_interpolation_method = [this](TokenStream<ComponentValue>& function_tokens) -> Optional<ColorMixStyleValue::ColorInterpolationMethod> {
-        // <rectangular-color-space> = srgb | srgb-linear | display-p3 | a98-rgb | prophoto-rgb | rec2020 | lab | oklab | <xyz-space>
-        // <polar-color-space> = hsl | hwb | lch | oklch
-        // <custom-color-space> = <dashed-ident>
-        // <hue-interpolation-method> = [ shorter | longer | increasing | decreasing ] hue
-        // <color-interpolation-method> = in [ <rectangular-color-space> | <polar-color-space> <hue-interpolation-method>? | <custom-color-space> ]
-        auto transaction = function_tokens.begin_transaction();
-        function_tokens.discard_whitespace();
-        if (!function_tokens.consume_a_token().is_ident("in"sv))
-            return {};
-        function_tokens.discard_whitespace();
-
-        String color_space;
-        Optional<HueInterpolationMethod> hue_interpolation_method;
-        auto color_space_value = parse_keyword_value(function_tokens);
-        if (color_space_value) {
-            auto color_space_keyword = color_space_value->to_keyword();
-            color_space = MUST(String::from_utf8(string_from_keyword(color_space_keyword)));
-            if (auto polar_color_space = keyword_to_polar_color_space(color_space_keyword); polar_color_space.has_value()) {
-                function_tokens.discard_whitespace();
-                if (auto hue_interpolation_method_keyword = parse_keyword_value(function_tokens)) {
-                    hue_interpolation_method = keyword_to_hue_interpolation_method(hue_interpolation_method_keyword->to_keyword());
-                    if (!hue_interpolation_method.has_value())
-                        return {};
-
-                    function_tokens.discard_whitespace();
-                    if (!function_tokens.consume_a_token().is_ident("hue"sv))
-                        return {};
-
-                    function_tokens.discard_whitespace();
-                }
-            }
-        } else {
-            auto color_space_token = function_tokens.consume_a_token();
-            if (!color_space_token.is(Token::Type::Ident))
-                return {};
-            color_space = color_space_token.token().ident().to_string();
-        }
-
-        function_tokens.discard_whitespace();
-
-        auto canonical_color_space_name = [](String const& color_space_name) {
-            if (color_space_name == "xyz"sv)
-                return "xyz-d65"_string;
-            return color_space_name;
-        };
-
-        transaction.commit();
-        return ColorMixStyleValue::ColorInterpolationMethod {
-            .color_space = canonical_color_space_name(color_space),
-            .hue_interpolation_method = hue_interpolation_method,
-        };
-    };
-
     auto parse_component = [this](TokenStream<ComponentValue>& function_tokens) -> Optional<ColorMixStyleValue::ColorMixComponent> {
         function_tokens.discard_whitespace();
         auto percentage_style_value = parse_percentage_value(function_tokens);
@@ -2300,8 +2298,8 @@ RefPtr<StyleValue const> Parser::parse_color_mix_function(TokenStream<ComponentV
 
     auto context_guard = push_temporary_value_parsing_context(FunctionContext { function_token.function().name });
     auto function_tokens = TokenStream { function_token.function().value };
-    auto color_interpolation_method = parse_color_interpolation_method(function_tokens);
-    if (color_interpolation_method.has_value()) {
+    auto color_interpolation_method = parse_color_interpolation_method_value(function_tokens);
+    if (color_interpolation_method) {
         function_tokens.discard_whitespace();
         if (!function_tokens.consume_a_token().is(Token::Type::Comma))
             return {};
