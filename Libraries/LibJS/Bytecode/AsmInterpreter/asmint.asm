@@ -1318,8 +1318,11 @@ end
 # Property access (indexed + named + inline caches)
 # ============================================================================
 
-# Fast path for array[int32_index] = value with simple indexed storage.
+# Fast path for array[int32_index] = value with Packed/Holey indexed storage.
 handler PutByValue
+    # Only fast-path Normal puts (not Getter/Setter/Own)
+    load8 t0, [pb, pc, m_kind]
+    branch_ne t0, PUT_KIND_NORMAL, .slow
     load_operand t1, m_base
     load_operand t2, m_property
     # Check base is an object
@@ -1339,21 +1342,25 @@ handler PutByValue
     branch_bits_set t0, OBJECT_FLAG_IS_TYPED_ARRAY, .try_typed_array
     # Check !may_interfere_with_indexed_property_access
     branch_bits_set t0, OBJECT_FLAG_MAY_INTERFERE, .slow
-    # Load indexed property storage pointer
-    load64 t0, [t3, OBJECT_INDEXED_PROPERTIES]
-    branch_zero t0, .slow
-    # Check is_simple_storage
-    load8 t5, [t0, INDEXED_PROPERTY_STORAGE_IS_SIMPLE]
-    branch_zero t5, .slow
-    # Check index < m_array_size
-    load64 t5, [t0, INDEXED_PROPERTY_STORAGE_ARRAY_SIZE]
+    # Packed is the hot path: existing elements can be overwritten directly.
+    load8 t0, [t3, OBJECT_INDEXED_STORAGE_KIND]
+    branch_ne t0, INDEXED_STORAGE_KIND_PACKED, .not_packed
+    # Check index vs array_like_size
+    load32 t5, [t3, OBJECT_INDEXED_ARRAY_LIKE_SIZE]
     branch_ge_unsigned t4, t5, .slow
-    # Check existing value is not empty (hole) - holes need prototype chain lookup
-    load64 t5, [t0, SIMPLE_INDEXED_PROPERTY_STORAGE_PACKED_DATA]
+    load64 t5, [t3, OBJECT_INDEXED_ELEMENTS]
+    load_operand t1, m_src
+    store64 [t5, t4, 8], t1
+    dispatch_next
+.not_packed:
+    branch_ne t0, INDEXED_STORAGE_KIND_HOLEY, .slow
+    # Holey arrays need a slot load to distinguish existing elements from holes.
+    load32 t5, [t3, OBJECT_INDEXED_ARRAY_LIKE_SIZE]
+    branch_ge_unsigned t4, t5, .slow
+    load64 t5, [t3, OBJECT_INDEXED_ELEMENTS]
     load64 t1, [t5, t4, 8]
     mov t0, EMPTY_TAG_SHIFTED
     branch_eq t1, t0, .slow
-    # Store value to m_packed_elements.data()[index]
     load_operand t1, m_src
     store64 [t5, t4, 8], t1
     dispatch_next
@@ -1460,7 +1467,7 @@ handler GetById
     branch_ne t0, t2, .try_cache
     # IC hit! Load property value via get_direct (own property)
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t5, [t3, OBJECT_STORAGE_DATA]
+    load64 t5, [t3, OBJECT_NAMED_PROPERTIES]
     load64 t0, [t5, t0, 8]
     # Check value is not an accessor
     extract_tag t2, t0
@@ -1480,7 +1487,7 @@ handler GetById
     branch_ne t1, t2, .try_cache
     # IC hit! Load property value via get_direct (from prototype)
     load32 t1, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t2, [t0, OBJECT_STORAGE_DATA]
+    load64 t2, [t0, OBJECT_NAMED_PROPERTIES]
     load64 t0, [t2, t1, 8]
     # Check value is not an accessor
     extract_tag t2, t0
@@ -1521,7 +1528,7 @@ handler PutById
     branch_ne t0, t2, .try_cache
     # Check current value at property_offset is not an accessor
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t5, [t3, OBJECT_STORAGE_DATA]
+    load64 t5, [t3, OBJECT_NAMED_PROPERTIES]
     load64 t2, [t5, t0, 8]
     extract_tag t4, t2
     branch_eq t4, ACCESSOR_TAG, .try_cache
@@ -1541,7 +1548,7 @@ handler PutById
     dispatch_next
 end
 
-# Fast path for array[int32_index] with simple indexed storage.
+# Fast path for array[int32_index] with Packed/Holey indexed storage.
 handler GetByValue
     load_operand t1, m_base
     load_operand t2, m_property
@@ -1563,23 +1570,27 @@ handler GetByValue
     branch_bits_set t0, OBJECT_FLAG_IS_TYPED_ARRAY, .try_typed_array
     # Check !may_interfere_with_indexed_property_access
     branch_bits_set t0, OBJECT_FLAG_MAY_INTERFERE, .slow
-    # Load indexed property storage pointer
-    load64 t0, [t3, OBJECT_INDEXED_PROPERTIES]
-    branch_zero t0, .slow
-    # Check is_simple_storage
-    load8 t5, [t0, INDEXED_PROPERTY_STORAGE_IS_SIMPLE]
-    branch_zero t5, .slow
-    # Check index < m_array_size
-    load64 t5, [t0, INDEXED_PROPERTY_STORAGE_ARRAY_SIZE]
+    # Packed is the hot path: in-bounds elements are always present.
+    load8 t0, [t3, OBJECT_INDEXED_STORAGE_KIND]
+    branch_ne t0, INDEXED_STORAGE_KIND_PACKED, .not_packed
+    # Check index < array_like_size
+    load32 t5, [t3, OBJECT_INDEXED_ARRAY_LIKE_SIZE]
     branch_ge_unsigned t4, t5, .slow
-    # Load value from m_packed_elements.data()[index]
-    load64 t5, [t0, SIMPLE_INDEXED_PROPERTY_STORAGE_PACKED_DATA]
+    load64 t5, [t3, OBJECT_INDEXED_ELEMENTS]
     load64 t0, [t5, t4, 8]
-    # Check value is not empty (sparse hole)
+    # NB: No accessor check needed -- Packed/Holey storage
+    #     can only hold default-attributed data properties.
+    store_operand m_dst, t0
+    dispatch_next
+.not_packed:
+    branch_ne t0, INDEXED_STORAGE_KIND_HOLEY, .slow
+    # Holey arrays need a slot load to distinguish present elements from holes.
+    load32 t5, [t3, OBJECT_INDEXED_ARRAY_LIKE_SIZE]
+    branch_ge_unsigned t4, t5, .slow
+    load64 t5, [t3, OBJECT_INDEXED_ELEMENTS]
+    load64 t0, [t5, t4, 8]
     mov t5, EMPTY_TAG_SHIFTED
     branch_eq t0, t5, .slow
-    # NB: No accessor check needed -- SimpleIndexedPropertyStorage
-    #     can only hold default-attributed data properties.
     store_operand m_dst, t0
     dispatch_next
 .try_typed_array:
@@ -1715,30 +1726,22 @@ handler GetLength
     branch_ne t0, t2, .slow
     # IC hit
     load32 t0, [t5, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t5, [t3, OBJECT_STORAGE_DATA]
+    load64 t5, [t3, OBJECT_NAMED_PROPERTIES]
     load64 t0, [t5, t0, 8]
     extract_tag t2, t0
     branch_eq t2, ACCESSOR_TAG, .slow
     store_operand m_dst, t0
     dispatch_next
 .magical_length:
-    # Object.m_indexed_properties
-    load64 t0, [t3, OBJECT_INDEXED_PROPERTIES]
-    # If storage is null, length is 0
-    branch_zero t0, .length_zero
-    # IndexedPropertyStorage.m_array_size
-    load64 t0, [t0, INDEXED_PROPERTY_STORAGE_ARRAY_SIZE]
-    # Box as int32 if fits, otherwise double
+    # Object.m_indexed_array_like_size (u32)
+    load32 t0, [t3, OBJECT_INDEXED_ARRAY_LIKE_SIZE]
+    # Box as int32 if fits (u32 always fits since bit 31 check is for sign)
     mov t2, t0
     shr t2, 31
     branch_nonzero t2, .length_double
     # Tag as int32
     box_int32 t3, t0
     store_operand m_dst, t3
-    dispatch_next
-.length_zero:
-    mov t0, INT32_TAG_SHIFTED
-    store_operand m_dst, t0
     dispatch_next
 .length_double:
     int_to_double ft0, t0
@@ -1772,7 +1775,7 @@ handler GetGlobal
     branch_ne t0, t5, .try_env_binding
     # IC hit! Load property value via get_direct
     load32 t0, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t5, [t2, OBJECT_STORAGE_DATA]
+    load64 t5, [t2, OBJECT_NAMED_PROPERTIES]
     load64 t0, [t5, t0, 8]
     # Check not accessor
     extract_tag t5, t0
@@ -1830,7 +1833,7 @@ handler SetGlobal
     branch_ne t0, t5, .try_env_binding
     # IC hit! Load current value to check it's not an accessor
     load32 t1, [t3, PROPERTY_LOOKUP_CACHE_ENTRY0_PROPERTY_OFFSET]
-    load64 t5, [t2, OBJECT_STORAGE_DATA]
+    load64 t5, [t2, OBJECT_NAMED_PROPERTIES]
     load64 t4, [t5, t1, 8]
     extract_tag t4, t4
     branch_eq t4, ACCESSOR_TAG, .slow
