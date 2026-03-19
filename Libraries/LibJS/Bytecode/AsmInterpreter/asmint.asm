@@ -129,6 +129,27 @@ end
 # If src_fpr is NaN, writes CANON_NAN_BITS to dst_gpr.
 # Otherwise bitwise-copies src_fpr to dst_gpr.
 
+# Box a double result as a JS::Value, preferring Int32 when the double is a
+# whole number in [INT32_MIN, INT32_MAX] and not -0.0. This mirrors the
+# JS::Value(double) constructor so that downstream int32 fast paths fire.
+# dst: destination GPR for the boxed value.
+# src_fpr: source FPR containing the double result.
+# Clobbers: t1 (x86-64), t3, ft3 (x86-64).
+macro box_double_or_int32(dst, src_fpr)
+    double_to_int32 t3, src_fpr, .bdi_not_int
+    branch_zero t3, .bdi_check_neg_zero
+    box_int32 dst, t3
+    jmp .bdi_done
+.bdi_check_neg_zero:
+    fp_mov dst, src_fpr
+    branch_negative dst, .bdi_not_int
+    box_int32 dst, t3
+    jmp .bdi_done
+.bdi_not_int:
+    canonicalize_nan dst, src_fpr
+.bdi_done:
+end
+
 # Shared same-tag equality dispatch.
 # Expects t3=lhs_tag (known equal to rhs_tag), t1=lhs, t2=rhs.
 # For int32, boolean, object, symbol, undefined, null: bitwise compare.
@@ -413,14 +434,15 @@ end
 # Arithmetic fast path: try int32, check overflow, fall back to double, then slow path.
 # The coerce_to_doubles macro handles mixed int32+double coercion.
 # On int32 overflow, we convert both operands to double and retry.
-# canonicalize_nan ensures NaN results don't collide with the tag space.
+# box_double_or_int32 re-boxes double results as Int32 when possible,
+# mirroring JS::Value(double), so downstream int32 fast paths can fire.
 handler Add
     load_operand t1, m_lhs
     load_operand t2, m_rhs
     coerce_to_doubles .both_int, .slow
     # One or both doubles: ft0=lhs, ft1=rhs
     fp_add ft0, ft1
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_next
 .both_int:
@@ -451,7 +473,7 @@ handler Sub
     coerce_to_doubles .both_int, .slow
     # One or both doubles: ft0=lhs, ft1=rhs
     fp_sub ft0, ft1
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_next
 .both_int:
@@ -481,7 +503,7 @@ handler Mul
     coerce_to_doubles .both_int, .slow
     # One or both doubles: ft0=lhs, ft1=rhs
     fp_mul ft0, ft1
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_next
 .both_int:
@@ -1299,14 +1321,14 @@ handler ToInt32
     # Without: truncate + round-trip check, slow path on mismatch.
     fp_mov ft0, t1
     js_to_int32 t2, ft0, .slow
-    box_int32 t3, t2
-    store_operand m_dst, t3
+    box_int32_clean t2, t2
+    store_operand m_dst, t2
     dispatch_next
 .try_boolean:
     branch_ne t2, BOOLEAN_TAG, .slow
     # Convert boolean to int32: false -> 0, true -> 1
     and t1, 1
-    box_int32 t1, t1
+    box_int32_clean t1, t1
     store_operand m_dst, t1
     dispatch_next
 .slow:
@@ -1382,7 +1404,8 @@ handler PutByValue
     # Check if source is int32
     extract_tag t0, t1
     branch_eq t0, INT32_TAG, .ta_store_int32
-    # Non-int32 value: only handle Float64Array with double source
+    # Non-int32 value: only handle float typed arrays with double sources
+    branch_eq t2, TYPED_ARRAY_KIND_FLOAT32, .ta_store_float32
     branch_ne t2, TYPED_ARRAY_KIND_FLOAT64, .try_typed_array_slow
     # Compute store address before check_is_double clobbers t4
     mov t0, t4
@@ -1393,17 +1416,49 @@ handler PutByValue
     # Float64Array: store raw double bits
     store64 [t0, 0], t1
     dispatch_next
+.ta_store_float32:
+    mov t0, t4
+    shl t0, 2
+    add t0, t5
+    check_is_double t1, .try_typed_array_slow
+    fp_mov ft0, t1
+    double_to_float ft0, ft0
+    storef32 [t0, 0], ft0
+    dispatch_next
 .ta_store_int32:
-    # t1 = NaN-boxed int32, extract low 32 bits into t0
-    mov t0, t1
-    and t0, 0xFFFFFFFF
+    # t1 = NaN-boxed int32, sign-extend it into t0
+    unbox_int32 t0, t1
     # Dispatch on kind (in t2)
     branch_any_eq t2, TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_UINT32, .ta_put_int32
+    branch_eq t2, TYPED_ARRAY_KIND_FLOAT32, .ta_put_float32
+    branch_eq t2, TYPED_ARRAY_KIND_UINT8_CLAMPED, .ta_put_uint8_clamped
     branch_any_eq t2, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_INT8, .ta_put_uint8
     branch_any_eq t2, TYPED_ARRAY_KIND_UINT16, TYPED_ARRAY_KIND_INT16, .ta_put_uint16
     jmp .try_typed_array_slow
 .ta_put_int32:
     store32 [t5, t4, 4], t0
+    dispatch_next
+.ta_put_float32:
+    int_to_double ft0, t0
+    double_to_float ft0, ft0
+    mov t3, t4
+    shl t3, 2
+    add t3, t5
+    storef32 [t3, 0], ft0
+    dispatch_next
+.ta_put_uint8_clamped:
+    branch_negative t0, .ta_put_uint8_clamped_zero
+    mov t3, 255
+    branch_ge_unsigned t0, t3, .ta_put_uint8_clamped_max
+    store8 [t5, t4], t0
+    dispatch_next
+.ta_put_uint8_clamped_zero:
+    mov t0, 0
+    store8 [t5, t4], t0
+    dispatch_next
+.ta_put_uint8_clamped_max:
+    mov t0, 255
+    store8 [t5, t4], t0
     dispatch_next
 .ta_put_uint8:
     store8 [t5, t4], t0
@@ -1586,11 +1641,12 @@ handler GetByValue
     # Dispatch on kind
     load8 t0, [t3, TYPED_ARRAY_KIND]
     branch_eq t0, TYPED_ARRAY_KIND_INT32, .ta_int32
-    branch_eq t0, TYPED_ARRAY_KIND_UINT8, .ta_uint8
+    branch_any_eq t0, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED, .ta_uint8
     branch_eq t0, TYPED_ARRAY_KIND_UINT16, .ta_uint16
     branch_eq t0, TYPED_ARRAY_KIND_INT8, .ta_int8
     branch_eq t0, TYPED_ARRAY_KIND_INT16, .ta_int16
     branch_eq t0, TYPED_ARRAY_KIND_UINT32, .ta_uint32
+    branch_eq t0, TYPED_ARRAY_KIND_FLOAT32, .ta_float32
     branch_eq t0, TYPED_ARRAY_KIND_FLOAT64, .ta_float64
     jmp .try_typed_array_slow
 .ta_int32:
@@ -1612,6 +1668,18 @@ handler GetByValue
     add t0, t4
     load16s t0, [t5, t0]
     jmp .ta_box_int32
+.ta_float32:
+    mov t0, t4
+    shl t0, 2
+    add t0, t5
+    loadf32 ft0, [t0, 0]
+    float_to_double ft0, ft0
+    fp_mov t1, ft0
+    mov t3, NEGATIVE_ZERO
+    branch_eq t1, t3, .ta_f64_as_double
+    double_to_int32 t0, ft0, .ta_f64_as_double
+    branch_nonzero t0, .ta_f64_as_int
+    jmp .ta_f64_as_int
 .ta_float64:
     # index * 8 for f64 elements
     mov t0, t4
@@ -1901,7 +1969,7 @@ handler CallBuiltin
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_floor ft0, ft0
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_callbuiltin_size
 .math_ceil:
@@ -1909,7 +1977,7 @@ handler CallBuiltin
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_ceil ft0, ft0
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_callbuiltin_size
 .math_sqrt:
@@ -1917,7 +1985,7 @@ handler CallBuiltin
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_sqrt ft0, ft0
-    canonicalize_nan t5, ft0
+    box_double_or_int32 t5, ft0
     store_operand m_dst, t5
     dispatch_callbuiltin_size
 .math_exp:

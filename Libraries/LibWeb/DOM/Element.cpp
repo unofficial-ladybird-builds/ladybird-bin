@@ -858,6 +858,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
     m_style_uses_var_css_function = false;
     m_style_uses_tree_counting_function = false;
     m_style_uses_if_css_function = false;
+    m_style_uses_inherit_css_function = false;
     m_affected_by_has_pseudo_class_in_subject_position = false;
     m_affected_by_has_pseudo_class_in_non_subject_position = false;
     m_affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator = false;
@@ -1597,7 +1598,7 @@ void Element::moved_from(GC::Ptr<Node> old_parent)
     Base::moved_from(old_parent);
 }
 
-void Element::children_changed(ChildrenChangedMetadata const* metadata)
+void Element::children_changed(ChildrenChangedMetadata const& metadata)
 {
     Node::children_changed(metadata);
     set_needs_style_update(true);

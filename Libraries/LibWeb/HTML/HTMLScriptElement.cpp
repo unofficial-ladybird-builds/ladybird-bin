@@ -648,9 +648,15 @@ void HTMLScriptElement::prepare_script()
 }
 
 // https://html.spec.whatwg.org/multipage/scripting.html#script-processing-model:children-changed-steps
-void HTMLScriptElement::children_changed(ChildrenChangedMetadata const* metadata)
+void HTMLScriptElement::children_changed(ChildrenChangedMetadata const& metadata)
 {
     Base::children_changed(metadata);
+
+    // AD-HOC: Avoid running script on child removal, matching the behaviour of other browsers.
+    //         We also do not run script on child mutation, matching the behaviour of chromium and webkit.
+    //         See: https://github.com/whatwg/html/issues/12279
+    if (metadata.type != ChildrenChangedMetadata::Type::Inserted)
+        return;
 
     // 1. If the script element is not connected, then return.
     if (!is_connected())

@@ -6,7 +6,7 @@
 
 use crate::parser::{AsmInstruction, Handler, ObjectFormat, Operand, Program};
 use crate::registers::{resolve_register, Arch};
-use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, w, HandlerState};
+use crate::shared::{get_immediate_value, resolve_field_ref, resolve_label, substitute_macro, uniquify_macro_labels, w, HandlerState};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -389,8 +389,13 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                     param_map.insert(param.clone(), resolve_op(op, handler, program));
                 }
             }
+            // Uniquify local labels so the same macro can be used multiple
+            // times in one handler without label collisions.
+            let id = state.unique_counter;
+            state.unique_counter += 1;
+            let body = uniquify_macro_labels(&mac.body, id);
             // Expand macro body
-            for body_insn in &mac.body {
+            for body_insn in &body {
                 let expanded = substitute_macro(body_insn, &param_map);
                 emit_instruction(out, &expanded, handler, program, state);
             }
@@ -499,16 +504,20 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
         // js_to_int32 dst, src_fpr, fail_label
         // Truncate double to int64. cvttsd2si returns 0x8000000000000000 on
         // overflow/NaN, which we detect and branch to the slow path.
+        // On success, zero-extend the low 32 bits so callers can use
+        // box_int32_clean directly.
         // Clobbers rcx (t1).
         "js_to_int32" => {
             if insn.operands.len() >= 3 {
                 let dst = resolve_op(&insn.operands[0], handler, program);
+                let dst32 = to_32bit_reg(&dst);
                 let src = resolve_op(&insn.operands[1], handler, program);
                 let fail = resolve_label(&insn.operands[2], handler);
                 w!(out, "    cvttsd2si {dst}, {src}");
                 w!(out, "    mov rcx, 0x8000000000000000");
                 w!(out, "    cmp {dst}, rcx");
                 w!(out, "    je {fail}");
+                w!(out, "    mov {dst32}, {dst32}");
             }
         }
 
@@ -599,6 +608,24 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                 .map(|o| resolve_op(o, handler, program))
                 .collect();
             w!(out, "    cvtsi2sd {}", ops.join(", "));
+        }
+
+        "float_to_double" => {
+            let ops: Vec<String> = insn
+                .operands
+                .iter()
+                .map(|o| resolve_op(o, handler, program))
+                .collect();
+            w!(out, "    cvtss2sd {}", ops.join(", "));
+        }
+
+        "double_to_float" => {
+            let ops: Vec<String> = insn
+                .operands
+                .iter()
+                .map(|o| resolve_op(o, handler, program))
+                .collect();
+            w!(out, "    cvtsd2ss {}", ops.join(", "));
         }
 
         // canonicalize_nan dst_gpr, src_fpr
@@ -698,6 +725,15 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
             }
         }
 
+        // loadf32 dst_fpr, [base, offset] - Load 32-bit float from memory
+        "loadf32" => {
+            if insn.operands.len() >= 2 {
+                let dst = resolve_op(&insn.operands[0], handler, program);
+                let mem = resolve_op(&insn.operands[1], handler, program);
+                w!(out, "    movss {dst}, DWORD PTR {mem}");
+            }
+        }
+
         // load32 dst_reg, [base, offset] - Load 32-bit value (zero-extended to 64-bit)
         "load32" => {
             if insn.operands.len() >= 2 {
@@ -745,6 +781,15 @@ fn emit_instruction(out: &mut String, insn: &AsmInstruction, handler: &Handler, 
                 let dst32 = to_32bit_reg(&dst);
                 let mem = resolve_op(&insn.operands[1], handler, program);
                 w!(out, "    movsx {dst32}, WORD PTR {mem}");
+            }
+        }
+
+        // storef32 [base, offset], src_fpr - Store 32-bit float to memory
+        "storef32" => {
+            if insn.operands.len() >= 2 {
+                let mem = resolve_op(&insn.operands[0], handler, program);
+                let src = resolve_op(&insn.operands[1], handler, program);
+                w!(out, "    movss DWORD PTR {mem}, {src}");
             }
         }
 

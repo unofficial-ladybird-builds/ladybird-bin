@@ -105,6 +105,25 @@ impl From<Option<u32>> for FFIOptionalU32 {
     }
 }
 
+/// Literal value kind for class field initializers
+#[repr(u8)]
+pub enum LiteralValueKind {
+    None = 0,
+    Number = 1,
+    BooleanTrue = 2,
+    BooleanFalse = 3,
+    Null = 4,
+    String = 5,
+}
+
+/// Well-known symbol IDs for get_well_known_symbol()
+/// Used to retrieve well known symbols as opaque Values from C++.
+#[repr(u8)]
+pub enum WellKnownSymbolKind {
+    SymbolIterator = 0,
+    SymbolAsyncIterator = 1,
+}
+
 /// Class element descriptor for ClassBlueprint creation
 /// (C++ `BytecodeFactory::ClassElementData`).
 #[repr(C)]
@@ -116,7 +135,7 @@ pub struct FFIClassElement {
     pub private_identifier_len: usize,
     pub shared_function_data_index: FFIOptionalU32,
     pub has_initializer: bool,
-    pub literal_value_kind: u8, // LiteralValueKind
+    pub literal_value_kind: LiteralValueKind,
     pub literal_value_number: f64,
     pub literal_value_string: *const u16,
     pub literal_value_string_len: usize,
@@ -259,8 +278,7 @@ unsafe extern "C" {
     pub fn rust_number_to_utf16(value: f64, buffer: *mut u16, buffer_len: usize) -> usize;
 
     // Get a well-known symbol as an opaque Value.
-    // symbol_id: 0 = Symbol.iterator, 1 = Symbol.asyncIterator
-    pub fn get_well_known_symbol(vm_ptr: *mut c_void, symbol_id: u32) -> u64;
+    pub fn get_well_known_symbol(vm_ptr: *mut c_void, symbol_id: WellKnownSymbolKind) -> u64;
 
     // Get an intrinsic abstract operation function as an opaque Value.
     // name/name_len is the function name (e.g. "GetMethod").
