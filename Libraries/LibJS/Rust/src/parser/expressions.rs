@@ -215,7 +215,10 @@ impl Parser<'_> {
             // Yield/Await expressions don't participate in secondary expression
             // parsing (e.g. member access), but they DO participate in comma
             // expressions (e.g. `yield 1, yield 2`). Check for comma here.
-            return self.parse_comma_expression(lhs_start, expression, min_precedence, forbidden);
+            let expression =
+                self.parse_comma_expression(lhs_start, expression, min_precedence, forbidden);
+            self.report_invalid_private_identifier_usage(&expression);
+            return expression;
         }
 
         let expression = self.parse_tagged_template_literals(lhs_start, expression);
@@ -268,7 +271,10 @@ impl Parser<'_> {
             }
         }
 
-        self.parse_comma_expression(lhs_start, expression, min_precedence, forbidden)
+        let expression =
+            self.parse_comma_expression(lhs_start, expression, min_precedence, forbidden);
+        self.report_invalid_private_identifier_usage(&expression);
+        expression
     }
 
     fn parse_comma_expression(
@@ -282,14 +288,23 @@ impl Parser<'_> {
             && self.match_token(TokenType::Comma)
             && forbidden.allows(TokenType::Comma)
         {
+            self.report_invalid_private_identifier_usage(&expression);
             let mut expressions = vec![expression];
             while self.match_token(TokenType::Comma) {
                 self.consume();
-                expressions.push(self.parse_assignment_expression());
+                let expression = self.parse_assignment_expression();
+                self.report_invalid_private_identifier_usage(&expression);
+                expressions.push(expression);
             }
             return self.expression(start, ExpressionKind::Sequence(expressions));
         }
         expression
+    }
+
+    fn report_invalid_private_identifier_usage(&mut self, expression: &Expression) {
+        if matches!(expression.inner, ExpressionKind::PrivateIdentifier(_)) {
+            self.syntax_error("Private identifier must be followed by 'in'");
+        }
     }
 
     /// Parse a primary expression (literal, identifier, `this`, etc.).
@@ -313,8 +328,12 @@ impl Parser<'_> {
                     self.consume();
                     return (self.expression(start, ExpressionKind::Error), true);
                 }
-                let expression = self.parse_expression_any();
+                let mut expression = self.parse_expression_any();
                 self.consume_token(TokenType::ParenClose);
+                if let ExpressionKind::New(ref mut new_expression) = expression.inner {
+                    // Mirrors C++ Parser: `(new Foo)` sets "inside grouping parens".
+                    new_expression.is_inside_parens = true;
+                }
                 self.last_primary_was_parenthesized = true;
                 (expression, true)
             }
@@ -467,6 +486,13 @@ impl Parser<'_> {
                     true,
                     None,
                 ) {
+                    return (arrow, false);
+                }
+                self.arrow_function_failed_positions
+                    .remove(&(start.offset as usize));
+                // `async => ...` is a regular arrow function with parameter name `async`
+                // (not an async arrow function).
+                if let Some(arrow) = self.try_parse_arrow_function_expression(false, false, None) {
                     return (arrow, false);
                 }
                 let token = self.consume_and_check_identifier();
@@ -684,6 +710,10 @@ impl Parser<'_> {
     ) -> (Expression, ForbiddenTokens) {
         let start = self.position();
         let tt = self.current_token_type();
+
+        if matches!(lhs.inner, ExpressionKind::PrivateIdentifier(_)) && tt != TokenType::In {
+            self.syntax_error("Private identifier must be followed by 'in'");
+        }
 
         match tt {
             // === Binary operators ===
@@ -953,6 +983,20 @@ impl Parser<'_> {
 
             // === Optional chaining ===
             TokenType::QuestionMarkPeriod => {
+                // https://tc39.es/ecma262/#prod-OptionalExpression
+                // Optional chaining directly on an unparenthesized `new` expression is invalid:
+                //   `new Foo?.bar`  // SyntaxError
+                // while parenthesized/new-call forms remain valid:
+                //   `(new Foo)?.bar`
+                //   `new Foo()?.bar`
+                if let ExpressionKind::New(ref new_expression) = lhs.inner
+                    && !new_expression.is_parenthesized
+                    && !new_expression.is_inside_parens
+                {
+                    self.syntax_error("'new' cannot be used with optional chaining");
+                    self.consume();
+                    return (lhs, ForbiddenTokens::none());
+                }
                 let chain = self.parse_optional_chain(start, lhs);
                 (chain, ForbiddenTokens::none())
             }
@@ -1080,6 +1124,7 @@ impl Parser<'_> {
                     Associativity::Right,
                     ForbiddenTokens::none(),
                 );
+                self.report_invalid_private_identifier_usage(&expression);
                 self.expression(
                     start,
                     ExpressionKind::Unary {
@@ -1099,6 +1144,7 @@ impl Parser<'_> {
                     Associativity::Right,
                     ForbiddenTokens::none(),
                 );
+                self.report_invalid_private_identifier_usage(&expression);
                 if self.flags.strict_mode && Self::is_identifier(&expression) {
                     self.syntax_error_at(
                         "Delete of an unqualified identifier in strict mode.",
@@ -1182,7 +1228,8 @@ impl Parser<'_> {
                 ExpressionKind::New(CallExpressionData {
                     callee: Box::new(callee),
                     arguments,
-                    is_parenthesized: false,
+                    // Mirrors C++ InvocationStyle::Parenthesized for `new Foo(...)`.
+                    is_parenthesized: true,
                     is_inside_parens: false,
                 }),
             )
