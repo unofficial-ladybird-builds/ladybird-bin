@@ -195,6 +195,10 @@ pub(crate) struct ParserFlags {
     pub string_legacy_octal_escape_sequence_in_scope: bool,
     pub in_class_field_initializer: bool,
     pub in_class_static_init_block: bool,
+    /// True inside non-arrow function bodies and class static init blocks.
+    /// Arrow functions inherit this flag rather than setting it, since they
+    /// don't have their own `new.target` binding.
+    pub new_target_is_valid: bool,
     pub function_might_need_arguments_object: bool,
     pub previous_token_was_period: bool,
     /// Set during property key parsing to suppress eval/arguments check.
@@ -291,6 +295,7 @@ pub struct Parser<'a> {
     pub(crate) for_loop_declaration_count: usize,
     pub(crate) for_loop_declaration_has_init: bool,
     pub(crate) for_loop_declaration_is_var: bool,
+    pub(crate) for_loop_declaration_is_pattern: bool,
 
     pub scope_collector: ScopeCollector,
 
@@ -351,6 +356,7 @@ impl<'a> Parser<'a> {
             for_loop_declaration_count: 0,
             for_loop_declaration_has_init: false,
             for_loop_declaration_is_var: false,
+            for_loop_declaration_is_pattern: false,
             scope_collector: ScopeCollector::new(),
             exported_names: HashSet::new(),
             function_table: FunctionTable::new(),
@@ -852,6 +858,13 @@ impl<'a> Parser<'a> {
                     "Identifier must not be a reserved word in strict mode ('{name_str}')"
                 ));
             }
+        }
+        // 'await' is not allowed as a binding identifier in class static
+        // init blocks or module code.
+        if name == utf16!("await")
+            && (self.flags.in_class_static_init_block || self.program_type == ProgramType::Module)
+        {
+            self.syntax_error("'await' is not allowed as an identifier in this context");
         }
     }
 

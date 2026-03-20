@@ -202,13 +202,21 @@ impl Parser<'_> {
         // falsely flagging parameter names like `function f(arguments)`.
         if let ExpressionKind::Identifier(ref id) = expression.inner
             && id.name == utf16!("arguments")
-            && !self.flags.strict_mode
-            && !self
-                .scope_collector
-                .has_declaration_in_current_function(&id.name)
         {
-            self.scope_collector
-                .set_contains_access_to_arguments_object_in_non_strict_mode();
+            // https://tc39.es/ecma262/#sec-class-static-initialization-blocks
+            // It is a Syntax Error if ContainsArguments of ClassStaticBlockBody is true.
+            if self.flags.in_class_static_init_block {
+                self.syntax_error(
+                    "'arguments' is not allowed in class static initialization blocks",
+                );
+            } else if !self.flags.strict_mode
+                && !self
+                    .scope_collector
+                    .has_declaration_in_current_function(&id.name)
+            {
+                self.scope_collector
+                    .set_contains_access_to_arguments_object_in_non_strict_mode();
+            }
         }
 
         if !should_continue {
@@ -848,8 +856,11 @@ impl Parser<'_> {
 
                     // Register synthesized identifiers with the scope collector so
                     // they get resolved as locals during analyze().
-                    for (name, id) in self.pattern_bound_names.drain(..) {
-                        self.scope_collector.register_identifier(id, &name, None);
+                    let bound_names: Vec<_> = self.pattern_bound_names.drain(..).collect();
+                    for (name, id) in &bound_names {
+                        self.check_identifier_name_for_assignment_validity(name, false);
+                        self.scope_collector
+                            .register_identifier(id.clone(), name, None);
                     }
                     self.pattern_bound_names = saved_bound_names;
                     self.consume();
@@ -918,6 +929,12 @@ impl Parser<'_> {
             TokenType::Period => {
                 self.consume();
                 if self.match_token(TokenType::PrivateIdentifier) {
+                    // https://tc39.es/ecma262/#sec-static-semantics-early-errors
+                    // It is a Syntax Error if MemberExpression is SuperProperty
+                    // and the PrivateIdentifier is present.
+                    if matches!(lhs.inner, ExpressionKind::Super) {
+                        self.syntax_error("Cannot access private field or method via 'super'");
+                    }
                     // C++ uses rule_start (period position) for property identifiers.
                     let id = self.parse_private_identifier(start);
                     let property = self.expression(start, ExpressionKind::PrivateIdentifier(id));
@@ -1194,10 +1211,7 @@ impl Parser<'_> {
             // It is a Syntax Error if NewTarget is not enclosed, directly or indirectly
             // (but not crossing function or class static initialization block boundaries),
             // within a FunctionBody, ConciseBody, ClassStaticBlock, or ClassBody.
-            if !self.flags.in_function_context
-                && !self.in_eval_function_context
-                && !self.flags.in_class_static_init_block
-            {
+            if !self.flags.new_target_is_valid && !self.in_eval_function_context {
                 self.syntax_error("'new.target' not allowed outside of a function");
             }
             if self.scope_collector.has_current_scope() {
@@ -1635,6 +1649,10 @@ impl Parser<'_> {
         // async modifier requires a method (must have parens)
         if is_async {
             self.syntax_error("Expected function after async keyword");
+        }
+        // Generator shorthand requires a method body.
+        if is_generator {
+            self.syntax_error("Expected method after generator star");
         }
 
         if is_getter || is_setter {
@@ -2442,8 +2460,12 @@ impl Parser<'_> {
             self.scope_collector.close_scope();
             self.pattern_bound_names = saved_pattern_bound_names;
 
-            if has_use_strict || fn_kind != FunctionKind::Normal {
-                self.check_parameters_post_body(&parameter_info, has_use_strict, fn_kind);
+            if has_use_strict || fn_kind != FunctionKind::Normal || self.flags.strict_mode {
+                self.check_parameters_post_body(
+                    &parameter_info,
+                    has_use_strict || self.flags.strict_mode,
+                    fn_kind,
+                );
             }
 
             self.flags.await_expression_is_valid = saved_await_body;
@@ -2490,6 +2512,10 @@ impl Parser<'_> {
             self.scope_collector.close_scope();
             self.pattern_bound_names = saved_pattern_bound_names;
 
+            if self.flags.strict_mode || fn_kind != FunctionKind::Normal {
+                self.check_parameters_post_body(&parameter_info, self.flags.strict_mode, fn_kind);
+            }
+
             self.flags.await_expression_is_valid = saved_await_body;
             self.flags.in_class_static_init_block = saved_static_init;
             self.flags.in_formal_parameter_context = saved_formal_parameter_ctx;
@@ -2532,6 +2558,7 @@ impl Parser<'_> {
         let saved_field_init = self.flags.in_class_field_initializer;
         let saved_allow_super_call = self.flags.allow_super_constructor_call;
         let saved_allow_super_lookup = self.flags.allow_super_property_lookup;
+        let saved_new_target = self.flags.new_target_is_valid;
         self.flags.in_generator_function_context = is_generator;
         self.flags.await_expression_is_valid = is_async;
         self.flags.in_class_static_init_block = false;
@@ -2539,6 +2566,7 @@ impl Parser<'_> {
         self.flags.allow_super_constructor_call =
             method_kind == MethodKind::Constructor && self.class_has_super_class;
         self.flags.allow_super_property_lookup = true;
+        self.flags.new_target_is_valid = true;
 
         // Save pattern_bound_names so that destructuring patterns in the
         // method body don't steal names from an outer binding context.
@@ -2569,12 +2597,16 @@ impl Parser<'_> {
         self.scope_collector.close_scope();
         self.pattern_bound_names = saved_pattern_bound_names;
 
-        self.flags.in_class_static_init_block = saved_static_init;
-        self.flags.in_class_field_initializer = saved_field_init;
-
+        // Check parameters before restoring flags so that the method's
+        // context is used (e.g. in_class_static_init_block must remain
+        // false to allow `await` as a parameter name in generators).
         if has_use_strict || fn_kind != FunctionKind::Normal {
             self.check_parameters_post_body(&parsed.parameter_info, has_use_strict, fn_kind);
         }
+
+        self.flags.in_class_static_init_block = saved_static_init;
+        self.flags.in_class_field_initializer = saved_field_init;
+        self.flags.new_target_is_valid = saved_new_target;
 
         insights.might_need_arguments_object = self.flags.function_might_need_arguments_object;
         self.flags.function_might_need_arguments_object = saved_might_need_arguments;

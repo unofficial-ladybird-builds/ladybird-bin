@@ -9,11 +9,9 @@
 #include <AK/HashTable.h>
 #include <AK/TemporaryChange.h>
 #include <LibGC/RootHashMap.h>
-#include <LibJS/AST.h>
 #include <LibJS/Bytecode/AsmInterpreter/AsmInterpreter.h>
 #include <LibJS/Bytecode/BasicBlock.h>
 #include <LibJS/Bytecode/FormatOperand.h>
-#include <LibJS/Bytecode/Generator.h>
 #include <LibJS/Bytecode/Instruction.h>
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Bytecode/Label.h>
@@ -117,13 +115,6 @@ ThrowCompletionOr<Value> Interpreter::run(Script& script_record, GC::Ptr<Environ
 
     // 11. Let script be scriptRecord.[[ECMAScriptCode]].
     GC::Ptr<Executable> executable = script_record.cached_executable();
-    if (!executable && result.type() == Completion::Type::Normal) {
-        executable = JS::Bytecode::Generator::generate_from_ast_node(vm, *script_record.parse_node(), {});
-        if (executable) {
-            script_record.cache_executable(*executable);
-            script_record.drop_ast();
-        }
-    }
     if (executable && g_dump_bytecode)
         executable->dump();
 
@@ -885,30 +876,6 @@ void Interpreter::catch_exception(Operand dst)
 {
     set(dst, reg(Register::exception()));
     reg(Register::exception()) = js_special_empty_value();
-}
-
-GC::Ref<Bytecode::Executable> compile(VM& vm, ASTNode const& node, FunctionKind kind, Utf16FlyString const& name)
-{
-    auto bytecode_executable = Bytecode::Generator::generate_from_ast_node(vm, node, kind);
-    bytecode_executable->name = name;
-
-    if (Bytecode::g_dump_bytecode)
-        bytecode_executable->dump();
-
-    return bytecode_executable;
-}
-
-GC::Ref<Bytecode::Executable> compile(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
-{
-    auto const& name = shared_function_instance_data->m_name;
-
-    auto bytecode_executable = Bytecode::Generator::generate_from_function(vm, shared_function_instance_data, builtin_abstract_operations_enabled);
-    bytecode_executable->name = name;
-
-    if (Bytecode::g_dump_bytecode)
-        bytecode_executable->dump();
-
-    return bytecode_executable;
 }
 
 // NOTE: This function assumes that the index is valid within the TypedArray,

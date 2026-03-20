@@ -6,6 +6,7 @@
 
 //! Statement parsing: if, for, while, switch, try, etc.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::ast::*;
@@ -269,7 +270,13 @@ impl Parser<'_> {
         let predicate = self.parse_expression_any();
         self.consume_token(TokenType::ParenClose);
 
-        let consequent = if !self.flags.strict_mode && self.match_token(TokenType::Function) {
+        // https://tc39.es/ecma262/#sec-functiondeclarations-in-ifstatement-statement-clauses
+        // Annex B allows FunctionDeclarations (but NOT GeneratorDeclarations) in
+        // IfStatement bodies in sloppy mode.
+        let consequent = if !self.flags.strict_mode
+            && self.match_token(TokenType::Function)
+            && self.next_token().token_type != TokenType::Asterisk
+        {
             self.parse_function_declaration_as_block_statement(start)
         } else {
             self.parse_statement(false)
@@ -277,7 +284,10 @@ impl Parser<'_> {
 
         let alternate = if self.match_token(TokenType::Else) {
             self.consume();
-            if !self.flags.strict_mode && self.match_token(TokenType::Function) {
+            if !self.flags.strict_mode
+                && self.match_token(TokenType::Function)
+                && self.next_token().token_type != TokenType::Asterisk
+            {
                 Some(Box::new(
                     self.parse_function_declaration_as_block_statement(start),
                 ))
@@ -430,10 +440,13 @@ impl Parser<'_> {
                 }
                 if self.for_loop_declaration_has_init {
                     // https://tc39.es/ecma262/#sec-initializers-in-forin-statement-heads
-                    // Annex B: In sloppy mode, a single `var` with an initializer is permitted.
-                    if !(self.for_loop_declaration_is_var
-                        && self.for_loop_declaration_count == 1
-                        && !self.flags.strict_mode)
+                    // Annex B: In sloppy mode, a single `var` with a simple
+                    // BindingIdentifier and an initializer is permitted.
+                    // Binding patterns with initializers are never allowed.
+                    if !self.for_loop_declaration_is_var
+                        || self.for_loop_declaration_count != 1
+                        || self.flags.strict_mode
+                        || self.for_loop_declaration_is_pattern
                     {
                         self.syntax_error("Variable initializer not allowed in for..in/of");
                     }
@@ -745,6 +758,20 @@ impl Parser<'_> {
                     .iter()
                     .map(|(n, _)| n.clone())
                     .collect();
+                // https://tc39.es/ecma262/#sec-try-statement-static-semantics-early-errors
+                // It is a Syntax Error if BoundNames of CatchParameter
+                // contains any duplicate elements.
+                {
+                    let mut seen: HashSet<&[u16]> = HashSet::new();
+                    for name in &names_to_check {
+                        if !seen.insert(name.as_slice()) {
+                            let name_str = String::from_utf16_lossy(name);
+                            self.syntax_error(&format!(
+                                "Duplicate binding '{name_str}' in catch parameter"
+                            ));
+                        }
+                    }
+                }
                 for name in &names_to_check {
                     self.check_identifier_name_for_assignment_validity(name, false);
                 }
@@ -786,7 +813,69 @@ impl Parser<'_> {
             None
         };
 
+        // Collect catch parameter names for post-body validation.
+        let catch_names: Vec<Utf16String> = match &parameter {
+            Some(CatchBinding::Identifier(id)) => vec![id.name.clone()],
+            Some(CatchBinding::BindingPattern(_)) => self
+                .pattern_bound_names
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect(),
+            None => Vec::new(),
+        };
+
         let body = self.parse_block_statement();
+
+        // https://tc39.es/ecma262/#sec-try-statement-static-semantics-early-errors
+        // It is a Syntax Error if any element of the BoundNames of
+        // CatchParameter also occurs in the LexicallyDeclaredNames of Block.
+        if !catch_names.is_empty()
+            && let StatementKind::Block(ref scope) = body.inner
+        {
+            for child in &scope.borrow().children {
+                match &child.inner {
+                    StatementKind::VariableDeclaration { kind, declarations }
+                        if *kind != DeclarationKind::Var =>
+                    {
+                        for decl in declarations {
+                            if let VariableDeclaratorTarget::Identifier(ref id) = decl.target {
+                                for cn in &catch_names {
+                                    if cn.as_slice() == id.name.as_slice() {
+                                        let n = String::from_utf16_lossy(cn);
+                                        self.syntax_error(&format!(
+                                            "Identifier '{n}' already declared as catch parameter"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    StatementKind::FunctionDeclaration { name: Some(id), .. } => {
+                        for cn in &catch_names {
+                            if cn.as_slice() == id.name.as_slice() {
+                                let n = String::from_utf16_lossy(cn);
+                                self.syntax_error(&format!(
+                                    "Identifier '{n}' already declared as catch parameter"
+                                ));
+                            }
+                        }
+                    }
+                    StatementKind::ClassDeclaration(data) => {
+                        if let Some(ref id) = data.name {
+                            for cn in &catch_names {
+                                if cn.as_slice() == id.name.as_slice() {
+                                    let n = String::from_utf16_lossy(cn);
+                                    self.syntax_error(&format!(
+                                        "Identifier '{n}' already declared as catch parameter"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         self.scope_collector.close_scope();
 
@@ -819,6 +908,14 @@ impl Parser<'_> {
         self.discard_saved_state();
         self.consume(); // consume :
 
+        // https://tc39.es/ecma262/#sec-labelled-statements
+        // LabelIdentifier : Identifier (not ReservedWord)
+        // `true`, `false`, and `null` are reserved words and cannot be labels.
+        if token.token_type == TokenType::BoolLiteral || token.token_type == TokenType::NullLiteral
+        {
+            self.syntax_error("Reserved word cannot be used as a label");
+        }
+
         if self.flags.strict_mode
             && (label == utf16!("let") || crate::parser::is_strict_reserved_word(&label))
         {
@@ -827,8 +924,12 @@ impl Parser<'_> {
         if self.flags.in_generator_function_context && label == utf16!("yield") {
             self.syntax_error("'yield' label is not allowed in generator function context");
         }
-        if self.flags.await_expression_is_valid && label == utf16!("await") {
-            self.syntax_error("'await' label is not allowed in async function context");
+        if (self.flags.await_expression_is_valid
+            || self.flags.in_class_static_init_block
+            || self.program_type == crate::parser::ProgramType::Module)
+            && label == utf16!("await")
+        {
+            self.syntax_error("'await' is not allowed as a label in this context");
         }
 
         if self.labels_in_scope.contains_key(label.as_slice()) {
@@ -958,8 +1059,11 @@ impl Parser<'_> {
                 {
                     let pattern = self.synthesize_binding_pattern(init_start);
 
-                    for (name, id) in self.pattern_bound_names.drain(..) {
-                        self.scope_collector.register_identifier(id, &name, None);
+                    let bound_names: Vec<_> = self.pattern_bound_names.drain(..).collect();
+                    for (name, id) in &bound_names {
+                        self.check_identifier_name_for_assignment_validity(name, false);
+                        self.scope_collector
+                            .register_identifier(id.clone(), name, None);
                     }
                     ForInOfLhs::Pattern(pattern)
                 } else {

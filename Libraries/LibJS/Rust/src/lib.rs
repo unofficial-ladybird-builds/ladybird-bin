@@ -904,6 +904,7 @@ pub unsafe extern "C" fn rust_compile_dynamic_function(
                 };
                 let mut parser = Parser::new(body_slice, ProgramType::Script);
                 parser.flags.in_function_context = true;
+                parser.flags.new_target_is_valid = true;
                 match kind {
                     ast::FunctionKind::Async | ast::FunctionKind::AsyncGenerator => {
                         parser.flags.await_expression_is_valid = true;
@@ -2645,4 +2646,54 @@ unsafe extern "C" {
         might_need_arguments_object: bool,
         contains_direct_call_to_eval: bool,
     );
+}
+
+/// C-compatible token info for the tokenize callback.
+#[repr(C)]
+pub struct FFIToken {
+    pub token_type: u8,
+    pub category: u8,
+    pub offset: u32,
+    pub length: u32,
+    pub trivia_offset: u32,
+    pub trivia_length: u32,
+}
+
+/// Tokenize a UTF-16 source string, calling `callback` for each token.
+///
+/// # Safety
+/// - `source` must point to a valid UTF-16 buffer of `source_len` elements.
+/// - `callback` must be a valid function pointer.
+/// - `ctx` is passed through to the callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_tokenize(
+    source: *const u16,
+    source_len: usize,
+    ctx: *mut c_void,
+    callback: unsafe extern "C" fn(ctx: *mut c_void, token: *const FFIToken),
+) {
+    unsafe {
+        abort_on_panic(|| {
+            let Some(source_slice) = source_from_raw(source, source_len) else {
+                return;
+            };
+            let mut lex = lexer::Lexer::new(source_slice, 1, 0);
+            loop {
+                let tok = lex.next();
+                let is_eof = tok.token_type == token::TokenType::Eof;
+                let ffi_tok = FFIToken {
+                    token_type: tok.token_type as u8,
+                    category: tok.token_type.category() as u8,
+                    offset: tok.value_start,
+                    length: tok.value_len,
+                    trivia_offset: tok.trivia_start,
+                    trivia_length: tok.trivia_len,
+                };
+                callback(ctx, &raw const ffi_tok);
+                if is_eof {
+                    break;
+                }
+            }
+        });
+    }
 }

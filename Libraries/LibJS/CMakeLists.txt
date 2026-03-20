@@ -1,21 +1,15 @@
 include(libjs_generators)
 
 set(SOURCES
-    AST.cpp
-    ASTDump.cpp
     Bytecode/AsmInterpreter/AsmInterpreter.cpp
-    Bytecode/ASTCodegen.cpp
     Bytecode/BasicBlock.cpp
-    Bytecode/Builtins.cpp
     Bytecode/Executable.cpp
-    Bytecode/Generator.cpp
     Bytecode/IdentifierTable.cpp
     Bytecode/Instruction.cpp
     Bytecode/Interpreter.cpp
     Bytecode/Label.cpp
     Bytecode/PropertyKeyTable.cpp
     Bytecode/RegexTable.cpp
-    Bytecode/ScopedOperand.cpp
     Bytecode/StringTable.cpp
     Console.cpp
     Contrib/Test262/262Object.cpp
@@ -24,11 +18,8 @@ set(SOURCES
     Contrib/Test262/IsHTMLDDA.cpp
     CyclicModule.cpp
     Heap/Cell.cpp
-    Lexer.cpp
     Module.cpp
-    Parser.cpp
     ParserError.cpp
-    PipelineComparison.cpp
     Print.cpp
     RustIntegration.cpp
     Runtime/AbstractOperations.cpp
@@ -268,13 +259,11 @@ set(SOURCES
     Runtime/WeakSetPrototype.cpp
     Runtime/WrapForValidIteratorPrototype.cpp
     Runtime/WrappedFunction.cpp
-    ScopeCollector.cpp
     Script.cpp
     SourceCode.cpp
     SourceTextModule.cpp
     SyntaxHighlighter.cpp
     SyntheticModule.cpp
-    Token.cpp
 )
 
 generate_bytecode_def_derived()

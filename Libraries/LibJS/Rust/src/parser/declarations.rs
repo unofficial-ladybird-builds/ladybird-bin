@@ -265,6 +265,9 @@ impl Parser<'_> {
             self.for_loop_declaration_count = declarators.len();
             self.for_loop_declaration_has_init = any_init;
             self.for_loop_declaration_is_var = kind == DeclarationKind::Var;
+            self.for_loop_declaration_is_pattern = declarators
+                .iter()
+                .any(|d| matches!(d.target, VariableDeclaratorTarget::BindingPattern(_)));
         }
 
         self.statement(
@@ -536,12 +539,14 @@ impl Parser<'_> {
         let saved_field_init = self.flags.in_class_field_initializer;
         let saved_allow_super_call = self.flags.allow_super_constructor_call;
         let saved_allow_super_lookup = self.flags.allow_super_property_lookup;
+        let saved_new_target = self.flags.new_target_is_valid;
         self.flags.in_generator_function_context = is_generator;
         self.flags.await_expression_is_valid = is_async;
         self.flags.in_class_static_init_block = false;
         self.flags.in_class_field_initializer = false;
         self.flags.allow_super_constructor_call = false;
         self.flags.allow_super_property_lookup = false;
+        self.flags.new_target_is_valid = true;
 
         // Save pattern_bound_names so that destructuring patterns in the
         // function body don't steal names from an outer binding context.
@@ -563,6 +568,7 @@ impl Parser<'_> {
 
         self.flags.in_class_static_init_block = saved_static_init;
         self.flags.in_class_field_initializer = saved_field_init;
+        self.flags.new_target_is_valid = saved_new_target;
 
         if name.is_some() {
             self.check_identifier_name_for_assignment_validity(fn_name, has_use_strict);
@@ -884,6 +890,7 @@ impl Parser<'_> {
                 self.flags.in_class_field_initializer = true;
                 self.flags.in_class_static_init_block = true;
                 self.flags.allow_super_property_lookup = true;
+                self.flags.new_target_is_valid = true;
                 self.scope_collector.open_static_init_scope(None);
                 let children = self.parse_statement_list(false);
                 self.flags = saved_flags;
@@ -1079,6 +1086,13 @@ impl Parser<'_> {
                 if is_async {
                     self.syntax_error("Class constructor may not be async");
                 }
+            }
+
+            // https://tc39.es/ecma262/#sec-class-definitions-static-semantics-early-errors
+            // It is a Syntax Error if PropName of MethodDefinition is "constructor"
+            // and SpecialMethod of MethodDefinition is true (getter/setter).
+            if !is_static && (is_getter || is_setter) && key_value.as_deref() == Some(ctor_name) {
+                self.syntax_error("Class constructor may not be an accessor");
             }
 
             let method_kind = if is_constructor {
@@ -1296,7 +1310,12 @@ impl Parser<'_> {
                 }
                 let token = self.consume();
                 let value = Utf16String::from(self.token_value(&token));
-                self.check_identifier_name_for_assignment_validity(&value, false);
+                // Skip validity check for arrow functions; arrow parameter
+                // parsing is speculative and errors would abort the parse.
+                // The check runs after the arrow is confirmed instead.
+                if !is_arrow {
+                    self.check_identifier_name_for_assignment_validity(&value, false);
+                }
                 let id = Rc::new(Identifier::new(
                     self.range_from(formal_parameters_start),
                     value.clone(),
