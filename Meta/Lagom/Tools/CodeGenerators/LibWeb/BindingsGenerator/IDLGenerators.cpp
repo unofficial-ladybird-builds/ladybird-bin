@@ -24,6 +24,9 @@ namespace IDL {
 
 Vector<StringView> g_header_search_paths;
 
+template<typename ParameterType>
+static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter, ByteString const& js_name, ByteString const& js_suffix, ByteString const& cpp_name, IDL::Interface const& interface, bool legacy_null_to_empty_string = false, bool optional = false, Optional<ByteString> optional_default_value = {}, bool variadic = false, size_t recursion_depth = 0);
+
 // FIXME: Generate this automatically somehow.
 static bool is_platform_object(Type const& type)
 {
@@ -204,6 +207,17 @@ static bool is_javascript_builtin(Type const& type)
     };
 
     return types.span().contains_slow(type.name());
+}
+
+static ByteString cpp_type_name(Type const& type)
+{
+    if (libweb_interface_namespaces.span().contains_slow(type.name())) {
+        // e.g. Document.getSelection which returns Selection, which is in the Selection namespace.
+        return ByteString::formatted("{}::{}", type.name(), type.name());
+    }
+    if (is_javascript_builtin(type))
+        return ByteString::formatted("JS::{}", type.name());
+    return type.name();
 }
 
 static Interface const* callback_interface_for_type(Interface const& interface, Type const& type)
@@ -519,7 +533,7 @@ static void generate_to_string(SourceGenerator& scoped_generator, ParameterType 
 )~~~");
         }
     } else {
-        bool may_be_null = !optional_default_value.has_value() || parameter.type->is_nullable() || optional_default_value.value() == "null";
+        bool may_be_null = !optional_default_value.has_value() || optional_default_value.value() == "null";
         if (may_be_null) {
             scoped_generator.append(R"~~~(
     Optional<@string_type@> @cpp_name@;
@@ -660,8 +674,94 @@ static void generate_to_integral(SourceGenerator& scoped_generator, ParameterTyp
     }
 }
 
+// https://webidl.spec.whatwg.org/#es-dictionary
+static void generate_dictionary_to_cpp(SourceGenerator& generator, IDL::Interface const& interface, IDL::Dictionary const& dictionary, ByteString dictionary_name, bool optional = false, Optional<ByteString> optional_default_value = {})
+{
+    auto const* current_dictionary = &dictionary;
+    auto current_dictionary_name = move(dictionary_name);
+
+    generator.append(R"~~~(
+    if (!@js_name@@js_suffix@.is_nullish() && !@js_name@@js_suffix@.is_object())
+        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");
+
+    @parameter.type.name.normalized@ @cpp_name@ {};
+)~~~");
+    // FIXME: This (i) is a hack to make sure we don't generate duplicate variable names.
+    static auto i = 0;
+    while (true) {
+        Vector<DictionaryMember> members;
+        for (auto& member : current_dictionary->members)
+            members.append(member);
+
+        if (interface.partial_dictionaries.contains(current_dictionary_name)) {
+            auto& partial_dictionaries = interface.partial_dictionaries.find(current_dictionary_name)->value;
+            for (auto& partial_dictionary : partial_dictionaries)
+                for (auto& member : partial_dictionary.members)
+                    members.append(member);
+        }
+
+        for (auto& member : members) {
+            generator.set("member_key", member.name);
+            auto member_js_name = make_input_acceptable_cpp(member.name.to_snakecase());
+            auto member_value_name = ByteString::formatted("{}_value_{}", member_js_name, i);
+            auto member_property_value_name = ByteString::formatted("{}_property_value_{}", member_js_name, i);
+            generator.set("member_name", member_js_name);
+            generator.set("member_value_name", member_value_name);
+            generator.set("member_property_value_name", member_property_value_name);
+            generator.append(R"~~~(
+    auto @member_property_value_name@ = JS::js_undefined();
+    if (@js_name@@js_suffix@.is_object())
+        @member_property_value_name@ = TRY(@js_name@@js_suffix@.as_object().get("@member_key@"_utf16_fly_string));
+)~~~");
+            if (member.required) {
+                generator.append(R"~~~(
+    if (@member_property_value_name@.is_undefined())
+        return vm.throw_completion<JS::TypeError>(JS::ErrorType::MissingRequiredProperty, "@member_key@");
+)~~~");
+            } else if (!member.default_value.has_value()) {
+                // Assume struct member is Optional<T> and _don't_ assign the generated default
+                // value (e.g. first enum member) when the dictionary member is optional (i.e.
+                // no `required` and doesn't have a default value).
+                // This is needed so that "dictionary has member" checks work as expected.
+                generator.append(R"~~~(
+    if (!@member_property_value_name@.is_undefined()) {
+)~~~");
+            }
+
+            generate_to_cpp(generator, member, member_property_value_name, "", member_value_name, interface, member.extended_attributes.contains("LegacyNullToEmptyString"), !member.required, member.default_value);
+
+            bool may_be_null = !optional_default_value.has_value() || optional_default_value.value() == "null";
+
+            // Required dictionary members cannot be null.
+            may_be_null &= !member.required && !member.default_value.has_value();
+
+            if (member.type->is_string() && optional && may_be_null) {
+                generator.append(R"~~~(
+    if (@member_value_name@.has_value())
+        @cpp_name@.@member_name@ = @member_value_name@.release_value();
+)~~~");
+            } else {
+                generator.append(R"~~~(
+    @cpp_name@.@member_name@ = @member_value_name@;
+)~~~");
+            }
+            if (!member.required && !member.default_value.has_value()) {
+                generator.append(R"~~~(
+    }
+)~~~");
+            }
+            i++;
+        }
+        if (current_dictionary->parent_name.is_empty())
+            break;
+        VERIFY(interface.dictionaries.contains(current_dictionary->parent_name));
+        current_dictionary_name = current_dictionary->parent_name;
+        current_dictionary = &interface.dictionaries.find(current_dictionary_name)->value;
+    }
+}
+
 template<typename ParameterType>
-static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter, ByteString const& js_name, ByteString const& js_suffix, ByteString const& cpp_name, IDL::Interface const& interface, bool legacy_null_to_empty_string = false, bool optional = false, Optional<ByteString> optional_default_value = {}, bool variadic = false, size_t recursion_depth = 0)
+static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter, ByteString const& js_name, ByteString const& js_suffix, ByteString const& cpp_name, IDL::Interface const& interface, bool legacy_null_to_empty_string, bool optional, Optional<ByteString> optional_default_value, bool variadic, size_t recursion_depth)
 {
     auto scoped_generator = generator.fork();
     auto acceptable_cpp_name = make_input_acceptable_cpp(cpp_name);
@@ -674,19 +774,7 @@ static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter
     auto const& type = parameter.type;
     scoped_generator.set("parameter.type.name", type->name());
 
-    if (!libweb_interface_namespaces.span().contains_slow(type->name())) {
-        if (is_javascript_builtin(type))
-            scoped_generator.set("parameter.type.name.normalized", ByteString::formatted("JS::{}", type->name()));
-        else
-            scoped_generator.set("parameter.type.name.normalized", type->name());
-    } else {
-        // e.g. Document.getSelection which returns Selection, which is in the Selection namespace.
-        StringBuilder builder;
-        builder.append(type->name());
-        builder.append("::"sv);
-        builder.append(type->name());
-        scoped_generator.set("parameter.type.name.normalized", builder.to_byte_string());
-    }
+    scoped_generator.set("parameter.type.name.normalized", cpp_type_name(*type));
 
     scoped_generator.set("parameter.name", parameter.name);
 
@@ -1025,86 +1113,9 @@ static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter
         if (optional_default_value.has_value() && optional_default_value != "{}")
             TODO();
         auto dictionary_generator = scoped_generator.fork();
-        dictionary_generator.append(R"~~~(
-    if (!@js_name@@js_suffix@.is_nullish() && !@js_name@@js_suffix@.is_object())
-        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");
-
-    @parameter.type.name.normalized@ @cpp_name@ {};
-)~~~");
-        auto current_dictionary_name = parameter.type->name();
-        auto* current_dictionary = &interface.dictionaries.find(current_dictionary_name)->value;
-        // FIXME: This (i) is a hack to make sure we don't generate duplicate variable names.
-        static auto i = 0;
-        while (true) {
-            Vector<DictionaryMember> members;
-            for (auto& member : current_dictionary->members)
-                members.append(member);
-
-            if (interface.partial_dictionaries.contains(current_dictionary_name)) {
-                auto& partial_dictionaries = interface.partial_dictionaries.find(current_dictionary_name)->value;
-                for (auto& partial_dictionary : partial_dictionaries)
-                    for (auto& member : partial_dictionary.members)
-                        members.append(member);
-            }
-
-            for (auto& member : members) {
-                dictionary_generator.set("member_key", member.name);
-                auto member_js_name = make_input_acceptable_cpp(member.name.to_snakecase());
-                auto member_value_name = ByteString::formatted("{}_value_{}", member_js_name, i);
-                auto member_property_value_name = ByteString::formatted("{}_property_value_{}", member_js_name, i);
-                dictionary_generator.set("member_name", member_js_name);
-                dictionary_generator.set("member_value_name", member_value_name);
-                dictionary_generator.set("member_property_value_name", member_property_value_name);
-                dictionary_generator.append(R"~~~(
-    auto @member_property_value_name@ = JS::js_undefined();
-    if (@js_name@@js_suffix@.is_object())
-        @member_property_value_name@ = TRY(@js_name@@js_suffix@.as_object().get("@member_key@"_utf16_fly_string));
-)~~~");
-                if (member.required) {
-                    dictionary_generator.append(R"~~~(
-    if (@member_property_value_name@.is_undefined())
-        return vm.throw_completion<JS::TypeError>(JS::ErrorType::MissingRequiredProperty, "@member_key@");
-)~~~");
-                } else if (!member.default_value.has_value()) {
-                    // Assume struct member is Optional<T> and _don't_ assign the generated default
-                    // value (e.g. first enum member) when the dictionary member is optional (i.e.
-                    // no `required` and doesn't have a default value).
-                    // This is needed so that "dictionary has member" checks work as expected.
-                    dictionary_generator.append(R"~~~(
-    if (!@member_property_value_name@.is_undefined()) {
-)~~~");
-                }
-
-                generate_to_cpp(dictionary_generator, member, member_property_value_name, "", member_value_name, interface, member.extended_attributes.contains("LegacyNullToEmptyString"), !member.required, member.default_value);
-
-                bool may_be_null = !optional_default_value.has_value() || parameter.type->is_nullable() || optional_default_value.value() == "null";
-
-                // Required dictionary members cannot be null.
-                may_be_null &= !member.required && !member.default_value.has_value();
-
-                if (member.type->is_string() && optional && may_be_null) {
-                    dictionary_generator.append(R"~~~(
-    if (@member_value_name@.has_value())
-        @cpp_name@.@member_name@ = @member_value_name@.release_value();
-)~~~");
-                } else {
-                    dictionary_generator.append(R"~~~(
-    @cpp_name@.@member_name@ = @member_value_name@;
-)~~~");
-                }
-                if (!member.required && !member.default_value.has_value()) {
-                    dictionary_generator.append(R"~~~(
-    }
-)~~~");
-                }
-                i++;
-            }
-            if (current_dictionary->parent_name.is_empty())
-                break;
-            VERIFY(interface.dictionaries.contains(current_dictionary->parent_name));
-            current_dictionary_name = current_dictionary->parent_name;
-            current_dictionary = &interface.dictionaries.find(current_dictionary_name)->value;
-        }
+        auto dictionary_name = parameter.type->name();
+        auto& dictionary = interface.dictionaries.find(dictionary_name)->value;
+        generate_dictionary_to_cpp(dictionary_generator, interface, dictionary, dictionary_name, optional, optional_default_value);
     } else if (interface.callback_functions.contains(parameter.type->name())) {
         // https://webidl.spec.whatwg.org/#es-callback-function
 
@@ -1983,19 +1994,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
     if (optional_uses_value_access)
         value_non_optional = ByteString::formatted("{}.value()", value);
     scoped_generator.set("value_non_optional", value_non_optional);
-    if (!libweb_interface_namespaces.span().contains_slow(type.name())) {
-        if (is_javascript_builtin(type))
-            scoped_generator.set("type", ByteString::formatted("JS::{}", type.name()));
-        else
-            scoped_generator.set("type", type.name());
-    } else {
-        // e.g. Document.getSelection which returns Selection, which is in the Selection namespace.
-        StringBuilder builder;
-        builder.append(type.name());
-        builder.append("::"sv);
-        builder.append(type.name());
-        scoped_generator.set("type", builder.to_byte_string());
-    }
+    scoped_generator.set("type", cpp_type_name(type));
     scoped_generator.set("result_expression", result_expression);
     scoped_generator.set("recursion_depth", ByteString::number(recursion_depth));
     scoped_generator.set("iteration_index", ByteString::number(iteration_index));
@@ -3796,7 +3795,7 @@ void @class_name@::initialize(JS::Realm& realm)
         }
     }
 
-    if (interface.has_unscopable_member) {
+    if (interface.has_unscopable_member && generate_unforgeables == GenerateUnforgeables::No) {
         generator.append(R"~~~(
     auto unscopable_object = JS::Object::create(realm, nullptr);
 )~~~");
@@ -4077,7 +4076,7 @@ void @class_name@::initialize(JS::Realm& realm)
             maplike_generator.appendln("    @define_native_function@(realm, vm.names.clear, clear, 0, default_attributes);");
     }
 
-    if (interface.has_unscopable_member) {
+    if (interface.has_unscopable_member && generate_unforgeables == GenerateUnforgeables::No) {
         generator.append(R"~~~(
     @define_direct_property@(vm.well_known_symbol_unscopables(), unscopable_object, JS::Attribute::Configurable);
 )~~~");
