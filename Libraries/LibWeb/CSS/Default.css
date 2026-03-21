@@ -19,9 +19,8 @@ blink {
     display: inline;
 }
 
-/* FIXME: This doesn't seem right. */
 label {
-    display: inline-block;
+    cursor: default;
 }
 
 /* FIXME: This is a temporary hack until we can render a native-looking frame for these. */
