@@ -323,8 +323,12 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
             add_rules_from_cache(*rule_cache);
     }
 
-    if (auto assigned_slot = abstract_element.element().assigned_slot_internal()) {
-        if (auto const* slot_shadow_root = as_if<DOM::ShadowRoot>(assigned_slot->root())) {
+    // Walk up the slot chain for nested slots. An element can be assigned to a slot
+    // which is itself assigned to another slot in a parent shadow root. The ::slotted()
+    // pseudo-element matches elements assigned "after flattening", so we must collect
+    // slotted rules from every shadow root in the chain.
+    for (GC::Ptr<HTML::HTMLSlotElement const> slot = abstract_element.element().assigned_slot_internal(); slot; slot = slot->assigned_slot_internal()) {
+        if (auto const* slot_shadow_root = as_if<DOM::ShadowRoot>(slot->root())) {
             if (auto const* rule_cache = rule_cache_for_cascade_origin(cascade_origin, qualified_layer_name, slot_shadow_root)) {
                 add_rules_to_run(rule_cache->slotted_rules);
             }
@@ -332,8 +336,12 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
     }
 
     // ::part() can apply to anything in a shadow tree, that is either an element with a `part` attribute or a pseudo-element.
-    // Rules from any ancestor style scope can apply.
+    // Rules from any ancestor style scope can apply, including from the element's own shadow root
+    // (for :host::part() within the shadow DOM's own stylesheet).
     if (shadow_root && (abstract_element.pseudo_element().has_value() || !abstract_element.element().part_names().is_empty())) {
+        if (auto const* rule_cache = rule_cache_for_cascade_origin(cascade_origin, qualified_layer_name, shadow_root)) {
+            add_rules_to_run(rule_cache->part_rules);
+        }
         for (auto* part_shadow_root = abstract_element.element().first_flat_tree_ancestor_of_type<DOM::ShadowRoot>();
             part_shadow_root;
             part_shadow_root = part_shadow_root->first_flat_tree_ancestor_of_type<DOM::ShadowRoot>()) {
@@ -351,19 +359,22 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
     matching_rules.ensure_capacity(rules_to_run.size());
 
     for (auto const& rule_to_run : rules_to_run) {
-        // NOTE: When matching an element against a rule from outside the shadow root's style scope,
-        //       we have to pass in null for the shadow host, otherwise combinator traversal will
-        //       be confined to the element itself (since it refuses to cross the shadow boundary).
+        // NOTE: When matching an element that is itself a shadow host against a rule from
+        //       outside its own shadow root, we must not use the element as the shadow host
+        //       for traversal (which would confine traversal to the element itself).
+        //       Instead, use the rule's shadow root's host, so that combinators can traverse
+        //       up to the enclosing shadow host (e.g. for `:host(...) .descendant` selectors).
         auto rule_root = rule_to_run.shadow_root;
         auto shadow_host_to_use = shadow_host;
         if (abstract_element.element().is_shadow_host() && rule_root != abstract_element.element().shadow_root())
-            shadow_host_to_use = nullptr;
+            shadow_host_to_use = rule_root ? rule_root->host() : nullptr;
 
         auto const& selector = rule_to_run.selector;
 
         SelectorEngine::MatchContext context {
             .style_sheet_for_rule = *rule_to_run.sheet,
             .subject = abstract_element.element(),
+            .rule_shadow_root = rule_root,
             .collect_per_element_selector_involvement_metadata = true,
             .has_result_cache = m_has_result_cache.ptr(),
         };
@@ -377,10 +388,25 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
             // For ::slotted() matching, slot should be used as a subject instead of element,
             // while element itself is saved in matching context, so selector engine could
             // switch back to it when matching inside ::slotted() argument.
-            auto const& slot = *abstract_element.element().assigned_slot_internal();
+            // For nested slots, find the slot that lives in the same shadow root as the rule.
+            GC::Ptr<HTML::HTMLSlotElement const> matching_slot;
+            for (GC::Ptr<HTML::HTMLSlotElement const> slot = abstract_element.element().assigned_slot_internal(); slot; slot = slot->assigned_slot_internal()) {
+                if (as_if<DOM::ShadowRoot>(slot->root()) == rule_root) {
+                    matching_slot = slot;
+                    break;
+                }
+            }
+            if (!matching_slot)
+                continue;
             context.slotted_element = &abstract_element.element();
-            context.subject = &slot;
-            if (!SelectorEngine::matches(selector, slot, shadow_host_to_use, context, PseudoElement::Slotted))
+            context.subject = matching_slot;
+            // The slot lives inside a shadow tree. Derive the shadow host from the
+            // slot's containing shadow root so that combinators like
+            // `:host ::slotted(...)` can traverse from the slot to the shadow host.
+            GC::Ptr<DOM::Element const> slot_shadow_host;
+            if (auto const* slot_shadow_root = as_if<DOM::ShadowRoot>(matching_slot->root()))
+                slot_shadow_host = slot_shadow_root->host();
+            if (!SelectorEngine::matches(selector, *matching_slot, slot_shadow_host, context, PseudoElement::Slotted))
                 continue;
         } else if (!SelectorEngine::matches(selector, abstract_element.element(), shadow_host_to_use, context, abstract_element.pseudo_element()))
             continue;
@@ -634,6 +660,16 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
 
     auto progress_in_keyframe = (progress - keyframe_start) / static_cast<double>(keyframe_end - keyframe_start);
 
+    // https://drafts.csswg.org/css-animations-1/#animation-timing-function
+    // Apply the per-keyframe easing to the interval progress. The easing on a keyframe applies to the
+    // interval from that keyframe to the next. If the keyframe doesn't specify an easing, use the
+    // animation's default easing (from the animation-timing-function property).
+    if (keyframe_values.easing.has_value()) {
+        progress_in_keyframe = keyframe_values.easing->evaluate_at(progress_in_keyframe, false);
+    } else if (animation->is_css_animation()) {
+        progress_in_keyframe = static_cast<CSSAnimation const&>(*animation).default_easing().evaluate_at(progress_in_keyframe, false);
+    }
+
     if constexpr (LIBWEB_CSS_ANIMATION_DEBUG) {
         auto valid_properties = keyframe_values.properties.size();
         dbgln("Animation {} contains {} properties to interpolate, progress = {}%", animation->id(), valid_properties, progress_in_keyframe * 100);
@@ -879,10 +915,19 @@ void StyleComputer::process_animation_definitions(ComputedProperties const& comp
 
         animation->apply_css_properties(animation_properties);
 
-        if (auto const* rule_cache = rule_cache_for_cascade_origin(CascadeOrigin::Author, {}, {})) {
-            if (auto keyframe_set = rule_cache->rules_by_animation_keyframes.get(animation_properties.name); keyframe_set.has_value())
-                effect->set_key_frame_set(keyframe_set.value());
-        }
+        auto find_keyframes = [&](GC::Ptr<DOM::ShadowRoot const> shadow_root) -> RefPtr<Animations::KeyframeEffect::KeyFrameSet const> {
+            if (auto const* rule_cache = rule_cache_for_cascade_origin(CascadeOrigin::Author, {}, shadow_root)) {
+                if (auto keyframe_set = rule_cache->rules_by_animation_keyframes.get(animation_properties.name); keyframe_set.has_value())
+                    return keyframe_set.value();
+            }
+            return {};
+        };
+
+        // Look up @keyframes in the element's shadow root first, then fall back to the document-level rules.
+        if (auto shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root()))
+            effect->set_key_frame_set(find_keyframes(shadow_root));
+        if (!effect->key_frame_set())
+            effect->set_key_frame_set(find_keyframes(nullptr));
 
         effect->set_target(abstract_element);
         abstract_element.set_has_css_defined_animations();
@@ -1661,6 +1706,11 @@ void StyleComputer::transform_box_type_if_needed(ComputedProperties& style, DOM:
         else if (abstract_element.element().tag_name().equals_ignoring_ascii_case("mtd"sv))
             new_display = Display { DisplayInternal::TableCell };
     }
+
+    // https://www.w3.org/TR/CSS2/visuren.html#dis-pos-flo
+    // If 'position' has the value 'absolute' or 'fixed', [...] 'float' is set to 'none'
+    if (style.position() == Positioning::Absolute || style.position() == Positioning::Fixed)
+        style.set_property(PropertyID::Float, KeywordStyleValue::create(Keyword::None));
 
     switch (required_box_type_transformation(style, abstract_element)) {
     case BoxTypeTransformation::None:

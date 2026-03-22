@@ -1760,7 +1760,17 @@ void GridFormattingContext::resolve_grid_item_sizes(GridDimension dimension)
                     .size = stretched_size
                 };
             } else if (preferred_size.is_auto() || preferred_size.is_fit_content()) {
-                auto fit_content_size = dimension == GridDimension::Column ? calculate_fit_content_width(item.box, available_space) : calculate_fit_content_height(item.box, available_space);
+                CSSPixels fit_content_size;
+                if (dimension == GridDimension::Column) {
+                    fit_content_size = calculate_fit_content_width(item.box, available_space);
+                } else if (preferred_size.is_auto() && item.box->has_preferred_aspect_ratio() && *item.box->preferred_aspect_ratio() != 0 && item.used_values.has_definite_width()) {
+                    // NB: When the item has a preferred aspect ratio and a definite width, resolve the
+                    //     height through the aspect ratio instead of using fit-content sizing, which would
+                    //     incorrectly use the available width (grid area width) instead of the item's width.
+                    fit_content_size = item.used_values.content_width() / *item.box->preferred_aspect_ratio();
+                } else {
+                    fit_content_size = calculate_fit_content_height(item.box, available_space);
+                }
                 used_alignment = try_compute_size(fit_content_size, preferred_size);
             } else {
                 auto size_px = calculate_inner_size(preferred_size);
@@ -2680,8 +2690,12 @@ CSSPixels GridFormattingContext::calculate_minimum_contribution(GridItem const& 
             return calculate_min_content_contribution(item, dimension);
         if (minimum_size.is_max_content())
             return calculate_max_content_contribution(item, dimension);
-        auto containing_block_size = containing_block_size_for_item(item, dimension);
-        return item.add_margin_box_sizes(minimum_size.to_px(grid_container(), containing_block_size), dimension);
+        CSSPixels inner_minimum_size;
+        if (dimension == GridDimension::Column)
+            inner_minimum_size = calculate_inner_width(item.box, item.available_space().width, minimum_size);
+        else
+            inner_minimum_size = calculate_inner_height(item.box, item.available_space(), minimum_size);
+        return item.add_margin_box_sizes(inner_minimum_size, dimension);
     }
 
     return calculate_min_content_contribution(item, dimension);

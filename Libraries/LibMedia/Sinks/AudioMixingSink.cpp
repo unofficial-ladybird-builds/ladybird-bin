@@ -24,6 +24,12 @@ AudioMixingSink::AudioMixingSink(AudioMixingSinkWeakReference& weak_ref)
     : m_main_thread_event_loop(Core::EventLoop::current())
     , m_weak_self(weak_ref)
 {
+    m_main_thread_event_loop.deferred_invoke([weak_self = m_weak_self] {
+        auto self = weak_self->take_strong();
+        if (!self)
+            return;
+        self->create_playback_stream();
+    });
 }
 
 AudioMixingSink::~AudioMixingSink()
@@ -37,8 +43,6 @@ void AudioMixingSink::set_provider(Track const& track, RefPtr<AudioDataProvider>
     m_track_mixing_datas.remove(track);
     if (provider == nullptr)
         return;
-
-    create_playback_stream();
 
     // The provider must have its output sample specification set before it starts decoding, or
     // we'll drop some samples due to a mismatch.
@@ -59,25 +63,11 @@ RefPtr<AudioDataProvider> AudioMixingSink::provider(Track const& track) const
 
 void AudioMixingSink::create_playback_stream()
 {
-    if (m_playback_stream != nullptr)
+    if (m_playback_stream != nullptr || m_creating_playback_stream)
         return;
 
-    auto sample_specification_callback = [weak_self = m_weak_self](Audio::SampleSpecification sample_specification) {
-        auto self = weak_self->take_strong();
-        if (!self)
-            return;
+    m_creating_playback_stream = true;
 
-        Threading::MutexLocker locker { self->m_mutex };
-        self->m_sample_specification = sample_specification;
-
-        for (auto& [track, track_data] : self->m_track_mixing_datas) {
-            track_data.provider->set_output_sample_specification(sample_specification);
-            track_data.provider->start();
-        }
-
-        if (self->m_playing)
-            self->resume();
-    };
     auto data_callback = [weak_self = m_weak_self](Span<float> buffer) -> ReadonlySpan<float> {
         auto self = weak_self->take_strong();
         if (!self)
@@ -86,14 +76,40 @@ void AudioMixingSink::create_playback_stream()
     };
     constexpr u32 target_latency_ms = 100;
 
-    auto stream_or_error = Audio::PlaybackStream::create(Audio::OutputState::Suspended, target_latency_ms, move(sample_specification_callback), move(data_callback));
+    auto promise = Audio::PlaybackStream::create(Audio::OutputState::Suspended, target_latency_ms, move(data_callback));
 
-    if (!stream_or_error.is_error()) {
-        m_playback_stream = stream_or_error.value();
-        set_volume(m_volume);
-    } else {
-        dbgln("Failed to create playback stream: {}", stream_or_error.error());
-    }
+    promise->when_resolved([weak_self = m_weak_self](auto& stream) {
+        auto self = weak_self->take_strong();
+        if (!self)
+            return;
+
+        self->m_creating_playback_stream = false;
+        self->m_playback_stream = stream;
+        self->set_volume(self->m_volume);
+        if (self->m_temporary_time.has_value())
+            self->set_time(self->m_temporary_time.value());
+
+        Threading::MutexLocker locker { self->m_mutex };
+        self->m_sample_specification = stream->sample_specification();
+
+        for (auto& [track, track_data] : self->m_track_mixing_datas) {
+            track_data.provider->set_output_sample_specification(self->m_sample_specification);
+            track_data.provider->start();
+        }
+
+        if (self->m_playing)
+            self->resume();
+    });
+
+    promise->when_rejected([weak_self = m_weak_self](auto& error) {
+        auto self = weak_self->take_strong();
+        if (!self)
+            return;
+
+        self->m_creating_playback_stream = false;
+        if (self->on_audio_output_error)
+            self->on_audio_output_error(move(error));
+    });
 }
 
 ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<float> buffer)
@@ -107,10 +123,45 @@ ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<fl
 
     Threading::MutexLocker mixing_data_locker { m_mutex };
     auto buffer_start = m_next_sample_to_write.load();
+    auto samples_end = buffer_start + static_cast<i64>(sample_count);
+
+    auto buffering = false;
+    for (auto& [track, track_data] : m_track_mixing_datas) {
+        if (!track_data.provider->is_blocked())
+            continue;
+        auto available_end = track_data.provider->queue_end_sample();
+        if (available_end < samples_end) {
+            samples_end = available_end;
+            buffering = true;
+        }
+    }
+
+    for (auto& [track, track_data] : m_track_mixing_datas) {
+        if (!buffering) {
+            track_data.buffering = false;
+        } else {
+            if (!track_data.provider->is_blocked())
+                continue;
+            if (track_data.buffering)
+                continue;
+            track_data.buffering = true;
+
+            m_main_thread_event_loop.deferred_invoke([weak_self = m_weak_self, track] {
+                auto self = weak_self->take_strong();
+                if (self && self->on_start_buffering)
+                    self->on_start_buffering(track);
+            });
+        }
+    }
+
+    sample_count = max(samples_end - buffer_start, 0);
+    auto write_size = sample_count * channel_count;
+
+    if (sample_count == 0)
+        return buffer;
 
     for (auto& [track, track_data] : m_track_mixing_datas) {
         auto next_sample = buffer_start;
-        auto samples_end = next_sample + static_cast<i64>(sample_count);
 
         auto go_to_next_block = [&] {
             auto new_block = track_data.provider->retrieve_block();
@@ -156,13 +207,13 @@ ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<fl
 
             VERIFY(next_sample >= buffer_start);
             auto index_in_buffer = static_cast<size_t>((next_sample - buffer_start) * channel_count);
-            VERIFY(index_in_buffer < buffer.size());
+            VERIFY(index_in_buffer < write_size);
 
             VERIFY(current_block.data_count() >= index_in_block);
             auto write_count = current_block.data_count() - index_in_block;
-            write_count = min(write_count, buffer.size() - index_in_buffer);
+            write_count = min(write_count, write_size - index_in_buffer);
             VERIFY(write_count > 0);
-            VERIFY(index_in_buffer + write_count <= buffer.size());
+            VERIFY(index_in_buffer + write_count <= write_size);
             VERIFY(write_count % channel_count == 0);
 
             for (size_t i = 0; i < write_count; i++)
@@ -258,6 +309,12 @@ void AudioMixingSink::pause()
 
 void AudioMixingSink::set_time(AK::Duration time)
 {
+    if (!m_playback_stream) {
+        m_last_media_time = time;
+        m_last_stream_time = AK::Duration::zero();
+        return;
+    }
+
     // If we've already started setting the time, we only need to let the last callback complete
     // and set the media time to the temporary time. The callbacks run synchronously, so this will
     // never drop a set_time() call.
@@ -267,6 +324,7 @@ void AudioMixingSink::set_time(AK::Duration time)
     }
 
     m_temporary_time = time;
+
     m_playback_stream->drain_buffer_and_suspend()
         ->when_resolved([weak_self = m_weak_self, &playback_stream = *m_playback_stream]() {
             auto self = weak_self->take_strong();

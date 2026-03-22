@@ -1,0 +1,4 @@
+rotateY at 0.25 is not identity: true
+rotateY at 0.5 is ~identity: true
+rotateX at 0.5 of 720deg is ~identity: true
+rotateX at 0.25 of 720deg is not identity: true

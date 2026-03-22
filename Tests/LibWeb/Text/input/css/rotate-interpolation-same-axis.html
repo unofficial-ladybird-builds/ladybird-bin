@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<div id="target" style="position: absolute;"></div>
+<script src="../include.js"></script>
+<script>
+    test(() => {
+        const el = document.getElementById("target");
+
+        // rotateY(0deg) to rotateY(3600deg) should interpolate the angle numerically,
+        // not via quaternion slerp (which would see 3600deg as equivalent to 0deg).
+        const anim = el.animate([
+            { transform: "rotateY(0deg)" },
+            { transform: "rotateY(3600deg)" },
+        ], 1000);
+        anim.pause();
+
+        // Without the fix, all of these would be the identity matrix (no rotation).
+        // With the fix, 25% of 3600deg = 900deg, which is a non-trivial rotation.
+        anim.currentTime = 250;
+        const at25 = getComputedStyle(el).transform;
+        println("rotateY at 0.25 is not identity: " + (at25 !== "matrix(1, 0, 0, 1, 0, 0)" && at25 !== "none"));
+
+        // 50% of 3600deg = 1800deg = 5 full turns, visually equivalent to 0deg.
+        anim.currentTime = 500;
+        const at50 = getComputedStyle(el).transform;
+        // The matrix should be approximately identity (full turns).
+        println("rotateY at 0.5 is ~identity: " + (at50.startsWith("matrix3d(1,") || at50 === "matrix(1, 0, 0, 1, 0, 0)"));
+
+        // 25% of 720deg = 360deg for rotateX, visually identity.
+        const anim2 = el.animate([
+            { transform: "rotateX(0deg)" },
+            { transform: "rotateX(720deg)" },
+        ], 1000);
+        anim2.pause();
+
+        // 50% of 720deg = 360deg, visually identity.
+        anim2.currentTime = 500;
+        const rx50 = getComputedStyle(el).transform;
+        println("rotateX at 0.5 of 720deg is ~identity: " + (rx50.startsWith("matrix3d(1,") || rx50 === "matrix(1, 0, 0, 1, 0, 0)"));
+
+        // 25% of 720deg = 180deg, should NOT be identity.
+        anim2.currentTime = 250;
+        const rx25 = getComputedStyle(el).transform;
+        println("rotateX at 0.25 of 720deg is not identity: " + (rx25 !== "matrix(1, 0, 0, 1, 0, 0)" && rx25 !== "none"));
+    });
+</script>

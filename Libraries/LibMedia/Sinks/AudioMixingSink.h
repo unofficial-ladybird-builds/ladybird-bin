@@ -42,6 +42,9 @@ public:
 
     void set_volume(double);
 
+    Function<void(Error&&)> on_audio_output_error;
+    Function<void(Track const&)> on_start_buffering;
+
 private:
     static constexpr size_t MAX_BLOCK_COUNT = 16;
 
@@ -72,6 +75,7 @@ private:
 
         NonnullRefPtr<AudioDataProvider> provider;
         AudioBlock current_block;
+        bool buffering { false };
     };
 
     void create_playback_stream();
@@ -82,6 +86,7 @@ private:
 
     Threading::Mutex m_mutex;
     Threading::ConditionVariable m_wait_condition { m_mutex };
+    bool m_creating_playback_stream { false };
     RefPtr<Audio::PlaybackStream> m_playback_stream;
     Audio::SampleSpecification m_sample_specification;
     bool m_playing { false };
