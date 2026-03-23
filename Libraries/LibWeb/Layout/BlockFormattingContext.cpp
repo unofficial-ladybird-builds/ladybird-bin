@@ -60,18 +60,41 @@ CSSPixels BlockFormattingContext::automatic_content_height() const
 
 static bool margins_collapse_through(Box const& box, LayoutState& state)
 {
-    // FIXME: A box's own margins collapse if the 'min-height' property is zero, and it has neither top or bottom borders
-    // nor top or bottom padding, and it has a 'height' of either 0 or 'auto', and it does not contain a line box, and
-    // all of its in-flow children's margins (if any) collapse.
-    // https://www.w3.org/TR/CSS22/box.html#collapsing-margins
-    // FIXME: For the purpose of margin collapsing (CSS 2 §8.3.1 Collapsing margins), if the block axis is the
-    //        ratio-dependent axis, it is not considered to have a computed block-size of auto.
-    //        https://www.w3.org/TR/css-sizing-4/#aspect-ratio-margin-collapse
+    // https://drafts.csswg.org/css2/#adjoining-margins
+    // Two margins are adjoining if and only if:
+    // - both belong to in-flow block-level boxes that participate in the same block formatting context
+    //   NB: Yes, we're dealing with one and the same box here.
 
+    // - no line boxes, no clearance, no padding and no border separate them (Note that certain zero-height line boxes
+    //   (see 9.4.2) are ignored for this purpose.)
+    // NB: Border and padding are handled further down.
     if (box.computed_values().clear() != CSS::Clear::None)
         return false;
 
-    return state.get(box).border_box_height() == 0;
+    // - both belong to vertically-adjacent box edges, i.e. form one of the following pairs:
+    //   - top and bottom margins of a box that does not establish a new block formatting context and that has zero
+    //     computed 'min-height', zero or 'auto' computed 'height', and no in-flow children
+    if (FormattingContext::creates_block_formatting_context(box))
+        return false;
+
+    // NB: This should take care of the height and min-height constraints.
+    //     ( also see https://github.com/w3c/csswg-drafts/pull/13699#issuecomment-4103045370 for spec ambiguity )
+    if (state.get(box).border_box_height() != 0)
+        return false;
+
+    // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-margin-collapse
+    // FIXME: For the purpose of margin collapsing (CSS 2 §8.3.1 Collapsing margins), if the block axis is the
+    //        ratio-dependent axis, it is not considered to have a computed block-size of auto.
+
+    // AD-HOC: The "and no in-flow children" above is wrong. (see https://github.com/w3c/csswg-drafts/pull/13699 )
+    for (auto const* child = box.first_child_of_type<Box>(); child; child = child->next_sibling_of_type<Box>()) {
+        if (child->is_out_of_flow())
+            continue;
+        if (!margins_collapse_through(*child, state))
+            return false;
+    }
+
+    return true;
 }
 
 void BlockFormattingContext::run(AvailableSpace const& available_space)
@@ -1581,24 +1604,45 @@ CSSPixels BlockFormattingContext::greatest_child_width(Box const& box) const
 Optional<int> BlockFormattingContext::determine_used_value_for_column_count(CSSPixels const& U) const
 {
     auto const& computed_values = root().computed_values();
+    // (01)  if ((column-width = auto) and (column-count = auto)) then
     if (computed_values.column_width().is_auto() && computed_values.column_count().is_auto()) {
+        // (02)      exit; /* not a multicol container */
         return {};
     }
+
+    // (03)  if column-width = auto then
     if (computed_values.column_width().is_auto()) {
+        // (04)      N := column-count
         return computed_values.column_count().value();
     }
+
     auto column_gap = get_column_gap_used_value_for_multicol(U);
-    auto column_width = computed_values.column_width().to_px(root(), U);
-    auto divisor = column_width + column_gap;
-    auto column_count = divisor == 0 ? 1 : max(1, ((U + column_gap) / divisor).to_int());
-    if (computed_values.column_count().is_auto())
-        return column_count;
-    return min(computed_values.column_count().value(), column_count);
+    auto column_width = get_column_width_used_value_for_multicol(U);
+
+    // (05)  else if column-count = auto then
+    if (computed_values.column_count().is_auto()) {
+        // (06)      N := max(1,
+        // (07)        floor((U + column-gap)/(column-width + column-gap)))
+        return max(1, ((U + column_gap) / (column_width + column_gap)).to_int());
+    }
+
+    // (08)  else
+    // (09)      N := min(column-count, max(1,
+    // (10)        floor((U + column-gap)/(column-width + column-gap))))
+    return min(computed_values.column_count().value(), max(1, ((U + column_gap) / (column_width + column_gap)).to_int()));
 }
 CSSPixels BlockFormattingContext::determine_used_value_for_column_width(CSSPixels const& U, int N) const
 {
     auto column_gap = get_column_gap_used_value_for_multicol(U);
+    // (11)  W := max(0, (U + column-gap)/N - column-gap)
     return max(CSSPixels(0), (U + column_gap) / N - column_gap);
+}
+
+// https://drafts.csswg.org/css-multicol-2/#cw
+CSSPixels BlockFormattingContext::get_column_width_used_value_for_multicol(CSSPixels const& U) const
+{
+    // Used values will be clamped to a minimum of '1px'.
+    return max(root().computed_values().column_width().to_px(root(), U), 1);
 }
 
 // https://www.w3.org/TR/css-align-3/#column-row-gap
