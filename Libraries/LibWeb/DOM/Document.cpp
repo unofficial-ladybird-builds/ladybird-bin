@@ -5188,26 +5188,58 @@ void Document::queue_an_intersection_observer_entry(IntersectionObserver::Inters
 }
 
 // https://www.w3.org/TR/intersection-observer/#compute-the-intersection
-static CSSPixelRect compute_intersection(GC::Ref<Element> target, IntersectionObserver::IntersectionObserver const& observer)
+static CSSPixelRect compute_intersection(GC::Ref<Element> target, IntersectionObserver::IntersectionObserver const& observer, Painting::PaintableBox const* root_paintable, CSSPixelRect const& root_bounds)
 {
     // 1. Let intersectionRect be the result of getting the bounding box for target.
     auto intersection_rect = target->get_bounding_client_rect();
 
-    // FIXME: 2. Let container be the containing block of target.
-    // FIXME: 3. While container is not root:
-    // FIXME:   1. If container is the document of a nested browsing context, update intersectionRect by clipping to
-    //             the viewport of the document, and update container to be the browsing context container of container.
-    // FIXME:   2. Map intersectionRect to the coordinate space of container.
-    // FIXME:   3. If container has a content clip or a css clip-path property, update intersectionRect by applying
-    //             container’s clip.
-    // FIXME:   4. If container is the root element of a browsing context, update container to be the browsing context’s
-    //             document; otherwise, update container to be the containing block of container.
+    // 2. Let container be the containing block of target.
+    // 3. While container is not root:
+    if (auto const* target_paintable = target->paintable_box()) {
+        for (auto const* container = target_paintable->containing_block(); container; container = container->containing_block()) {
+            // Stop when we reach the intersection root.
+            if (container == root_paintable)
+                break;
+
+            // FIXME: 3.1. If container is the document of a nested browsing context, update
+            //             intersectionRect by clipping to the viewport of the document, and update
+            //             container to be the browsing context container of container.
+
+            // NOTE: Steps 3.2 (map to container coordinate space) and 3.5 (update container) are
+            //       unnecessary here because get_bounding_client_rect() and transform_rect_to_viewport()
+            //       already produce viewport-relative coordinates.
+
+            // 3.3. If container is a scroll container, apply the observer’s [[scrollMargin]]
+            //      to the container’s clip rect.
+            // 3.4. If container has a content clip or a css clip-path property, update intersectionRect
+            //      by applying container’s clip.
+            // FIXME: Handle clip-path.
+            auto overflow_x = container->computed_values().overflow_x();
+            auto overflow_y = container->computed_values().overflow_y();
+            bool has_content_clip = overflow_x != CSS::Overflow::Visible || overflow_y != CSS::Overflow::Visible;
+            if (has_content_clip) {
+                auto clip_rect = container->transform_rect_to_viewport(container->absolute_padding_box_rect());
+
+                // Apply scroll margin to expand the scrollport for scroll containers.
+                auto& scroll_margin = observer.scroll_margin_values();
+                auto const& layout_node = container->layout_node_with_style_and_box_metrics();
+                if (layout_node.is_scroll_container() && !scroll_margin.is_empty()) {
+                    clip_rect.inflate(
+                        scroll_margin[0].to_px(layout_node, clip_rect.height()),
+                        scroll_margin[1].to_px(layout_node, clip_rect.width()),
+                        scroll_margin[2].to_px(layout_node, clip_rect.height()),
+                        scroll_margin[3].to_px(layout_node, clip_rect.width()));
+                }
+
+                intersection_rect.intersect(clip_rect);
+            }
+        }
+    }
+
     // FIXME: 4. Map intersectionRect to the coordinate space of root.
 
     // 5. Update intersectionRect by intersecting it with the root intersection rectangle.
-    // FIXME: Pass in target so we can properly apply rootMargin.
-    auto root_intersection_rectangle = observer.root_intersection_rectangle();
-    intersection_rect.intersect(root_intersection_rectangle);
+    intersection_rect.intersect(root_bounds);
 
     // FIXME: 6. Map intersectionRect to the coordinate space of the viewport of the document containing target.
 
@@ -5231,6 +5263,12 @@ void Document::run_the_update_intersection_observations_steps(HighResolutionTime
         // 1. Let rootBounds be observer’s root intersection rectangle.
         auto root_bounds = observer->root_intersection_rectangle();
 
+        // Pre-compute per-observer values to avoid repeated work in the per-target loop.
+        auto intersection_root_node = observer->intersection_root_node();
+        auto* root_paintable = intersection_root_node->paintable_box();
+        bool is_implicit_root = observer->is_implicit_root();
+        bool root_is_element = intersection_root_node->is_element();
+
         // 2. For each target in observer’s internal [[ObservationTargets]] slot, processed in the same order that
         //    observe() was called on each target:
         for (auto& target : observer->observation_targets()) {
@@ -5247,25 +5285,21 @@ void Document::run_the_update_intersection_observations_steps(HighResolutionTime
             // intersectionRect be a DOMRectReadOnly with x, y, width, and height set to 0.
             CSSPixelRect intersection_rect { 0, 0, 0, 0 };
 
-            // SPEC ISSUE: It doesn't pass in intersection ratio to "queue an IntersectionObserverEntry" despite needing it.
+            // SPEC ISSUE: It doesn’t pass in intersection ratio to "queue an IntersectionObserverEntry" despite needing it.
             //             This is default 0, as isIntersecting is default false, see step 9.
             double intersection_ratio = 0.0;
 
             // 2. If the intersection root is not the implicit root, and target is not in the same document as the intersection root, skip to step 11.
             // 3. If the intersection root is an Element, and target is not a descendant of the intersection root in the containing block chain, skip to step 11.
             // FIXME: Actually use the containing block chain.
-            auto intersection_root = observer->intersection_root();
-            auto intersection_root_document = intersection_root.visit([](auto& node) -> GC::Ref<Document> {
-                return node->document();
-            });
             // NOTE: Check if target has a layout node is not in the spec but required to match other browsers.
-            if (target->layout_node() && (!(observer->root().has<Empty>() && &target->document() == intersection_root_document.ptr()) || !(intersection_root.has<GC::Root<DOM::Element>>() && !target->is_descendant_of(*intersection_root.get<GC::Root<DOM::Element>>())))) {
+            if (target->layout_node() && (is_implicit_root || &target->document() == &intersection_root_node->document()) && !(root_is_element && !target->is_descendant_of(*intersection_root_node))) {
                 // 4. Set targetRect to the DOMRectReadOnly obtained by getting the bounding box for target.
                 target_rect = target->get_bounding_client_rect();
 
                 // 5. Let intersectionRect be the result of running the compute the intersection algorithm on target and
                 //    observer’s intersection root.
-                intersection_rect = compute_intersection(target, observer);
+                intersection_rect = compute_intersection(target, *observer, root_paintable, root_bounds);
 
                 // 6. Let targetArea be targetRect’s area.
                 auto target_area = target_rect.width() * target_rect.height();
@@ -5287,10 +5321,20 @@ void Document::run_the_update_intersection_observations_steps(HighResolutionTime
                 // 10. Set thresholdIndex to the index of the first entry in observer.thresholds whose value is greater
                 //     than intersectionRatio, or the length of observer.thresholds if intersectionRatio is greater than
                 //     or equal to the last entry in observer.thresholds.
-                threshold_index = observer->thresholds().find_first_index_if([&intersection_ratio](double threshold_value) {
-                                                            return threshold_value > intersection_ratio;
-                                                        })
-                                      .value_or(observer->thresholds().size());
+                // NB: Thresholds are sorted in ascending order, so we use binary search.
+                {
+                    auto const& thresholds = observer->thresholds();
+                    size_t lo = 0;
+                    size_t hi = thresholds.size();
+                    while (lo < hi) {
+                        size_t mid = lo + (hi - lo) / 2;
+                        if (thresholds[mid] > intersection_ratio)
+                            hi = mid;
+                        else
+                            lo = mid + 1;
+                    }
+                    threshold_index = lo;
+                }
             }
 
             // 11. Let intersectionObserverRegistration be the IntersectionObserverRegistration record in target’s
