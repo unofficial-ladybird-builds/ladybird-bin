@@ -14,8 +14,14 @@
 #include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibCore/File.h>
+#if !defined(AK_OS_MACOS)
+#    include <LibCore/Socket.h>
+#else
+#    include <LibIPC/TransportBootstrapMach.h>
+#endif
 #include <LibHTTP/Cookie/Cookie.h>
 #include <LibHTTP/Cookie/ParsedCookie.h>
+#include <LibIPC/Transport.h>
 #include <LibJS/Runtime/Value.h>
 #include <LibURL/Parser.h>
 #include <LibWeb/CSS/ComputedProperties.h>
@@ -192,18 +198,25 @@ static bool fire_an_event(FlyString const& name, Optional<Web::DOM::Element&> ta
     return target->dispatch_event(event);
 }
 
-ErrorOr<NonnullRefPtr<WebDriverConnection>> WebDriverConnection::connect(Web::PageClient& page_client, ByteString const& webdriver_ipc_path)
+ErrorOr<NonnullRefPtr<WebDriverConnection>> WebDriverConnection::connect(Web::PageClient& page_client, ByteString const& webdriver_endpoint)
 {
-    // TODO: Mach IPC and Windows IPC
-
-    dbgln_if(WEBDRIVER_DEBUG, "Trying to connect to {}", webdriver_ipc_path);
-    auto socket = TRY(Core::LocalSocket::connect(webdriver_ipc_path));
+    dbgln_if(WEBDRIVER_DEBUG, "Trying to connect to {}", webdriver_endpoint);
+#if defined(AK_OS_MACOS)
+    auto transport_ports = TRY(IPC::bootstrap_transport_from_mach_server(webdriver_endpoint));
+#else
+    auto socket = TRY(Core::LocalSocket::connect(webdriver_endpoint));
+#endif
 
     // Allow pop-ups, or otherwise /window/new won't be able to open a new tab.
     page_client.page().set_should_block_pop_ups(false);
 
     dbgln_if(WEBDRIVER_DEBUG, "Connected to WebDriver");
-    auto connection = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) WebDriverConnection(make<IPC::Transport>(move(socket)), page_client)));
+#if defined(AK_OS_MACOS)
+    auto transport = make<IPC::Transport>(move(transport_ports.receive_right), move(transport_ports.send_right));
+#else
+    auto transport = TRY(IPC::Transport::from_socket(move(socket)));
+#endif
+    auto connection = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) WebDriverConnection(move(transport), page_client)));
     connection->async_did_set_window_handle(page_client.page().top_level_traversable()->window_handle());
     return connection;
 }

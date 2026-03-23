@@ -9,9 +9,14 @@
 #include <LibCore/Socket.h>
 #include <LibCore/System.h>
 #include <LibIPC/ConnectionToServer.h>
+#include <LibIPC/Transport.h>
+#if defined(AK_OS_MACOS)
+#    include <LibIPC/TransportBootstrapMach.h>
+#endif
 #include <LibWebView/Application.h>
 #include <LibWebView/BrowserProcess.h>
 #include <LibWebView/URL.h>
+#include <LibWebView/Utilities.h>
 
 namespace WebView {
 
@@ -32,11 +37,19 @@ ErrorOr<BrowserProcess::ProcessDisposition> BrowserProcess::connect(Vector<ByteS
     auto [socket_path, pid_path] = TRY(Process::paths_for_process(process_name));
 
     if (auto pid = TRY(Process::get_process_pid(process_name, pid_path)); pid.has_value()) {
+#if defined(AK_OS_MACOS)
+        TRY(connect_as_client(*pid, raw_urls, new_window));
+#else
         TRY(connect_as_client(socket_path, raw_urls, new_window));
+#endif
         return ProcessDisposition::ExitProcess;
     }
 
+#if defined(AK_OS_MACOS)
+    TRY(connect_as_server());
+#else
     TRY(connect_as_server(socket_path));
+#endif
 
     m_pid_path = pid_path;
     m_pid_file = TRY(Core::File::open(pid_path, Core::File::OpenMode::Write));
@@ -45,11 +58,11 @@ ErrorOr<BrowserProcess::ProcessDisposition> BrowserProcess::connect(Vector<ByteS
     return ProcessDisposition::ContinueMainProcess;
 }
 
-ErrorOr<void> BrowserProcess::connect_as_client(ByteString const& socket_path, Vector<ByteString> const& raw_urls, NewWindow new_window)
+#if defined(AK_OS_MACOS)
+ErrorOr<void> BrowserProcess::connect_as_client(pid_t pid, Vector<ByteString> const& raw_urls, NewWindow new_window)
 {
-    // TODO: Mach IPC
-    auto socket = TRY(Core::LocalSocket::connect(socket_path));
-    auto client = UIProcessClient::construct(make<IPC::Transport>(move(socket)));
+    auto transport_ports = TRY(IPC::bootstrap_transport_from_mach_server(mach_server_name_for_process("Ladybird"sv, pid)));
+    auto client = UIProcessClient::construct(make<IPC::Transport>(move(transport_ports.receive_right), move(transport_ports.send_right)));
 
     switch (new_window) {
     case NewWindow::Yes:
@@ -64,21 +77,57 @@ ErrorOr<void> BrowserProcess::connect_as_client(ByteString const& socket_path, V
 
     VERIFY_NOT_REACHED();
 }
+#else
+ErrorOr<void> BrowserProcess::connect_as_client(ByteString const& socket_path, Vector<ByteString> const& raw_urls, NewWindow new_window)
+{
+    auto socket = TRY(Core::LocalSocket::connect(socket_path));
+    auto transport = TRY(IPC::Transport::from_socket(move(socket)));
+    auto client = UIProcessClient::construct(move(transport));
 
+    switch (new_window) {
+    case NewWindow::Yes:
+        if (!client->send_sync_but_allow_failure<Messages::UIProcessServer::CreateNewWindow>(raw_urls))
+            dbgln("Failed to send CreateNewWindow message to UIProcess");
+        return {};
+    case NewWindow::No:
+        if (!client->send_sync_but_allow_failure<Messages::UIProcessServer::CreateNewTab>(raw_urls))
+            dbgln("Failed to send CreateNewTab message to UIProcess");
+        return {};
+    }
+
+    VERIFY_NOT_REACHED();
+}
+#endif
+
+#if defined(AK_OS_MACOS)
+ErrorOr<void> BrowserProcess::connect_as_server()
+{
+    Application::the().set_browser_process_transport_handler([this](auto transport) {
+        accept_transport(move(transport));
+    });
+    return {};
+}
+#else
 ErrorOr<void> BrowserProcess::connect_as_server(ByteString const& socket_path)
 {
-    // TODO: Mach IPC
     auto socket_fd = TRY(Process::create_ipc_socket(socket_path));
     m_socket_path = socket_path;
     m_local_server = Core::LocalServer::construct();
     TRY(m_local_server->take_over_fd(socket_fd));
 
     m_local_server->on_accept = [this](auto client_socket) {
-        accept_transport(make<IPC::Transport>(move(client_socket)));
+        auto transport = IPC::Transport::from_socket(move(client_socket));
+        if (transport.is_error()) {
+            dbgln("Failed to create IPC transport for UIProcess client: {}", transport.error());
+            return;
+        }
+
+        accept_transport(transport.release_value());
     };
 
     return {};
 }
+#endif
 
 void BrowserProcess::accept_transport(NonnullOwnPtr<IPC::Transport> transport)
 {
@@ -96,6 +145,10 @@ void BrowserProcess::accept_transport(NonnullOwnPtr<IPC::Transport> transport)
 
 BrowserProcess::~BrowserProcess()
 {
+#if defined(AK_OS_MACOS)
+    Application::the().set_browser_process_transport_handler({});
+#endif
+
     if (m_pid_file) {
         MUST(m_pid_file->truncate(0));
 #if defined(AK_OS_WINDOWS)

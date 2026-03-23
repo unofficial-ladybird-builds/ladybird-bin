@@ -6,15 +6,14 @@
 
 #include <AK/Debug.h>
 #include <LibCore/Platform/MachMessageTypes.h>
-#include <LibCore/Platform/ProcessStatisticsMach.h>
 #include <LibThreading/Thread.h>
 #include <LibWebView/MachPortServer.h>
 
 namespace WebView {
 
-MachPortServer::MachPortServer()
+MachPortServer::MachPortServer(ByteString server_port_name)
     : m_thread(Threading::Thread::construct("MachPortServer"sv, [this]() -> intptr_t { thread_loop(); return 0; }))
-    , m_server_port_name(ByteString::formatted("org.ladybird.Ladybird.helper.{}", getpid()))
+    , m_server_port_name(move(server_port_name))
 {
     if (auto err = allocate_server_port(); err.is_error())
         dbgln("Failed to allocate server port: {}", err.error());
@@ -86,21 +85,23 @@ void MachPortServer::thread_loop()
         }
 
         if (message.header.msgh_id == Core::Platform::SELF_TASK_PORT_MESSAGE_ID) {
-            if (MACH_MSGH_BITS_LOCAL(message.header.msgh_bits) != MACH_MSG_TYPE_MOVE_SEND) {
-                dbgln("Received message with invalid local port rights {}, ignoring", MACH_MSGH_BITS_LOCAL(message.header.msgh_bits));
-                continue;
-            }
-
             auto const& task_port_message = message.body.parent;
+            VERIFY(MACH_MSGH_BITS_LOCAL(message.header.msgh_bits) == MACH_MSG_TYPE_MOVE_SEND);
+            VERIFY(task_port_message.body.msgh_descriptor_count == 1);
+            VERIFY(task_port_message.port_descriptor.type == MACH_MSG_PORT_DESCRIPTOR);
             auto pid = static_cast<pid_t>(task_port_message.trailer.msgh_audit.val[5]);
             auto child_port = Core::MachPort::adopt_right(task_port_message.port_descriptor.name, Core::MachPort::PortRight::Send);
-            dbgln_if(MACH_PORT_DEBUG, "Received child port {:x} from pid {}", child_port.port(), pid);
+
+            // Extract reply port from the message header (kernel swaps local/remote on receive)
+            auto reply_port = Core::MachPort::adopt_right(message.header.msgh_remote_port, Core::MachPort::PortRight::SendOnce);
+
+            dbgln_if(MACH_PORT_DEBUG, "Received child port {:x} from pid {} (reply port {:x})", child_port.port(), pid, reply_port.port());
             if (on_receive_child_mach_port)
-                on_receive_child_mach_port(pid, move(child_port));
+                on_receive_child_mach_port({ pid, move(child_port), move(reply_port) });
             continue;
         }
 
-        dbgln("Received message with id {}, ignoring", message.header.msgh_id);
+        VERIFY_NOT_REACHED();
     }
 }
 

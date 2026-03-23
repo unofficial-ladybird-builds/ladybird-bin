@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/ByteString.h>
+#include <AK/Function.h>
 #include <AK/LexicalPath.h>
 #include <AK/Optional.h>
 #include <LibCore/EventLoop.h>
@@ -14,6 +15,7 @@
 #include <LibDatabase/Forward.h>
 #include <LibDevTools/DevToolsDelegate.h>
 #include <LibDevTools/Forward.h>
+#include <LibIPC/Forward.h>
 #include <LibImageDecoderClient/Client.h>
 #include <LibMain/Main.h>
 #include <LibRequests/Forward.h>
@@ -30,6 +32,10 @@
 #include <LibWebView/ProcessManager.h>
 #include <LibWebView/Settings.h>
 #include <LibWebView/StorageJar.h>
+
+#if defined(AK_OS_MACOS)
+#    include <LibIPC/TransportBootstrapMach.h>
+#endif
 
 namespace WebView {
 
@@ -58,6 +64,10 @@ public:
     static StorageJar& storage_jar() { return *the().m_storage_jar; }
 
     static ProcessManager& process_manager() { return *the().m_process_manager; }
+#if defined(AK_OS_MACOS)
+    static IPC::TransportBootstrapMachServer& transport_bootstrap_server() { return the().m_transport_bootstrap_server; }
+    void set_browser_process_transport_handler(Function<void(NonnullOwnPtr<IPC::Transport>)> handler);
+#endif
 
     ErrorOr<NonnullRefPtr<WebContentClient>> launch_web_content_process(ViewImplementation&);
 
@@ -262,6 +272,8 @@ private:
 
 #if defined(AK_OS_MACOS)
     OwnPtr<MachPortServer> m_mach_port_server;
+    IPC::TransportBootstrapMachServer m_transport_bootstrap_server;
+    Function<void(NonnullOwnPtr<IPC::Transport>)> m_on_browser_process_transport;
 #endif
 
     OwnPtr<DevTools::DevToolsServer> m_devtools;
