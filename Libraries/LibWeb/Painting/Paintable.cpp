@@ -295,11 +295,11 @@ Paintable::SelectionStyle Paintable::selection_style() const
         auto context = CSS::ColorResolutionContext::for_layout_node_with_style(*element_layout_node);
 
         SelectionStyle style;
-        style.background_color = computed_selection_style->color_or_fallback(CSS::PropertyID::BackgroundColor, context, Color::Transparent);
+        style.background_color = computed_selection_style->color(CSS::PropertyID::BackgroundColor, context);
 
         // Only use text color if it was explicitly set in the ::selection rule, not inherited.
         if (!computed_selection_style->is_property_inherited(CSS::PropertyID::Color))
-            style.text_color = computed_selection_style->color_or_fallback(CSS::PropertyID::Color, context, Color::Transparent);
+            style.text_color = computed_selection_style->color(CSS::PropertyID::Color, context);
 
         // Only use text-shadow if it was explicitly set in the ::selection rule, not inherited.
         if (!computed_selection_style->is_property_inherited(CSS::PropertyID::TextShadow)) {
@@ -316,7 +316,7 @@ Paintable::SelectionStyle Paintable::selection_style() const
             style.text_decoration = TextDecorationStyle {
                 .line = computed_selection_style->text_decoration_line(),
                 .style = computed_selection_style->text_decoration_style(),
-                .color = computed_selection_style->color_or_fallback(CSS::PropertyID::TextDecorationColor, context, style.text_color.value_or(Color::Black)),
+                .color = computed_selection_style->color(CSS::PropertyID::TextDecorationColor, context),
             };
         }
 
@@ -349,10 +349,17 @@ void Paintable::set_selection_state(SelectionState state)
     if (m_selection_state == state)
         return;
     m_selection_state = state;
-    if (auto* box = as_if<PaintableBox>(this))
+    if (auto* box = as_if<PaintableBox>(this)) {
         box->invalidate_paint_cache();
-    else if (auto* containing_block = this->containing_block())
+    } else if (auto* containing_block = this->containing_block()) {
         containing_block->invalidate_paint_cache();
+        for (auto const* ancestor = layout_node().parent(); ancestor && ancestor != &containing_block->layout_node(); ancestor = ancestor->parent()) {
+            for (auto& paintable : ancestor->paintables()) {
+                if (auto* ancestor_box = as_if<PaintableBox>(paintable))
+                    ancestor_box->invalidate_paint_cache();
+            }
+        }
+    }
 }
 
 void Paintable::scroll_ancestor_to_offset_into_view(size_t offset)

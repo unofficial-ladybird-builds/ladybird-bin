@@ -9,19 +9,19 @@
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
-#include <AK/LexicalPath.h>
-#include <AK/StringBuilder.h>
-#include <LibCore/Directory.h>
-#include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
 #include <LibURL/Parser.h>
 #include <LibUnicode/Locale.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/Settings.h>
+#include <LibWebView/Utilities.h>
 
 namespace WebView {
 
 static constexpr auto new_tab_page_url_key = "newTabPageURL"sv;
+
+static constexpr auto show_bookmarks_bar_key = "showBookmarksBar"sv;
+static constexpr auto default_show_bookmarks_bar = true;
 
 static constexpr auto default_zoom_level_factor_key = "defaultZoomLevelFactor"sv;
 static constexpr double initial_zoom_level_factor = 1.0;
@@ -50,34 +50,6 @@ static constexpr auto global_privacy_control_key = "globalPrivacyControl"sv;
 
 static constexpr auto dns_settings_key = "dnsSettings"sv;
 
-static ErrorOr<JsonObject> read_settings_file(StringView settings_path)
-{
-    auto settings_file = Core::File::open(settings_path, Core::File::OpenMode::Read);
-    if (settings_file.is_error()) {
-        if (settings_file.error().is_errno() && settings_file.error().code() == ENOENT)
-            return JsonObject {};
-        return settings_file.release_error();
-    }
-
-    auto settings_contents = TRY(settings_file.value()->read_until_eof());
-    auto settings_json = TRY(JsonValue::from_string(settings_contents));
-
-    if (!settings_json.is_object())
-        return Error::from_string_literal("Expected Ladybird settings to be a JSON object");
-    return move(settings_json.as_object());
-}
-
-static ErrorOr<void> write_settings_file(StringView settings_path, JsonValue const& contents)
-{
-    auto settings_directory = LexicalPath { settings_path }.parent();
-    TRY(Core::Directory::create(settings_directory, Core::Directory::CreateDirectories::Yes));
-
-    auto settings_file = TRY(Core::File::open(settings_path, Core::File::OpenMode::Write));
-    TRY(settings_file->write_until_depleted(contents.serialized()));
-
-    return {};
-}
-
 Settings Settings::create(Badge<Application>)
 {
     // FIXME: Move this to a generic "Ladybird config directory" helper.
@@ -86,7 +58,7 @@ Settings Settings::create(Badge<Application>)
 
     Settings settings { move(settings_path) };
 
-    auto settings_json = read_settings_file(settings.m_settings_path);
+    auto settings_json = read_json_file(settings.m_settings_path);
     if (settings_json.is_error()) {
         warnln("Unable to read Ladybird settings: {}", settings_json.error());
         return settings;
@@ -96,6 +68,9 @@ Settings Settings::create(Badge<Application>)
         if (auto parsed_new_tab_page_url = URL::Parser::basic_parse(*new_tab_page_url); parsed_new_tab_page_url.has_value())
             settings.m_new_tab_page_url = parsed_new_tab_page_url.release_value();
     }
+
+    if (auto show_bookmarks_bar = settings_json.value().get_bool(show_bookmarks_bar_key); show_bookmarks_bar.has_value())
+        settings.m_show_bookmarks_bar = *show_bookmarks_bar;
 
     if (auto factor = settings_json.value().get_double_with_precision_loss(default_zoom_level_factor_key); factor.has_value())
         settings.m_default_zoom_level_factor = factor.release_value();
@@ -160,6 +135,7 @@ Settings Settings::create(Badge<Application>)
 Settings::Settings(ByteString settings_path)
     : m_settings_path(move(settings_path))
     , m_new_tab_page_url(URL::about_newtab())
+    , m_show_bookmarks_bar(default_show_bookmarks_bar)
     , m_default_zoom_level_factor(initial_zoom_level_factor)
     , m_languages({ default_language })
 {
@@ -169,6 +145,7 @@ JsonValue Settings::serialize_json() const
 {
     JsonObject settings;
     settings.set(new_tab_page_url_key, m_new_tab_page_url.serialize());
+    settings.set(show_bookmarks_bar_key, m_show_bookmarks_bar);
     settings.set(default_zoom_level_factor_key, m_default_zoom_level_factor);
 
     JsonArray languages;
@@ -267,7 +244,16 @@ void Settings::set_new_tab_page_url(URL::URL new_tab_page_url)
         observer.new_tab_page_url_changed();
 }
 
-void Settings::set_default_zoom_level_factor(double const zoom_level)
+void Settings::set_show_bookmarks_bar(bool show_bookmarks_bar)
+{
+    m_show_bookmarks_bar = show_bookmarks_bar;
+    persist_settings();
+
+    for (auto& observer : m_observers)
+        observer.show_bookmarks_bar_changed();
+}
+
+void Settings::set_default_zoom_level_factor(double zoom_level)
 {
     m_default_zoom_level_factor = zoom_level;
     persist_settings();
@@ -505,7 +491,7 @@ void Settings::persist_settings()
 {
     auto settings = serialize_json();
 
-    if (auto result = write_settings_file(m_settings_path, settings); result.is_error())
+    if (auto result = write_json_file(m_settings_path, settings); result.is_error())
         warnln("Unable to persist Ladybird settings: {}", result.error());
 }
 

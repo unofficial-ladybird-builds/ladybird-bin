@@ -90,7 +90,7 @@ public:
     [[nodiscard]] Variant<LengthPercentage, NormalGap> gap_value(PropertyID) const;
     Length length(PropertyID) const;
     LengthBox length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, LengthPercentageOrAuto const& default_value) const;
-    Color color_or_fallback(PropertyID, ColorResolutionContext, Color fallback) const;
+    Color color(PropertyID, ColorResolutionContext) const;
     HashMap<PropertyID, StyleValueVector> assemble_coordinated_value_list(PropertyID base_property_id, Vector<PropertyID> const& property_ids) const;
     ColorInterpolation color_interpolation() const;
     PreferredColorScheme color_scheme(PreferredColorScheme, Optional<Vector<String> const&> document_supported_schemes) const;
@@ -143,7 +143,7 @@ public:
     float flex_grow() const;
     float flex_shrink() const;
     int order() const;
-    Optional<Color> accent_color(Layout::NodeWithStyle const&) const;
+    Color accent_color(ColorResolutionContext const&) const;
     AlignContent align_content() const;
     AlignItems align_items() const;
     AlignSelf align_self() const;

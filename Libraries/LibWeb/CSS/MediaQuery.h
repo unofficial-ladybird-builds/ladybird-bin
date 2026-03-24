@@ -16,89 +16,73 @@
 #include <LibWeb/CSS/MediaFeatureID.h>
 #include <LibWeb/CSS/Parser/ComponentValue.h>
 #include <LibWeb/CSS/Ratio.h>
+#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
+#include <LibWeb/CSS/StyleValues/RatioStyleValue.h>
+#include <LibWeb/CSS/StyleValues/ResolutionStyleValue.h>
 
 namespace Web::CSS {
 
 // https://www.w3.org/TR/mediaqueries-4/#typedef-mf-value
 class MediaFeatureValue {
 public:
-    explicit MediaFeatureValue(Keyword ident)
-        : m_value(move(ident))
-    {
-    }
+    enum class Type : u8 {
+        Ident,
+        Length,
+        Ratio,
+        Resolution,
+        Integer,
+        Unknown,
+    };
 
-    explicit MediaFeatureValue(LengthOrCalculated length)
-        : m_value(move(length))
-    {
-    }
-
-    explicit MediaFeatureValue(Ratio ratio)
-        : m_value(move(ratio))
-    {
-    }
-
-    explicit MediaFeatureValue(ResolutionOrCalculated resolution)
-        : m_value(move(resolution))
-    {
-    }
-
-    explicit MediaFeatureValue(IntegerOrCalculated integer)
-        : m_value(move(integer))
-    {
-    }
-
-    explicit MediaFeatureValue(i64 integer)
-        : m_value(IntegerOrCalculated(integer))
-    {
-    }
-
-    explicit MediaFeatureValue(Vector<Parser::ComponentValue> unknown_tokens)
-        : m_value(move(unknown_tokens))
+    explicit MediaFeatureValue(Type type, NonnullRefPtr<StyleValue const> value)
+        : m_type(type)
+        , m_value(move(value))
     {
     }
 
     String to_string(SerializationMode mode) const;
 
-    bool is_ident() const { return m_value.has<Keyword>(); }
-    bool is_length() const { return m_value.has<LengthOrCalculated>(); }
-    bool is_integer() const { return m_value.has<IntegerOrCalculated>(); }
-    bool is_ratio() const { return m_value.has<Ratio>(); }
-    bool is_resolution() const { return m_value.has<ResolutionOrCalculated>(); }
-    bool is_unknown() const { return m_value.has<Vector<Parser::ComponentValue>>(); }
-    bool is_same_type(MediaFeatureValue const& other) const;
+    bool is_ident() const { return m_type == Type::Ident; }
+    bool is_length() const { return m_type == Type::Length; }
+    bool is_integer() const { return m_type == Type::Integer; }
+    bool is_ratio() const { return m_type == Type::Ratio; }
+    bool is_resolution() const { return m_type == Type::Resolution; }
+    bool is_unknown() const { return m_type == Type::Unknown; }
+    bool is_same_type(MediaFeatureValue const& other) const { return m_type == other.m_type; }
 
-    Keyword const& ident() const
+    Keyword ident() const
     {
         VERIFY(is_ident());
-        return m_value.get<Keyword>();
+        return m_value->to_keyword();
     }
 
-    LengthOrCalculated const& length() const
+    Length length(ComputationContext const& computation_context) const
     {
         VERIFY(is_length());
-        return m_value.get<LengthOrCalculated>();
+        return Length::from_style_value(m_value->absolutized(computation_context), {});
     }
 
-    Ratio const& ratio() const
+    Ratio ratio(ComputationContext const& computation_context) const
     {
         VERIFY(is_ratio());
-        return m_value.get<Ratio>();
+        return m_value->absolutized(computation_context)->as_ratio().resolved();
     }
 
-    ResolutionOrCalculated const& resolution() const
+    Resolution resolution(ComputationContext const& computation_context) const
     {
         VERIFY(is_resolution());
-        return m_value.get<ResolutionOrCalculated>();
+        return Resolution::from_style_value(m_value->absolutized(computation_context));
     }
 
-    IntegerOrCalculated integer() const
+    i64 integer(ComputationContext const& computation_context) const
     {
         VERIFY(is_integer());
-        return m_value.get<IntegerOrCalculated>();
+        return int_from_style_value(m_value->absolutized(computation_context));
     }
 
 private:
-    Variant<Keyword, LengthOrCalculated, Ratio, ResolutionOrCalculated, IntegerOrCalculated, Vector<Parser::ComponentValue>> m_value;
+    Type m_type;
+    NonnullRefPtr<StyleValue const> m_value;
 };
 
 // https://www.w3.org/TR/mediaqueries-4/#mq-features

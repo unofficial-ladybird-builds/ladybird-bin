@@ -35,7 +35,7 @@ static HashMap<String, NonnullRefPtr<Session>> s_http_sessions;
 ErrorOr<NonnullRefPtr<Session>> Session::create(NonnullRefPtr<Client> client, JsonObject& capabilities, Web::WebDriver::SessionFlags flags)
 {
     // 1. Let session id be the result of generating a UUID.
-    auto session_id = MUST(Web::Crypto::generate_random_uuid());
+    auto session_id = Web::Crypto::generate_random_uuid();
 
     // 2. Let session be a new session with session ID session id, and HTTP flag flags contains "http".
     auto session = adopt_ref(*new Session(client, capabilities, move(session_id), flags));
@@ -271,23 +271,23 @@ ErrorOr<void> Session::create_server(NonnullRefPtr<ServerPromise> promise)
     dbgln("Listening for WebDriver connection on {}", m_web_content_endpoint);
 
 #if defined(AK_OS_MACOS)
-    m_web_content_mach_port_server = make<WebView::MachPortServer>(m_web_content_endpoint);
+    m_web_content_mach_port_server = make<IPC::MachBootstrapListener>(m_web_content_endpoint);
     if (!m_web_content_mach_port_server->is_initialized())
         return Error::from_string_literal("Failed to initialize Mach port server for WebDriver");
 
-    m_web_content_mach_port_server->on_receive_child_mach_port = [this, promise](auto registration) {
-        auto registration_result = m_transport_bootstrap_server.register_reply_port(registration.pid, move(registration.reply_port));
-        if (registration_result.is_error()) {
+    m_web_content_mach_port_server->on_bootstrap_request = [this, promise](auto request) {
+        auto result = m_transport_bootstrap_server.handle_bootstrap_request(request.pid, move(request.reply_port));
+        if (result.is_error()) {
             auto event_loop = m_event_loop->take();
             VERIFY(event_loop);
-            event_loop->deferred_invoke([promise, error = registration_result.release_error()]() mutable {
+            event_loop->deferred_invoke([promise, error = result.release_error()]() mutable {
                 promise->resolve(move(error));
             });
             return;
         }
 
-        registration_result.release_value().visit(
-            [](IPC::TransportBootstrapMachServer::WaitingForChildTransport) {
+        result.release_value().visit(
+            [](IPC::TransportBootstrapMachServer::ChildTransportHandled) {
                 VERIFY_NOT_REACHED();
             },
             [this, promise](IPC::TransportBootstrapMachServer::OnDemandTransport& transport) {

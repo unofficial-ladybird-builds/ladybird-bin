@@ -15,6 +15,7 @@ namespace WebView {
 class Action;
 class Application;
 class Autocomplete;
+class BookmarkStore;
 class CookieJar;
 class Menu;
 class OutOfProcessWebView;
@@ -23,10 +24,6 @@ class Settings;
 class ViewImplementation;
 class WebContentClient;
 class WebUI;
-
-#if defined(AK_OS_MACOS)
-class MachPortServer;
-#endif
 
 struct Attribute;
 struct AutocompleteEngine;
