@@ -15,16 +15,19 @@
 namespace Web::HTML {
 
 // FIXME: Include ServiceWorker
+// https://html.spec.whatwg.org/multipage/comms.html#messageeventsource
 using MessageEventSource = Variant<GC::Root<WindowProxy>, GC::Root<MessagePort>>;
 
+// https://html.spec.whatwg.org/multipage/comms.html#messageeventinit
 struct MessageEventInit : public DOM::EventInit {
     JS::Value data { JS::js_null() };
-    String origin {};
+    Variant<URL::Origin, String, Empty> origin {};
     String last_event_id {};
     Optional<MessageEventSource> source;
     Vector<GC::Root<MessagePort>> ports;
 };
 
+// https://html.spec.whatwg.org/multipage/comms.html#messageevent
 class WEB_API MessageEvent : public DOM::Event {
     WEB_PLATFORM_OBJECT(MessageEvent, DOM::Event);
     GC_DECLARE_ALLOCATOR(MessageEvent);
@@ -37,7 +40,7 @@ public:
     virtual ~MessageEvent() override;
 
     JS::Value data() const { return m_data; }
-    String const& origin() const { return m_origin; }
+    String origin() const;
     String const& last_event_id() const { return m_last_event_id; }
     GC::Ref<JS::Object> ports() const;
 
@@ -56,7 +59,11 @@ private:
     static MessageEventSourceInternal to_message_event_source_internal(Optional<MessageEventSource> const&);
 
     JS::Value m_data;
-    String m_origin;
+
+    // https://html.spec.whatwg.org/multipage/comms.html#concept-messageevent-origin
+    // Each MessageEvent has an origin (an origin, a string, or null), initially null.
+    Variant<URL::Origin, String, Empty> m_origin;
+
     String m_last_event_id;
     MessageEventSourceInternal m_source;
     Vector<GC::Ref<JS::Object>> m_ports;

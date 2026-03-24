@@ -59,6 +59,7 @@ echo_store: Dict[str, Echo] = {}
 
 class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     static_directory: str
+    wpt_directory: str
 
     def __init__(self, *arguments, **kwargs):
         super().__init__(*arguments, directory=self.static_directory, **kwargs)
@@ -70,92 +71,39 @@ class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             del self._extra_headers
         super().end_headers()
 
-    def do_GET(self):
+    def _serve_static_request(self):
         if self.path.startswith("/static/"):
-            # Remove "/static/" prefix and use built-in method
+            # Explicit /static/ URLs continue to serve files from the general test root.
+            self.directory = self.static_directory
             self.path = self.path[7:]
-
-            # Check for a .headers file alongside the requested file
-            file_path = self.translate_path(self.path)
-            headers_path = file_path + ".headers"
-            if os.path.isfile(headers_path):
-                self._extra_headers = []
-                with open(headers_path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if ":" in line:
-                            key, _, value = line.partition(":")
-                            self._extra_headers.append((key.strip(), value.strip()))
-
-            return super().do_GET()
         else:
+            # All other non-echo URLs are served from the imported WPT tree.
+            # This lets absolute WPT paths like /html/... resolve through the test server.
+            self.directory = self.wpt_directory
+
+        file_path = self.translate_path(self.path)
+        headers_path = file_path + ".headers"
+
+        if os.path.isfile(headers_path):
+            self._extra_headers = []
+            with open(headers_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if ":" in line:
+                        key, _, value = line.partition(":")
+                        self._extra_headers.append((key.strip(), value.strip()))
+
+        super().do_GET()
+
+    def do_GET(self):
+        if self.path.startswith("/echo"):
             self.handle_echo()
+        else:
+            self._serve_static_request()
 
     def do_POST(self):
         if self.path == "/echo":
-            content_length = int(self.headers["Content-Length"])
-            post_data = self.rfile.read(content_length)
-            data = json.loads(post_data.decode("utf-8"))
-
-            echo = Echo()
-            echo.method = data.get("method", None)
-            echo.path = data.get("path", None)
-            echo.status = data.get("status", None)
-            echo.body = data.get("body", None)
-            echo.body_encoding = data.get("body_encoding", "raw")
-            echo.delay_ms = data.get("delay_ms", None)
-            echo.headers = data.get("headers", {})
-            echo.reason_phrase = data.get("reason_phrase", None)
-            echo.reflect_headers_in_body = data.get("reflect_headers_in_body", False)
-            echo.close_connection = data.get("close_connection", False)
-
-            is_using_reserved_path = echo.path.startswith("/static") or echo.path.startswith("/echo")
-
-            # Return 400: Bad Request if invalid params are given or a reserved path is given
-            if (
-                echo.method is None
-                or echo.path is None
-                or echo.status is None
-                or echo.body_encoding not in ("raw", "base64")
-                or (echo.body is not None and "$HEADERS" not in echo.body and echo.reflect_headers_in_body)
-                or is_using_reserved_path
-            ):
-                self.send_response(400)
-                self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                return
-
-            # Return 409: Conflict if the method+path combination already exists
-            key = f"{echo.method} {echo.path}"
-            if key in echo_store and echo_store[key] != echo:
-                self.send_response(409)
-                self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                message = (
-                    "Echo already exists for method+path, but with a different definition.\n"
-                    f"key: {key}\n"
-                    "Hint: Use a unique path per test run (or keep the same definition).\n"
-                )
-                self.wfile.write(message.encode("utf-8"))
-                return
-
-            echo_store[key] = echo
-
-            host = self.headers.get("host", "localhost")
-            path = echo.path.lstrip("/")
-            fetch_url = f"http://{host}/{path}"
-
-            # The params to use on the client when making a request to the newly created echo endpoint
-            fetch_config = {
-                "method": echo.method,
-                "url": fetch_url,
-            }
-
-            self.send_response(201)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(fetch_config).encode("utf-8"))
+            self._register_echo()
         elif self.path.startswith("/static/"):
             self.send_error(405, "Method Not Allowed")
         else:
@@ -180,6 +128,72 @@ class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_DELETE(self):
         self.do_other()
 
+    def _register_echo(self):
+        """Handle a request to register an echo server handler"""
+        content_length = int(self.headers["Content-Length"])
+        post_data = self.rfile.read(content_length)
+        data = json.loads(post_data.decode("utf-8"))
+
+        echo = Echo()
+        echo.method = data.get("method", None)
+        echo.path = data.get("path", None)
+        echo.status = data.get("status", None)
+        echo.body = data.get("body", None)
+        echo.body_encoding = data.get("body_encoding", "raw")
+        echo.delay_ms = data.get("delay_ms", None)
+        echo.headers = data.get("headers", {})
+        echo.reason_phrase = data.get("reason_phrase", None)
+        echo.reflect_headers_in_body = data.get("reflect_headers_in_body", False)
+        echo.close_connection = data.get("close_connection", False)
+
+        is_invalid_echo_path = echo.path is None or not echo.path.startswith("/echo/")
+
+        # Return 400: Bad Request if invalid params are given or a reserved path is given
+        if (
+            echo.method is None
+            or echo.path is None
+            or echo.status is None
+            or echo.body_encoding not in ("raw", "base64")
+            or (echo.body is not None and "$HEADERS" not in echo.body and echo.reflect_headers_in_body)
+            or is_invalid_echo_path
+        ):
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            return
+
+        # Return 409: Conflict if the method+path combination already exists
+        key = f"{echo.method} {echo.path}"
+        if key in echo_store and echo_store[key] != echo:
+            self.send_response(409)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            message = (
+                "Echo already exists for method+path, but with a different definition.\n"
+                f"key: {key}\n"
+                "Hint: Use a unique path per test run (or keep the same definition).\n"
+            )
+            self.wfile.write(message.encode("utf-8"))
+            return
+
+        echo_store[key] = echo
+
+        host = self.headers.get("host", "localhost")
+        path = echo.path.lstrip("/")
+        fetch_url = f"http://{host}/{path}"
+
+        # The params to use on the client when making a request to the newly created echo endpoint
+        fetch_config = {
+            "method": echo.method,
+            "url": fetch_url,
+        }
+
+        self.send_response(201)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(fetch_config).encode("utf-8"))
+
     def handle_echo(self):
         method = self.command.upper()
         key = f"{method} {self.path}"
@@ -191,91 +205,95 @@ class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         set_invalid_cookie = "X-Ladybird-Set-Invalid-Cookie" in self.headers
 
-        if key in echo_store:
-            echo = echo_store[key]
-
-            if echo.close_connection:
-                self.connection.shutdown(socket.SHUT_WR)
-                self.connection.close()
-                return
-
-            response_headers = echo.headers.copy()
-
-            if echo.delay_ms is not None:
-                time.sleep(echo.delay_ms / 1000)
-
-            if send_not_modified:
-                self.send_response(304)
-            else:
-                self.send_response_only(echo.status, echo.reason_phrase)
-
-                if is_revalidation_request:
-                    # Override the Last-Modified header to prevent cURL from thinking the response is still fresh.
-                    response_headers["Last-Modified"] = "Thu, 01 Jan 1970 00:00:00 GMT"
-                elif send_incomplete_response:
-                    # We emulate an incomplete response by advertising a 10KB file, but only sending 2KB.
-                    response_headers["Content-Length"] = str(10 * 1024)
-
-            if set_invalid_cookie:
-                response_headers["Set-Cookie"] = "invalid=foo; Domain=\xc3\xa9\x6c\xc3\xa8\x76\x65\xff"
-
-            # Set only the headers defined in the echo definition
-            if response_headers:
-                for header, value in response_headers.items():
-                    self.send_header(header, value)
-                self.end_headers()
-
-            if send_not_modified:
-                return
-
-            if send_incomplete_response:
-                self.wfile.write(b"a" * (2 * 1024))
-                self.wfile.flush()
-
-                self.connection.shutdown(socket.SHUT_WR)
-                self.connection.close()
-                return
-
-            if echo.reflect_headers_in_body:
-                headers = {}
-                for key in self.headers.keys():
-                    headers[key] = self.headers.get_all(key)
-                headers = json.dumps(headers)
-                response_body = echo.body.replace("$HEADERS", headers) if echo.body else headers
-            else:
-                response_body = echo.body or ""
-
-            # FIXME: This only supports "Range: bytes=start-end" and "Range: bytes=start-". There are other formats to
-            #        support if needed: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Range#syntax
-            if "Range" in self.headers:
-                range_value = self.headers["Range"].strip()
-                assert range_value.startswith("bytes=")
-                assert range_value.count("-") == 1
-
-                range_value = range_value[len("bytes=") :]
-                start, end = range_value.split("-")
-
-                if end:
-                    response_body = response_body[int(start) : min(int(end), len(response_body))]
-                else:
-                    response_body = response_body[int(start) :]
-
-            if echo.body_encoding == "base64":
-                self.wfile.write(base64.b64decode(response_body))
-            else:
-                self.wfile.write(response_body.encode("utf-8"))
-        else:
+        if key not in echo_store:
             self.send_error(404, f"Echo response not found for {key}")
+            return
+
+        echo = echo_store[key]
+
+        if echo.close_connection:
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.close()
+            return
+
+        response_headers = echo.headers.copy()
+
+        if echo.delay_ms is not None:
+            time.sleep(echo.delay_ms / 1000)
+
+        if send_not_modified:
+            self.send_response(304)
+        else:
+            self.send_response_only(echo.status, echo.reason_phrase)
+
+            if is_revalidation_request:
+                # Override the Last-Modified header to prevent cURL from thinking the response is still fresh.
+                response_headers["Last-Modified"] = "Thu, 01 Jan 1970 00:00:00 GMT"
+            elif send_incomplete_response:
+                # We emulate an incomplete response by advertising a 10KB file, but only sending 2KB.
+                response_headers["Content-Length"] = str(10 * 1024)
+
+        if set_invalid_cookie:
+            response_headers["Set-Cookie"] = "invalid=foo; Domain=\xc3\xa9\x6c\xc3\xa8\x76\x65\xff"
+
+        # Set only the headers defined in the echo definition
+        if response_headers:
+            for header, value in response_headers.items():
+                self.send_header(header, value)
+            self.end_headers()
+
+        if send_not_modified:
+            return
+
+        if send_incomplete_response:
+            self.wfile.write(b"a" * (2 * 1024))
+            self.wfile.flush()
+
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.close()
+            return
+
+        if echo.reflect_headers_in_body:
+            headers = {}
+            for key in self.headers.keys():
+                headers[key] = self.headers.get_all(key)
+            headers = json.dumps(headers)
+            response_body = echo.body.replace("$HEADERS", headers) if echo.body else headers
+        else:
+            response_body = echo.body or ""
+
+        # FIXME: This only supports "Range: bytes=start-end" and "Range: bytes=start-". There are other formats to
+        #        support if needed: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Range#syntax
+        if "Range" in self.headers:
+            range_value = self.headers["Range"].strip()
+            assert range_value.startswith("bytes=")
+            assert range_value.count("-") == 1
+
+            range_value = range_value[len("bytes=") :]
+            start, end = range_value.split("-")
+
+            if end:
+                response_body = response_body[int(start) : min(int(end), len(response_body))]
+            else:
+                response_body = response_body[int(start) :]
+
+        if echo.body_encoding == "base64":
+            self.wfile.write(base64.b64decode(response_body))
+        else:
+            self.wfile.write(response_body.encode("utf-8"))
 
     def do_other(self):
-        if self.path.startswith("/static/"):
-            self.send_error(405, "Method Not Allowed")
-        else:
+        if self.path.startswith("/echo"):
             self.handle_echo()
+        else:
+            self.send_error(405, "Method Not Allowed")
 
 
 def start_server(port, static_directory):
     TestHTTPRequestHandler.static_directory = os.path.abspath(static_directory)
+    TestHTTPRequestHandler.wpt_directory = os.path.join(
+        TestHTTPRequestHandler.static_directory, "Text", "input", "wpt-import"
+    )
     httpd = socketserver.TCPServer(("127.0.0.1", port), TestHTTPRequestHandler)
 
     print(httpd.socket.getsockname()[1])
