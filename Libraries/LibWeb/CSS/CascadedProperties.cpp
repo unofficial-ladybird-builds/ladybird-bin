@@ -90,6 +90,7 @@ void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<Styl
                 .property_id = property_id,
                 .value = value,
             };
+            entry.cascade_index = m_next_cascade_index++;
             return;
         }
     }
@@ -100,6 +101,7 @@ void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<Styl
             .property_id = property_id,
             .value = value,
         },
+        .cascade_index = m_next_cascade_index++,
         .origin = origin,
         .layer_name = move(layer_name),
         .source = source,
@@ -119,6 +121,7 @@ void CascadedProperties::set_property_from_presentational_hint(PropertyID proper
                 .property_id = longhand_property_id,
                 .value = longhand_value,
             },
+            .cascade_index = m_next_cascade_index++,
             .origin = CascadeOrigin::Author,
             .layer_name = {},
             .source = nullptr,
@@ -132,6 +135,20 @@ RefPtr<StyleValue const> CascadedProperties::property(PropertyID property_id) co
         return nullptr;
 
     return m_properties.get(property_id)->last().property.value;
+}
+
+PropertyID CascadedProperties::property_with_higher_priority(PropertyID first_property_id, PropertyID second_property_id) const
+{
+    if (!m_contained_properties_cache.get(to_underlying(first_property_id)))
+        return second_property_id;
+
+    if (!m_contained_properties_cache.get(to_underlying(second_property_id)))
+        return first_property_id;
+
+    if (m_properties.get(first_property_id)->last().cascade_index >= m_properties.get(second_property_id)->last().cascade_index)
+        return first_property_id;
+
+    return second_property_id;
 }
 
 GC::Ptr<CSSStyleDeclaration const> CascadedProperties::property_source(PropertyID property_id) const

@@ -31,6 +31,7 @@
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLDialogElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLLabelElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
@@ -72,6 +73,7 @@ void HTMLElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     HTMLOrSVGElement::visit_edges(visitor);
+    FormAssociatedElement::visit_edges(visitor);
     visitor.visit(m_labels);
     visitor.visit(m_attached_internals);
     visitor.visit(m_popover_trigger);
@@ -768,6 +770,11 @@ void HTMLElement::attribute_changed(FlyString const& name, Optional<String> cons
             && popover_value_to_state(old_value) != popover_value_to_state(value))
             MUST(hide_popover(FocusPreviousElement::Yes, FireEvents::Yes, ThrowExceptions::No, IgnoreDomState::Yes, nullptr));
     }();
+
+    if (is_form_associated_element()) {
+        form_node_attribute_changed(name, value);
+        form_associated_element_attribute_changed(name, old_value, value, namespace_);
+    }
 }
 
 void HTMLElement::set_subtree_inertness(bool is_inert)
@@ -796,6 +803,11 @@ void HTMLElement::inserted()
 
     if (auto* parent_html_element = first_ancestor_of_type<HTMLElement>(); parent_html_element && parent_html_element->is_inert() && !has_attribute(HTML::AttributeNames::inert))
         set_subtree_inertness(true);
+
+    if (is_form_associated_element()) {
+        form_node_was_inserted();
+        form_associated_element_was_inserted();
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#fire-a-synthetic-pointer-event
@@ -849,7 +861,7 @@ GC::Ptr<DOM::NodeList> HTMLElement::labels()
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-hidden
-Variant<bool, double, String> HTMLElement::hidden() const
+Variant<bool, double, String, Empty> HTMLElement::hidden() const
 {
     // 1. If the hidden attribute is in the hidden until found state, then return "until-found".
     auto const& hidden = get_attribute(HTML::AttributeNames::hidden);
@@ -862,7 +874,7 @@ Variant<bool, double, String> HTMLElement::hidden() const
     return false;
 }
 
-void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
+void HTMLElement::set_hidden(Variant<bool, double, String, Empty> const& given_value)
 {
     // 1. If the given value is a string that is an ASCII case-insensitive match for "until-found", then set the hidden attribute to "until-found".
     if (given_value.has<String>()) {
@@ -873,11 +885,6 @@ void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
         }
         // 3. Otherwise, if the given value is the empty string, then remove the hidden attribute.
         if (string.is_empty()) {
-            remove_attribute(HTML::AttributeNames::hidden);
-            return;
-        }
-        // 4. Otherwise, if the given value is null, then remove the hidden attribute.
-        if (string.equals_ignoring_ascii_case("null"sv) || string.equals_ignoring_ascii_case("undefined"sv)) {
             remove_attribute(HTML::AttributeNames::hidden);
             return;
         }
@@ -897,6 +904,11 @@ void HTMLElement::set_hidden(Variant<bool, double, String> const& given_value)
             remove_attribute(HTML::AttributeNames::hidden);
             return;
         }
+    }
+    // 4. Otherwise, if the given value is null, then remove the hidden attribute.
+    else if (given_value.has<Empty>()) {
+        remove_attribute(HTML::AttributeNames::hidden);
+        return;
     }
     // 7. Otherwise, set the hidden attribute to the empty string.
     set_attribute_value(HTML::AttributeNames::hidden, ""_string);
@@ -926,12 +938,11 @@ void HTMLElement::click()
 }
 
 // https://html.spec.whatwg.org/multipage/custom-elements.html#form-associated-custom-element
-bool HTMLElement::is_form_associated_custom_element()
+bool HTMLElement::is_form_associated_custom_element() const
 {
     // An autonomous custom element is called a form-associated custom element if the element is associated with a
     // custom element definition whose form-associated field is set to true.
-    auto definition = document().lookup_custom_element_definition(namespace_uri(), local_name(), is_value());
-    return definition->form_associated();
+    return custom_element_definition() && custom_element_definition()->form_associated();
 }
 
 Optional<ARIA::Role> HTMLElement::default_role() const
@@ -2040,6 +2051,21 @@ void HTMLElement::removed_from(Node* old_parent, Node& old_root)
             parent_html_element = old_parent->first_ancestor_of_type<HTMLElement>();
         if (parent_html_element && parent_html_element->is_inert() && !has_attribute(HTML::AttributeNames::inert))
             set_subtree_inertness(false);
+    }
+
+    if (is_form_associated_element()) {
+        form_node_was_removed();
+        form_associated_element_was_removed(old_parent);
+    }
+}
+
+void HTMLElement::moved_from(GC::Ptr<DOM::Node> old_parent)
+{
+    Element::moved_from(old_parent);
+
+    if (is_form_associated_element()) {
+        form_node_was_moved();
+        form_associated_element_was_moved(old_parent);
     }
 }
 

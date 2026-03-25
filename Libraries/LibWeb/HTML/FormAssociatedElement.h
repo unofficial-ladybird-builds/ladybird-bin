@@ -8,57 +8,34 @@
 #pragma once
 
 #include <AK/String.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Weak.h>
 #include <LibWeb/Bindings/HTMLFormElementPrototype.h>
 #include <LibWeb/DOM/InputEventsTarget.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/WebIDL/Types.h>
+#include <LibWeb/XHR/FormDataEntry.h>
 
 namespace Web::HTML {
 
-// Form-associated elements should invoke this macro to inject overridden FormAssociatedElement and HTMLElement
-// methods as needed. If your class wished to override an HTMLElement method that is overridden here, use the
-// following methods instead:
-//
-//    HTMLElement::inserted() -> Use form_associated_element_was_inserted()
-//    HTMLElement::removed_from() -> Use form_associated_element_was_removed()
-//
-#define FORM_ASSOCIATED_ELEMENT(ElementBaseClass, ElementClass)                                                                                                             \
-private:                                                                                                                                                                    \
-    virtual HTMLElement& form_associated_element_to_html_element() override                                                                                                 \
-    {                                                                                                                                                                       \
-        static_assert(IsBaseOf<HTMLElement, ElementClass>);                                                                                                                 \
-        return *this;                                                                                                                                                       \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    virtual void inserted() override                                                                                                                                        \
-    {                                                                                                                                                                       \
-        ElementBaseClass::inserted();                                                                                                                                       \
-        form_node_was_inserted();                                                                                                                                           \
-        form_associated_element_was_inserted();                                                                                                                             \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    virtual void removed_from(DOM::Node* old_parent, DOM::Node& old_root) override                                                                                          \
-    {                                                                                                                                                                       \
-        ElementBaseClass::removed_from(old_parent, old_root);                                                                                                               \
-        form_node_was_removed();                                                                                                                                            \
-        form_associated_element_was_removed(old_parent);                                                                                                                    \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    virtual void moved_from(GC::Ptr<DOM::Node> old_parent) override                                                                                                         \
-    {                                                                                                                                                                       \
-        ElementBaseClass::moved_from(old_parent);                                                                                                                           \
-        form_node_was_moved();                                                                                                                                              \
-        form_associated_element_was_moved(old_parent);                                                                                                                      \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    virtual void attribute_changed(FlyString const& name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_) override \
-    {                                                                                                                                                                       \
-        ElementBaseClass::attribute_changed(name, old_value, value, namespace_);                                                                                            \
-        form_node_attribute_changed(name, value);                                                                                                                           \
-        form_associated_element_attribute_changed(name, old_value, value, namespace_);                                                                                      \
+struct ValidityStateFlags {
+    bool value_missing = false;
+    bool type_mismatch = false;
+    bool pattern_mismatch = false;
+    bool too_long = false;
+    bool too_short = false;
+    bool range_underflow = false;
+    bool range_overflow = false;
+    bool step_mismatch = false;
+    bool bad_input = false;
+    bool custom_error = false;
+
+    bool has_one_or_more_true_values() const
+    {
+        return value_missing || type_mismatch || pattern_mismatch || too_long || too_short || range_underflow || range_overflow || step_mismatch || bad_input || custom_error;
     }
+};
 
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#selection-direction
 enum class SelectionDirection {
@@ -69,6 +46,11 @@ enum class SelectionDirection {
 
 class WEB_API FormAssociatedElement {
 public:
+    // NB: FACE stands for form-associated custom element.
+    using FACESubmissionValue = Variant<GC::Ref<FileAPI::File>, String, GC::ConservativeVector<XHR::FormDataEntry>, Empty>;
+
+    virtual bool is_form_associated_element() const;
+
     HTMLFormElement* form() { return m_form; }
     HTMLFormElement const* form() const { return m_form; }
 
@@ -82,13 +64,13 @@ public:
     void set_parser_inserted(Badge<HTMLParser>);
 
     // https://html.spec.whatwg.org/multipage/forms.html#category-listed
-    virtual bool is_listed() const { return false; }
+    virtual bool is_listed() const;
 
     // https://html.spec.whatwg.org/multipage/forms.html#category-submit
-    virtual bool is_submittable() const { return false; }
+    virtual bool is_submittable() const;
 
     // https://html.spec.whatwg.org/multipage/forms.html#category-reset
-    virtual bool is_resettable() const { return false; }
+    virtual bool is_resettable() const;
 
     // https://html.spec.whatwg.org/multipage/forms.html#category-autocapitalize
     virtual bool is_autocapitalize_and_autocorrect_inheriting() const { return false; }
@@ -115,25 +97,25 @@ public:
     bool novalidate_state() const;
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure/#definitions
-    virtual bool suffering_from_being_missing() const { return false; }
-    virtual bool suffering_from_a_type_mismatch() const { return false; }
-    virtual bool suffering_from_a_pattern_mismatch() const { return false; }
-    bool suffering_from_being_too_long() const;
-    bool suffering_from_being_too_short() const;
-    virtual bool suffering_from_an_underflow() const { return false; }
-    virtual bool suffering_from_an_overflow() const { return false; }
-    virtual bool suffering_from_a_step_mismatch() const { return false; }
-    virtual bool suffering_from_bad_input() const { return false; }
+    virtual bool suffering_from_being_missing() const;
+    virtual bool suffering_from_a_type_mismatch() const;
+    virtual bool suffering_from_a_pattern_mismatch() const;
+    virtual bool suffering_from_being_too_long() const;
+    virtual bool suffering_from_being_too_short() const;
+    virtual bool suffering_from_an_underflow() const;
+    virtual bool suffering_from_an_overflow() const;
+    virtual bool suffering_from_a_step_mismatch() const;
+    virtual bool suffering_from_bad_input() const;
     bool suffering_from_a_custom_error() const;
 
-    virtual Utf16String value() const { return {}; }
+    virtual Utf16String form_value() const { return {}; }
     virtual Optional<String> optional_value() const { VERIFY_NOT_REACHED(); }
 
     virtual HTMLElement& form_associated_element_to_html_element() = 0;
     HTMLElement const& form_associated_element_to_html_element() const { return const_cast<FormAssociatedElement&>(*this).form_associated_element_to_html_element(); }
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-reset-control
-    virtual void reset_algorithm() { }
+    virtual void reset_algorithm();
 
     virtual void clear_algorithm();
 
@@ -161,27 +143,71 @@ public:
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#mutability
     virtual bool is_mutable() const { return true; }
 
+    void reset_form_owner();
+
+    void update_face_disabled_state();
+
+    ValidityStateFlags const& face_validity_flags() const { return m_face_validity_flags; }
+    void set_face_validity_flags(Badge<ElementInternals>, ValidityStateFlags const& value);
+
+    String const& face_validation_message() const { return m_face_validation_message; }
+    void set_face_validation_message(Badge<ElementInternals>, String const& value);
+
+    void set_face_validation_anchor(Badge<ElementInternals>, GC::Ptr<HTMLElement> value);
+
+    FACESubmissionValue const& face_submission_value() const { return m_face_submission_value; }
+    void set_face_submission_value(Badge<ElementInternals>, FACESubmissionValue const& value);
+
+    FACESubmissionValue const& face_state() const { return m_face_state; }
+    void set_face_state(Badge<ElementInternals>, FACESubmissionValue const& value);
+
+    void set_custom_validity_error_message(Badge<ElementInternals>, String const& value) { m_custom_validity_error_message = value; }
+
 protected:
     FormAssociatedElement() = default;
     virtual ~FormAssociatedElement() = default;
 
-    virtual void form_associated_element_was_inserted() { }
-    virtual void form_associated_element_was_removed(DOM::Node*) { }
-    virtual void form_associated_element_was_moved(GC::Ptr<DOM::Node>) { }
-    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<String> const&, Optional<FlyString> const&) { }
+    virtual void form_associated_element_was_inserted();
+    virtual void form_associated_element_was_removed(DOM::Node*);
+    virtual void form_associated_element_was_moved(GC::Ptr<DOM::Node>);
+    virtual void form_associated_element_attribute_changed(FlyString const&, Optional<String> const&, Optional<String> const&, Optional<FlyString> const&);
 
     void form_node_was_inserted();
     void form_node_was_removed();
     void form_node_was_moved();
     void form_node_attribute_changed(FlyString const&, Optional<String> const&);
 
-private:
-    void reset_form_owner();
+    void visit_edges(JS::Cell::Visitor&);
 
+private:
     GC::Weak<HTMLFormElement> m_form;
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#parser-inserted-flag
     bool m_parser_inserted { false };
+
+    ValidityStateFlags m_face_validity_flags {};
+
+    // https://html.spec.whatwg.org/multipage/custom-elements.html#face-validation-message
+    // Each form-associated custom element has a validation message string. It is the empty string initially.
+    String m_face_validation_message;
+
+    // https://html.spec.whatwg.org/multipage/custom-elements.html#face-validation-anchor
+    // Each form-associated custom element has a validation anchor element. It is null initially.
+    GC::Weak<HTMLElement> m_face_validation_anchor;
+
+    // https://html.spec.whatwg.org/multipage/custom-elements.html#face-submission-value
+    // Each form-associated custom element has submission value. It is used to provide one or more entries on form submission.
+    // The initial value of submission value is null, and submission value can be null, a string, a File, or a list of entries.
+    FACESubmissionValue m_face_submission_value;
+
+    // https://html.spec.whatwg.org/multipage/custom-elements.html#face-state
+    // Each form-associated custom element has state. It is information with which the user agent can restore a user's input
+    // for the element. The initial value of state is null, and state can be null, a string, a File, or a list of entries.
+    FACESubmissionValue m_face_state;
+
+    // AD-HOC: Cached disabled state for form-associated custom elements, used to detect changes
+    //         and enqueue formDisabledCallback. Only meaningful for FACEs.
+    bool m_face_disabled_state { false };
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#custom-validity-error-message
     String m_custom_validity_error_message;
@@ -193,8 +219,7 @@ enum class SelectionSource {
 };
 
 class WEB_API FormAssociatedTextControlElement
-    : public FormAssociatedElement
-    , public InputEventsTarget {
+    : public InputEventsTarget {
 public:
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-textarea/input-relevant-value
     virtual Utf16String relevant_value() const = 0;
@@ -236,6 +261,9 @@ public:
     // https://w3c.github.io/selection-api/#dfn-has-scheduled-selectionchange-event
     bool has_scheduled_selectionchange_event() const { return m_has_scheduled_selectionchange_event; }
     void set_scheduled_selectionchange_event(bool value) { m_has_scheduled_selectionchange_event = value; }
+
+    virtual HTMLElement& text_control_to_html_element() = 0;
+    HTMLElement const& text_control_to_html_element() const { return const_cast<FormAssociatedTextControlElement&>(*this).text_control_to_html_element(); }
 
     virtual void did_edit_text_node(FlyString const& input_type, Optional<Utf16String> const& data) = 0;
 

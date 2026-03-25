@@ -1,72 +1,168 @@
 {
   "border-color": {
-    "top": "border-top-color",
-    "right": "border-right-color",
-    "bottom": "border-bottom-color",
-    "left": "border-left-color"
+    "physical": {
+      "top": "border-top-color",
+      "right": "border-right-color",
+      "bottom": "border-bottom-color",
+      "left": "border-left-color"
+    },
+    "logical": {
+      "block-start": "border-block-start-color",
+      "inline-end": "border-inline-end-color",
+      "block-end": "border-block-end-color",
+      "inline-start": "border-inline-start-color"
+    }
   },
   "border-radius": {
-    "top-left": "border-top-left-radius",
-    "bottom-left": "border-bottom-left-radius",
-    "top-right": "border-top-right-radius",
-    "bottom-right": "border-bottom-right-radius"
+    "physical": {
+      "top-left": "border-top-left-radius",
+      "bottom-left": "border-bottom-left-radius",
+      "top-right": "border-top-right-radius",
+      "bottom-right": "border-bottom-right-radius"
+    },
+    "logical": {
+      "start-start": "border-start-start-radius",
+      "start-end": "border-start-end-radius",
+      "end-start": "border-end-start-radius",
+      "end-end": "border-end-end-radius"
+    }
   },
   "border-style": {
-    "top": "border-top-style",
-    "right": "border-right-style",
-    "bottom": "border-bottom-style",
-    "left": "border-left-style"
+    "physical": {
+      "top": "border-top-style",
+      "right": "border-right-style",
+      "bottom": "border-bottom-style",
+      "left": "border-left-style"
+    },
+    "logical": {
+      "block-start": "border-block-start-style",
+      "inline-end": "border-inline-end-style",
+      "block-end": "border-block-end-style",
+      "inline-start": "border-inline-start-style"
+    }
   },
   "border-width": {
-    "top": "border-top-width",
-    "right": "border-right-width",
-    "bottom": "border-bottom-width",
-    "left": "border-left-width"
+    "physical": {
+      "top": "border-top-width",
+      "right": "border-right-width",
+      "bottom": "border-bottom-width",
+      "left": "border-left-width"
+    },
+    "logical": {
+      "block-start": "border-block-start-width",
+      "inline-end": "border-inline-end-width",
+      "block-end": "border-block-end-width",
+      "inline-start": "border-inline-start-width"
+    }
   },
   "corner-shape": {
-    "top-left": "corner-top-left-shape",
-    "bottom-left": "corner-bottom-left-shape",
-    "top-right": "corner-top-right-shape",
-    "bottom-right": "corner-bottom-right-shape"
+    "physical": {
+      "top-left": "corner-top-left-shape",
+      "bottom-left": "corner-bottom-left-shape",
+      "top-right": "corner-top-right-shape",
+      "bottom-right": "corner-bottom-right-shape"
+    },
+    "logical": {
+      "start-start": "corner-start-start-shape",
+      "start-end": "corner-start-end-shape",
+      "end-start": "corner-end-start-shape",
+      "end-end": "corner-end-end-shape"
+    }
   },
   "inset": {
-    "top": "top",
-    "right": "right",
-    "bottom": "bottom",
-    "left": "left"
+    "physical": {
+      "top": "top",
+      "right": "right",
+      "bottom": "bottom",
+      "left": "left"
+    },
+    "logical": {
+      "block-start": "inset-block-start",
+      "inline-end": "inset-inline-end",
+      "block-end": "inset-block-end",
+      "inline-start": "inset-inline-start"
+    }
   },
   "margin": {
-    "top": "margin-top",
-    "right": "margin-right",
-    "bottom": "margin-bottom",
-    "left": "margin-left"
+    "physical": {
+      "top": "margin-top",
+      "right": "margin-right",
+      "bottom": "margin-bottom",
+      "left": "margin-left"
+    },
+    "logical": {
+      "block-start": "margin-block-start",
+      "inline-end": "margin-inline-end",
+      "block-end": "margin-block-end",
+      "inline-start": "margin-inline-start"
+    }
   },
   "max-size": {
-    "width": "max-width",
-    "height": "max-height"
+    "physical": {
+      "width": "max-width",
+      "height": "max-height"
+    },
+    "logical": {
+      "block-size": "max-block-size",
+      "inline-size": "max-inline-size"
+    }
   },
   "min-size": {
-    "width": "min-width",
-    "height": "min-height"
+    "physical": {
+      "width": "min-width",
+      "height": "min-height"
+    },
+    "logical": {
+      "block-size": "min-block-size",
+      "inline-size": "min-inline-size"
+    }
   },
   "overflow": {
-    "x": "overflow-x",
-    "y": "overflow-y"
+    "physical": {
+      "x": "overflow-x",
+      "y": "overflow-y"
+    },
+    "logical": {
+      "block-xy": "overflow-block",
+      "inline-xy": "overflow-inline"
+    }
   },
   "overflow-clip-margin": {
-    "top": "overflow-clip-margin-top",
-    "right": "overflow-clip-margin-right",
-    "bottom": "overflow-clip-margin-bottom",
-    "left": "overflow-clip-margin-left"
+    "physical": {
+      "top": "overflow-clip-margin-top",
+      "right": "overflow-clip-margin-right",
+      "bottom": "overflow-clip-margin-bottom",
+      "left": "overflow-clip-margin-left"
+    },
+    "logical": {
+      "block-start": "overflow-clip-margin-block-start",
+      "inline-end": "overflow-clip-margin-inline-end",
+      "block-end": "overflow-clip-margin-block-end",
+      "inline-start": "overflow-clip-margin-inline-start"
+    }
   },
   "padding": {
-    "top": "padding-top",
-    "right": "padding-right",
-    "bottom": "padding-bottom",
-    "left": "padding-left"
+    "physical": {
+      "top": "padding-top",
+      "right": "padding-right",
+      "bottom": "padding-bottom",
+      "left": "padding-left"
+    },
+    "logical": {
+      "block-start": "padding-block-start",
+      "inline-end": "padding-inline-end",
+      "block-end": "padding-block-end",
+      "inline-start": "padding-inline-start"
+    }
   },
   "size": {
-    "width": "width",
-    "height": "height"
+    "physical": {
+      "width": "width",
+      "height": "height"
+    },
+    "logical": {
+      "block-size": "block-size",
+      "inline-size": "inline-size"
+    }
   }
 }

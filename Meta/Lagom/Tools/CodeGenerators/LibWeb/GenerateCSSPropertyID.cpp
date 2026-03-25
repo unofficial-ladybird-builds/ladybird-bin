@@ -82,14 +82,14 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
 void replace_logical_aliases(JsonObject& properties, JsonObject& logical_property_groups)
 {
-    // Grab the first property in each logical group, to use as the template
-    HashMap<String, String> first_property_in_logical_group;
-    logical_property_groups.for_each_member([&first_property_in_logical_group](String const& name, JsonValue const& value) {
+    // Grab the first physical property in each logical group, to use as the template
+    HashMap<String, String> first_physical_property_in_logical_group;
+    logical_property_groups.for_each_member([&first_physical_property_in_logical_group](String const& name, JsonValue const& value) {
         bool found = false;
-        value.as_object().for_each_member([&](String const&, JsonValue const& member_value) {
+        value.as_object().get_object("physical"sv)->for_each_member([&](String const&, JsonValue const& member_value) {
             if (found)
                 return;
-            first_property_in_logical_group.set(name, member_value.as_string());
+            first_physical_property_in_logical_group.set(name, member_value.as_string());
             found = true;
         });
         VERIFY(found);
@@ -107,7 +107,7 @@ void replace_logical_aliases(JsonObject& properties, JsonObject& logical_propert
                 VERIFY_NOT_REACHED();
             }
 
-            if (auto physical_property_name = first_property_in_logical_group.get(group_name.value()); physical_property_name.has_value()) {
+            if (auto physical_property_name = first_physical_property_in_logical_group.get(group_name.value()); physical_property_name.has_value()) {
                 logical_aliases.set(name, physical_property_name.value());
             } else {
                 dbgln("Logical property group '{}' not found! (Property: '{}')", group_name.value(), name);
@@ -325,6 +325,7 @@ struct LogicalAliasMappingContext {
 };
 bool property_is_logical_alias(PropertyID);
 PropertyID map_logical_alias_to_physical_property(PropertyID logical_property_id, LogicalAliasMappingContext const&);
+PropertyID map_physical_property_to_logical_alias(PropertyID physical_property_id, LogicalAliasMappingContext const&);
 
 enum class LogicalPropertyGroup : @logical_property_group_underlying_type@ {
 )~~~");
@@ -1549,6 +1550,10 @@ Vector<PropertyID> const& shorthands_for_longhand(PropertyID property_id)
 
         // background-image is required to compute the other background-* properties
         "BackgroundImage"sv,
+
+        // text direction and writing mode properties are required to map logical properties to their physical counterparts
+        "Direction"sv,
+        "WritingMode"sv,
     };
 
     generator.append(R"~~~(
@@ -1763,7 +1768,7 @@ PropertyID map_logical_alias_to_physical_property(PropertyID property_id, Logica
             }
             auto const& group = maybe_group.value();
             auto mapped_property = [&](StringView entry_name) {
-                if (auto maybe_string = group.get_string(entry_name); maybe_string.has_value()) {
+                if (auto maybe_string = group.get_object("physical"sv)->get_string(entry_name); maybe_string.has_value()) {
                     return title_casify(maybe_string.value());
                 }
                 dbgln("Logical property group '{}' is missing entry for '{}', requested by property '{}'.", group_name.value(), entry_name, property_name);
@@ -2000,6 +2005,40 @@ PropertyID map_logical_alias_to_physical_property(PropertyID property_id, Logica
 )~~~");
 
     generator.append(R"~~~(
+PropertyID map_physical_property_to_logical_alias(PropertyID property_id, LogicalAliasMappingContext const& mapping_context)
+{
+    switch (property_id) {
+)~~~");
+
+    logical_property_groups.for_each_member([&](auto const&, JsonValue const& logical_property_group) {
+        auto const& physical_properties = logical_property_group.as_object().get_object("physical"sv).value();
+        auto const& logical_properties = logical_property_group.as_object().get_object("logical"sv).value();
+
+        physical_properties.for_each_member([&](auto&, auto& physical_property_name) {
+            auto property_generator = generator.fork();
+            property_generator.set("physical_property_name:titlecase", title_casify(physical_property_name.as_string()));
+            property_generator.appendln("        case PropertyID::@physical_property_name:titlecase@:");
+
+            // FIXME: Checking each logical property isn't very efficient, we should instead inverse the logic of map_logical_alias_to_physical_property
+            logical_properties.for_each_member([&](auto&, auto& logical_property_name) {
+                property_generator.set("logical_property_name:titlecase", title_casify(logical_property_name.as_string()));
+                property_generator.append(R"~~~(
+            if (map_logical_alias_to_physical_property(PropertyID::@logical_property_name:titlecase@, mapping_context) == property_id)
+                return PropertyID::@logical_property_name:titlecase@;
+)~~~");
+            });
+
+            property_generator.appendln("            VERIFY_NOT_REACHED();");
+        });
+    });
+
+    generator.append(R"~~~(
+        default:
+            VERIFY(!logical_property_group_for_property(property_id).has_value() || property_is_logical_alias(property_id));
+            return property_id;
+    }
+}
+
 Optional<LogicalPropertyGroup> logical_property_group_for_property(PropertyID property_id)
 {
     switch(property_id) {
@@ -2010,17 +2049,13 @@ Optional<LogicalPropertyGroup> logical_property_group_for_property(PropertyID pr
     logical_property_groups.for_each_member([&](auto& logical_property_group_name, auto& mapping) {
         auto& group_members = logical_property_group_members.ensure(logical_property_group_name);
 
-        mapping.as_object().for_each_member([&](auto&, auto& physical_property) {
+        mapping.as_object().get_object("physical"sv)->for_each_member([&](auto&, auto& physical_property) {
             group_members.append(physical_property.as_string());
         });
-    });
 
-    properties.for_each_member([&](auto& property_name, auto& value) {
-        if (auto maybe_logical_property_group = value.as_object().get_object("logical-alias-for"sv); maybe_logical_property_group.has_value()) {
-            auto group = maybe_logical_property_group.value().get_string("group"sv).value();
-
-            logical_property_group_members.get(group).value().append(property_name);
-        }
+        mapping.as_object().get_object("logical"sv)->for_each_member([&](auto&, auto& logical_property) {
+            group_members.append(logical_property.as_string());
+        });
     });
 
     for (auto const& logical_property_group : logical_property_group_members.keys()) {

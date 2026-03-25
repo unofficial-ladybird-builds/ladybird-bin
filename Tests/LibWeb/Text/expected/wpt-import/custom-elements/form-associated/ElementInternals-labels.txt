@@ -1,0 +1,8 @@
+Harness status: OK
+
+Found 3 tests
+
+3 Pass
+Pass	LABEL association
+Pass	LABEL click
+Pass	ElementInternals.labels should throw NotSupportedError if the target element is not a form-associated custom element

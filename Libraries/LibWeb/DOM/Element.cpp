@@ -66,6 +66,7 @@
 #include <LibWeb/HTML/HTMLButtonElement.h>
 #include <LibWeb/HTML/HTMLDialogElement.h>
 #include <LibWeb/HTML/HTMLFieldSetElement.h>
+#include <LibWeb/HTML/HTMLFormElement.h>
 #include <LibWeb/HTML/HTMLFrameSetElement.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
@@ -1655,7 +1656,8 @@ bool Element::affected_by_pseudo_class(CSS::PseudoClass pseudo_class) const
 bool Element::matches_enabled_pseudo_class() const
 {
     // The :enabled pseudo-class must match any button, input, select, textarea, optgroup, option, fieldset element, or form-associated custom element that is not actually disabled.
-    return (is<HTML::HTMLButtonElement>(*this) || is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLSelectElement>(*this) || is<HTML::HTMLTextAreaElement>(*this) || is<HTML::HTMLOptGroupElement>(*this) || is<HTML::HTMLOptionElement>(*this) || is<HTML::HTMLFieldSetElement>(*this))
+    auto is_form_associated_custom_element = is<HTML::HTMLElement>(*this) && static_cast<HTML::HTMLElement const&>(*this).is_form_associated_custom_element();
+    return (is<HTML::HTMLButtonElement>(*this) || is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLSelectElement>(*this) || is<HTML::HTMLTextAreaElement>(*this) || is<HTML::HTMLOptGroupElement>(*this) || is<HTML::HTMLOptionElement>(*this) || is<HTML::HTMLFieldSetElement>(*this) || is_form_associated_custom_element)
         && !is_actually_disabled();
 }
 
@@ -2283,7 +2285,10 @@ bool Element::is_actually_disabled() const
     if (is<HTML::HTMLFieldSetElement>(this))
         return static_cast<HTML::HTMLFieldSetElement const&>(*this).is_disabled();
 
-    // FIXME: - a form-associated custom element that is disabled
+    // - a form-associated custom element that is disabled
+    if (auto const* html_element = as_if<HTML::HTMLElement>(this); html_element && html_element->is_form_associated_custom_element())
+        return !html_element->enabled();
+
     return false;
 }
 
@@ -3268,9 +3273,16 @@ JS::ThrowCompletionOr<void> Element::upgrade_element(GC::Ref<HTML::CustomElement
         return maybe_exception.release_error();
     }
 
-    // FIXME: 9. If element is a form-associated custom element, then:
-    //           1. Reset the form owner of element. If element is associated with a form element, then enqueue a custom element callback reaction with element, callback name "formAssociatedCallback", and « the associated form ».
-    //           2. If element is disabled, then enqueue a custom element callback reaction with element, callback name "formDisabledCallback", and « true ».
+    // 9. If element is a form-associated custom element, then:
+    if (auto* html_element = as_if<HTML::HTMLElement>(this); html_element && html_element->is_form_associated_custom_element()) {
+        // 1. Reset the form owner of element.
+        // FIXME: If element is associated with a form element, then enqueue a custom element callback reaction with element, callback name "formAssociatedCallback", and « the associated form ».
+        // AD-HOC: We don't do the second part of this step here, because it's inside reset_form_owner.
+        html_element->reset_form_owner();
+
+        // 2. If element is disabled, then enqueue a custom element callback reaction with element, callback name "formDisabledCallback", and « true ».
+        html_element->update_face_disabled_state();
+    }
 
     // 10. Set element's custom element state to "custom".
     set_custom_element_state(CustomElementState::Custom);
@@ -4067,7 +4079,7 @@ Optional<Element::Directionality> Element::auto_directionality() const
     // 1. If element is an auto-directionality form-associated element:
     if (is_auto_directionality_form_associated_element()) {
         auto const& form_associated_element = as<HTML::FormAssociatedElement>(*this);
-        auto const& value = form_associated_element.value();
+        auto const& value = form_associated_element.form_value();
 
         // 1. If element's value contains a character of bidirectional character type AL or R,
         //    and there is no character of bidirectional character type L anywhere before it in the element's value, then return 'rtl'.
