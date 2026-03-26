@@ -3166,12 +3166,12 @@ Optional<double> CalculatedStyleValue::resolve_number(CalculationResolutionConte
     return {};
 }
 
-Optional<i64> CalculatedStyleValue::resolve_integer(CalculationResolutionContext const& context) const
+Optional<i32> CalculatedStyleValue::resolve_integer(CalculationResolutionContext const& context) const
 {
     auto result = resolve_value(context);
 
     if (result.has_value() && result->type.has_value() && result->type->matches_number(m_context.percentages_resolve_as))
-        return llround(result->value);
+        return round_to_nearest_integer(result->value);
 
     return {};
 }

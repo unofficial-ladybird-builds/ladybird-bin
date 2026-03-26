@@ -1,0 +1,8 @@
+Harness status: OK
+
+Found 3 tests
+
+3 Pass
+Pass	Property text-decoration-skip-ink value 'auto'
+Pass	Property text-decoration-skip-ink value 'none'
+Pass	Property text-decoration-skip-ink value 'all'

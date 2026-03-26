@@ -8,6 +8,7 @@
  */
 
 #include <LibGfx/Font/Font.h>
+#include <LibGfx/TextLayout.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Position.h>
 #include <LibWeb/DOM/Range.h>
@@ -20,7 +21,6 @@
 #include <LibWeb/Painting/PaintableWithLines.h>
 #include <LibWeb/Painting/ShadowPainting.h>
 #include <LibWeb/Painting/TextPaintable.h>
-#include <LibWeb/Painting/ViewportPaintable.h>
 #include <LibWeb/Selection/Selection.h>
 
 namespace Web::Painting {
@@ -230,36 +230,36 @@ static void resolve_text_fragment_properties(PaintableWithLines const& paintable
 {
     auto const& parent_layout_node = paintable_with_lines.layout_node();
     for (auto& fragment : const_cast<PaintableWithLines&>(paintable_with_lines).fragments()) {
-        auto const& fragment_layout_node = fragment.layout_node();
-        if (!fragment_layout_node.is_text_node())
+        auto const* text_node = as_if<Layout::TextNode>(fragment.layout_node());
+        if (!text_node)
             continue;
-        auto const& text_node = static_cast<Layout::TextNode const&>(fragment_layout_node);
 
-        auto const& font = fragment_layout_node.first_available_font();
+        auto const& font = text_node->first_available_font();
         auto const glyph_height = CSSPixels::nearest_value_for(font.pixel_size());
-        auto const css_line_thickness = [&] {
-            auto const& thickness = text_node.computed_values().text_decoration_thickness();
+        auto const line_thickness = [&] {
+            auto const& thickness = text_node->computed_values().text_decoration_thickness();
             return thickness.value.visit(
                 [glyph_height](CSS::TextDecorationThickness::Auto) {
-                    // The UA chooses an appropriate thickness for text decoration lines; see below.
                     // https://drafts.csswg.org/css-text-decor-4/#valdef-text-decoration-thickness-auto
+                    // The UA chooses an appropriate thickness for text decoration lines; see below.
                     return max(glyph_height.scaled(0.1), 1);
                 },
                 [glyph_height](CSS::TextDecorationThickness::FromFont) {
+                    // https://drafts.csswg.org/css-text-decor-4/#valdef-text-decoration-thickness-from-font
                     // If the first available font has metrics indicating a preferred underline width, use that width,
                     // otherwise behaves as auto.
-                    // https://drafts.csswg.org/css-text-decor-4/#valdef-text-decoration-thickness-from-font
                     // FIXME: Implement this properly.
                     return max(glyph_height.scaled(0.1), 1);
                 },
                 [&](CSS::LengthPercentage const& length_percentage) {
-                    auto resolved_length = length_percentage.resolved(text_node, CSS::Length(1, CSS::LengthUnit::Em).to_px(text_node)).to_px(fragment_layout_node);
+                    // https://drafts.csswg.org/css-text-decor-4/#valdef-text-decoration-thickness-length-percentage
+                    auto resolved_length = length_percentage.resolved(*text_node, CSS::Length(1, CSS::LengthUnit::Em).to_px(*text_node)).to_px(*text_node);
                     return max(resolved_length, 1);
                 });
         }();
-        fragment.set_text_decoration_thickness(css_line_thickness);
+        fragment.set_text_decoration_thickness(line_thickness);
 
-        auto const& text_shadow = text_node.computed_values().text_shadow();
+        auto const& text_shadow = text_node->computed_values().text_shadow();
         Vector<ShadowData> resolved_shadow_data;
         if (!text_shadow.is_empty()) {
             resolved_shadow_data.ensure_capacity(text_shadow.size());
@@ -495,6 +495,68 @@ void PaintableWithLines::paint_cursor(DisplayListRecordingContext& context) cons
     context.display_list_recorder().fill_rect(cursor_device_rect, caret_color);
 }
 
+struct DecorationSegment {
+    int start_x;
+    int end_x;
+};
+
+// https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property
+static Vector<DecorationSegment> compute_skip_ink_segments(
+    PaintableFragment const& fragment,
+    DisplayListRecordingContext const& context,
+    int span_start_x,
+    int span_end_x,
+    int line_y,
+    int line_thickness,
+    float font_size)
+{
+    auto glyph_run = fragment.glyph_run();
+    if (!glyph_run)
+        return { { span_start_x, span_end_x } };
+
+    // The text blob is drawn at baseline_start on the canvas. Compute that same origin so we can convert between
+    // device-pixel coordinates and blob-local coordinates.
+    auto scale = context.device_pixels_per_css_pixel();
+    auto fragment_absolute_rect = fragment.absolute_rect();
+    float blob_origin_x = fragment_absolute_rect.x().to_float() * static_cast<float>(scale);
+    float blob_origin_y = (fragment_absolute_rect.y().to_float() + fragment.baseline().to_float()) * static_cast<float>(scale);
+
+    // Convert the underline's y-band from device pixels to blob-local coordinates.
+    float half_thickness = line_thickness / 2.f;
+    float y_top = line_y - half_thickness - blob_origin_y;
+    float y_bottom = line_y + half_thickness - blob_origin_y;
+
+    auto intervals = glyph_run->get_glyph_intercepts(scale, y_top, y_bottom);
+    if (intervals.is_empty())
+        return { { span_start_x, span_end_x } };
+
+    // Use the full fragment's X range for gap computation so intercepts aren't cut off at span boundaries.
+    auto full_fragment_rect = context.rounded_device_rect(fragment_absolute_rect);
+    int fragment_start_x = full_fragment_rect.left().value();
+
+    // Convert intercepts from blob-local x to device pixels, and dilate to create visible gaps.
+    float dilation = max(font_size / 20.f, 2.f) * static_cast<float>(scale);
+
+    Vector<DecorationSegment> segments;
+    int current_x = fragment_start_x;
+    for (size_t i = 0; i + 1 < intervals.size(); i += 2) {
+        int gap_start = static_cast<int>(floorf(intervals[i] + blob_origin_x - dilation));
+        int gap_end = static_cast<int>(ceilf(intervals[i + 1] + blob_origin_x + dilation));
+
+        int seg_start = max(current_x, span_start_x);
+        int seg_end = min(gap_start, span_end_x);
+        if (seg_start < seg_end)
+            segments.append({ seg_start, seg_end });
+        current_x = max(gap_end, current_x);
+    }
+
+    int seg_start = max(current_x, span_start_x);
+    if (seg_start < span_end_x)
+        segments.append({ seg_start, span_end_x });
+
+    return segments;
+}
+
 void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable const& paintable, PaintableFragment::FragmentSpan const& span)
 {
     auto const& fragment = span.fragment;
@@ -516,29 +578,27 @@ void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable c
         line_style = paintable.computed_values().text_decoration_style();
         text_decoration_lines = paintable.computed_values().text_decoration_line();
     }
-    auto device_line_thickness = context.rounded_device_pixels(fragment.text_decoration_thickness());
 
     // Compute the decoration box for this span.
-    CSSPixelRect fragment_box;
-    if (span.start_code_unit == 0 && span.end_code_unit == fragment.length_in_code_units()) {
-        fragment_box = fragment.absolute_rect();
-    } else {
-        fragment_box = fragment.range_rect(Paintable::SelectionState::StartAndEnd,
+    auto fragment_box = fragment.absolute_rect();
+    if (span.start_code_unit != 0 || span.end_code_unit != fragment.length_in_code_units()) {
+        auto span_rect = fragment.range_rect(Paintable::SelectionState::StartAndEnd,
             fragment.start_offset() + span.start_code_unit,
             fragment.start_offset() + span.end_code_unit);
+        fragment_box.set_x(span_rect.x());
+        fragment_box.set_width(span_rect.width());
     }
     auto text_underline_offset = paintable.computed_values().text_underline_offset();
     auto text_underline_position = paintable.computed_values().text_underline_position();
     for (auto line : text_decoration_lines) {
-        DevicePixelPoint line_start_point {};
-        DevicePixelPoint line_end_point {};
+        auto line_thickness = fragment.text_decoration_thickness();
 
         if (line == CSS::TextDecorationLine::SpellingError) {
             // https://drafts.csswg.org/css-text-decor-4/#valdef-text-decoration-line-spelling-error
             // This value indicates the type of text decoration used by the user agent to highlight spelling mistakes.
             // Its appearance is UA-defined, and may be platform-dependent. It is often rendered as a red wavy underline.
             line_color = Color::Red;
-            device_line_thickness = context.rounded_device_pixels(1);
+            line_thickness = CSSPixels(1);
             line_style = CSS::TextDecorationStyle::Wavy;
             line = CSS::TextDecorationLine::Underline;
 
@@ -551,7 +611,7 @@ void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable c
             // This value indicates the type of text decoration used by the user agent to highlight grammar mistakes.
             // Its appearance is UA defined, and may be platform-dependent. It is often rendered as a green wavy underline.
             line_color = Color::DarkGreen;
-            device_line_thickness = context.rounded_device_pixels(1);
+            line_thickness = CSSPixels(1);
             line_style = CSS::TextDecorationStyle::Wavy;
             line = CSS::TextDecorationLine::Underline;
 
@@ -561,15 +621,20 @@ void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable c
             text_underline_offset = CSS::InitialValues::text_underline_offset();
         }
 
+        auto device_line_thickness = context.rounded_device_pixels(line_thickness);
+
+        // Compute the center Y of the decoration stroke. For underline and overline, offset by half the thickness
+        // so the near edge of the stroke aligns with the intended position.
+        CSSPixels line_center_y;
         switch (line) {
         case CSS::TextDecorationLine::None:
             return;
         case CSS::TextDecorationLine::Underline: {
             // https://drafts.csswg.org/css-text-decor-4/#text-underline-position-property
-            auto underline_position_without_offset = [&]() {
+            auto underline_top_edge = [&]() {
                 // FIXME: Support text-decoration: underline on vertical text
                 switch (text_underline_position.horizontal) {
-                case Web::CSS::TextUnderlinePositionHorizontal::Auto:
+                case CSS::TextUnderlinePositionHorizontal::Auto:
                     // The user agent may use any algorithm to determine the underline’s position; however it must be
                     // placed at or under the alphabetic baseline.
 
@@ -579,32 +644,27 @@ void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable c
                     //            glyphs from Asian scripts such as Han or Tibetan for which an alphabetic underline is
                     //            too high: in such cases, shifting the underline lower or aligning to the em box edge
                     //            as described for under may be more appropriate.
-                    return fragment.baseline();
-                case Web::CSS::TextUnderlinePositionHorizontal::FromFont:
+                    return fragment.baseline() + text_underline_offset;
+                case CSS::TextUnderlinePositionHorizontal::FromFont:
                     // FIXME: If the first available font has metrics indicating a preferred underline offset, use that
                     //        offset, otherwise behaves as auto.
-                    return fragment.baseline();
-                case Web::CSS::TextUnderlinePositionHorizontal::Under:
+                    return fragment.baseline() + text_underline_offset;
+                case CSS::TextUnderlinePositionHorizontal::Under:
                     // The underline is positioned under the element’s text content. In this case the underline usually
                     // does not cross the descenders. (This is sometimes called “accounting” underline.)
-                    return fragment.baseline() + CSSPixels { font.pixel_metrics().descent };
+                    return fragment.baseline() + CSSPixels { font.pixel_metrics().descent } + text_underline_offset;
                 }
-
                 VERIFY_NOT_REACHED();
             }();
-
-            line_start_point = context.rounded_device_point(fragment_box.top_left().translated(0, underline_position_without_offset + text_underline_offset));
-            line_end_point = context.rounded_device_point(fragment_box.top_right().translated(0, underline_position_without_offset + text_underline_offset));
+            line_center_y = underline_top_edge + line_thickness / 2;
             break;
         }
         case CSS::TextDecorationLine::Overline:
-            line_start_point = context.rounded_device_point(fragment_box.top_left().translated(0, baseline - glyph_height));
-            line_end_point = context.rounded_device_point(fragment_box.top_right().translated(0, baseline - glyph_height));
+            line_center_y = baseline - glyph_height - line_thickness / 2;
             break;
         case CSS::TextDecorationLine::LineThrough: {
             auto x_height = font.x_height();
-            line_start_point = context.rounded_device_point(fragment_box.top_left().translated(0, baseline - x_height * CSSPixels(0.5f)));
-            line_end_point = context.rounded_device_point(fragment_box.top_right().translated(0, baseline - x_height * CSSPixels(0.5f)));
+            line_center_y = baseline - x_height * CSSPixels(0.5f);
             break;
         }
         case CSS::TextDecorationLine::Blink:
@@ -616,64 +676,100 @@ void paint_text_decoration(DisplayListRecordingContext& context, TextPaintable c
             VERIFY_NOT_REACHED();
         }
 
+        auto line_start_point = context.rounded_device_point(fragment_box.top_left().translated(0, line_center_y));
+        auto line_end_point = context.rounded_device_point(fragment_box.top_right().translated(0, line_center_y));
+
+        // https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property
+        // FIXME: For text-decoration-skip-ink: auto, skip CJK ideographs and symbols from the intercept
+        //        computation, since their complex strokes would create too many gaps in the decoration line.
+        auto skip_ink = paintable.computed_values().text_decoration_skip_ink();
+        bool should_skip_ink = skip_ink != CSS::TextDecorationSkipInk::None
+            && first_is_one_of(line, CSS::TextDecorationLine::Underline, CSS::TextDecorationLine::Overline);
+
+        auto draw_line_for_segment = [&](DecorationSegment segment, int y, Gfx::LineStyle style = Gfx::LineStyle::Solid) {
+            recorder.draw_line({ segment.start_x, y }, { segment.end_x, y }, line_color, device_line_thickness.value(), style);
+        };
+
+        auto segments = [&] -> Vector<DecorationSegment> {
+            if (!should_skip_ink)
+                return { { line_start_point.x().value(), line_end_point.x().value() } };
+            return compute_skip_ink_segments(fragment, context, line_start_point.x().value(), line_end_point.x().value(),
+                line_start_point.y().value(), device_line_thickness.value(), font.pixel_size());
+        }();
+
+        auto line_y = line_start_point.y().value();
+
         switch (line_style) {
         case CSS::TextDecorationStyle::Solid:
-            recorder.draw_line(line_start_point.to_type<int>(), line_end_point.to_type<int>(), line_color, device_line_thickness.value(), Gfx::LineStyle::Solid);
+            for (auto segment : segments)
+                draw_line_for_segment(segment, line_y);
             break;
-        case CSS::TextDecorationStyle::Double:
+        case CSS::TextDecorationStyle::Double: {
+            // Two parallel lines with a 1px gap, expanding away from the text.
+            int step = device_line_thickness.value() + 1;
+            int first_y = line_y;
+            int second_y = line_y;
             switch (line) {
             case CSS::TextDecorationLine::Underline:
+                second_y += step;
                 break;
             case CSS::TextDecorationLine::Overline:
-                line_start_point.translate_by(0, -device_line_thickness - context.rounded_device_pixels(1));
-                line_end_point.translate_by(0, -device_line_thickness - context.rounded_device_pixels(1));
+                second_y -= step;
                 break;
             case CSS::TextDecorationLine::LineThrough:
-                line_start_point.translate_by(0, -device_line_thickness / 2);
-                line_end_point.translate_by(0, -device_line_thickness / 2);
+                first_y -= step / 2;
+                second_y = first_y + step;
                 break;
             default:
                 VERIFY_NOT_REACHED();
             }
-
-            recorder.draw_line(line_start_point.to_type<int>(), line_end_point.to_type<int>(), line_color, device_line_thickness.value());
-            recorder.draw_line(line_start_point.translated(0, device_line_thickness + 1).to_type<int>(), line_end_point.translated(0, device_line_thickness + 1).to_type<int>(), line_color, device_line_thickness.value());
+            for (auto segment : segments) {
+                draw_line_for_segment(segment, first_y);
+                draw_line_for_segment(segment, second_y);
+            }
             break;
+        }
         case CSS::TextDecorationStyle::Dashed:
-            recorder.draw_line(line_start_point.to_type<int>(), line_end_point.to_type<int>(), line_color, device_line_thickness.value(), Gfx::LineStyle::Dashed);
+            for (auto segment : segments)
+                draw_line_for_segment(segment, line_y, Gfx::LineStyle::Dashed);
             break;
         case CSS::TextDecorationStyle::Dotted:
-            recorder.draw_line(line_start_point.to_type<int>(), line_end_point.to_type<int>(), line_color, device_line_thickness.value(), Gfx::LineStyle::Dotted);
+            for (auto segment : segments)
+                draw_line_for_segment(segment, line_y, Gfx::LineStyle::Dotted);
             break;
-        case CSS::TextDecorationStyle::Wavy:
-            auto amplitude = device_line_thickness.value() * 3;
+        case CSS::TextDecorationStyle::Wavy: {
+            // The wave oscillates amplitude/2 above and below its center, so shift the center away from the text so the
+            // near peaks don’t overlap it.
+            int amplitude = device_line_thickness.value() * 3;
+            int wave_y = line_y;
             switch (line) {
             case CSS::TextDecorationLine::Underline:
-                line_start_point.translate_by(0, device_line_thickness + context.rounded_device_pixels(1));
-                line_end_point.translate_by(0, device_line_thickness + context.rounded_device_pixels(1));
+                wave_y += device_line_thickness.value() / 2 + 1;
                 break;
             case CSS::TextDecorationLine::Overline:
-                line_start_point.translate_by(0, -device_line_thickness - context.rounded_device_pixels(1));
-                line_end_point.translate_by(0, -device_line_thickness - context.rounded_device_pixels(1));
+                wave_y -= device_line_thickness.value() / 2 + 1;
                 break;
             case CSS::TextDecorationLine::LineThrough:
-                line_start_point.translate_by(0, -device_line_thickness / 2);
-                line_end_point.translate_by(0, -device_line_thickness / 2);
                 break;
             default:
                 VERIFY_NOT_REACHED();
             }
-            recorder.stroke_path({
-                .cap_style = Gfx::Path::CapStyle::Round,
-                .join_style = Gfx::Path::JoinStyle::Round,
-                .miter_limit = 0,
-                .dash_array = {},
-                .dash_offset = 0,
-                .path = build_triangle_wave_path(line_start_point.to_type<int>(), line_end_point.to_type<int>(), amplitude),
-                .paint_style_or_color = line_color,
-                .thickness = static_cast<float>(device_line_thickness.value()),
-            });
+            for (auto segment : segments) {
+                Gfx::IntPoint from { segment.start_x, wave_y };
+                Gfx::IntPoint to { segment.end_x, wave_y };
+                recorder.stroke_path({
+                    .cap_style = Gfx::Path::CapStyle::Round,
+                    .join_style = Gfx::Path::JoinStyle::Round,
+                    .miter_limit = 0,
+                    .dash_array = {},
+                    .dash_offset = 0,
+                    .path = build_triangle_wave_path(from, to, amplitude),
+                    .paint_style_or_color = line_color,
+                    .thickness = static_cast<float>(device_line_thickness.value()),
+                });
+            }
             break;
+        }
         }
     }
 }

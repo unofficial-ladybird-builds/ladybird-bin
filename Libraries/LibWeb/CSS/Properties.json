@@ -4096,6 +4096,16 @@
       "text-decoration-line"
     ]
   },
+  "text-decoration-skip-ink": {
+    "affects-layout": false,
+    "animation-type": "discrete",
+    "inherited": true,
+    "initial": "auto",
+    "requires-computation": "never",
+    "valid-types": [
+      "text-decoration-skip-ink"
+    ]
+  },
   "text-decoration-style": {
     "affects-layout": false,
     "animation-type": "discrete",
@@ -4680,7 +4690,6 @@
     "animation-type": "by-computed-value",
     "inherited": false,
     "initial": "auto",
-    "needs-layout-node-for-resolved-value": true,
     "requires-computation": "cascaded-value",
     "valid-types": [
       "integer [-∞,∞]"
