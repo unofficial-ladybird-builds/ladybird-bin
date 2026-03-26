@@ -78,32 +78,26 @@ bool TaskQueue::has_runnable_tasks() const
 
 void TaskQueue::remove_tasks_matching(Function<bool(HTML::Task const&)> filter)
 {
-    m_tasks.remove_all_matching([&](auto& task) {
-        return filter(*task);
-    });
+    m_tasks.remove_all_matching(filter);
 }
 
-GC::RootVector<GC::Ref<Task>> TaskQueue::take_tasks_matching(Function<bool(HTML::Task const&)> filter)
+GC::Ptr<Task> TaskQueue::take_first_runnable_matching(Function<bool(HTML::Task const&)> filter)
 {
-    GC::RootVector<GC::Ref<Task>> matching_tasks(heap());
-
     for (size_t i = 0; i < m_tasks.size();) {
         auto& task = m_tasks.at(i);
+
+        if (task->is_runnable() && filter(*task))
+            return m_tasks.take(i);
 
         if (task->is_permanently_unrunnable()) {
             m_tasks.remove(i);
             continue;
         }
 
-        if (filter(*task)) {
-            matching_tasks.append(task);
-            m_tasks.remove(i);
-        } else {
-            ++i;
-        }
+        ++i;
     }
 
-    return matching_tasks;
+    return nullptr;
 }
 
 Task const* TaskQueue::last_added_task() const
