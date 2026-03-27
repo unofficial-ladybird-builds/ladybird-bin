@@ -16,6 +16,7 @@
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/ActivateTab.h>
+#include <LibWeb/HTML/DocumentState.h>
 #include <LibWeb/HTML/HistoryHandlingBehavior.h>
 #include <LibWeb/HTML/InitialInsertion.h>
 #include <LibWeb/HTML/NavigationObserver.h>
@@ -34,6 +35,8 @@
 #include <LibWeb/XHR/FormDataEntry.h>
 
 namespace Web::HTML {
+
+struct PopulateSessionHistoryEntryDocumentOutput;
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#target-snapshot-params
 struct TargetSnapshotParams {
@@ -122,16 +125,26 @@ public:
     void set_ongoing_navigation(Variant<Empty, Traversal, String> ongoing_navigation);
 
     void populate_session_history_entry_document(
-        GC::Ptr<SessionHistoryEntry> entry,
-        SourceSnapshotParams const& source_snapshot_params,
+        URL::URL url,
+        Variant<Empty, String, POSTResource> document_resource,
+        Fetch::Infrastructure::Request::ReferrerType request_referrer,
+        ReferrerPolicy::ReferrerPolicy request_referrer_policy,
+        Optional<URL::Origin> initiator_origin,
+        Optional<URL::Origin> origin,
+        Variant<GC::Ref<PolicyContainer>, DocumentState::Client> history_policy_container,
+        Optional<URL::URL> about_base_url,
+        String navigable_target_name,
+        bool reload_pending,
+        bool ever_populated,
+        GC::Ref<SourceSnapshotParams> source_snapshot_params,
         TargetSnapshotParams const& target_snapshot_params,
         UserNavigationInvolvement user_involvement,
         NonnullRefPtr<Core::Promise<Empty>> signal_to_continue_session_history_processing,
-        Optional<String> navigation_id = {},
-        NavigationParamsVariant navigation_params = Navigable::NullOrError {},
-        ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type = ContentSecurityPolicy::Directives::Directive::NavigationType::Other,
-        bool allow_POST = false,
-        GC::Ptr<GC::Function<void()>> completion_steps = {});
+        Optional<String> navigation_id,
+        NavigationParamsVariant navigation_params,
+        ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type,
+        bool allow_POST,
+        GC::Ptr<GC::Function<void(GC::Ptr<PopulateSessionHistoryEntryDocumentOutput>)>> completion_steps);
 
     struct NavigateParams {
         URL::URL url;
@@ -290,6 +303,27 @@ private:
     bool m_should_show_line_box_borders { false };
     GC::Ref<Painting::BackingStoreManager> m_backing_store_manager;
     RenderingThread m_rendering_thread;
+};
+
+struct PopulateSessionHistoryEntryDocumentOutput final : public JS::Cell {
+    GC_CELL(PopulateSessionHistoryEntryDocumentOutput, JS::Cell);
+    GC_DECLARE_ALLOCATOR(PopulateSessionHistoryEntryDocumentOutput);
+
+public:
+    GC::Ptr<DOM::Document> document;
+
+    Navigable::NavigationParamsVariant navigation_params { Navigable::NullOrError {} };
+    bool save_extra_document_state = true;
+
+    Optional<URL::URL> redirected_url;
+    Optional<SerializationRecord> classic_history_api_state;
+    GC::Ptr<DocumentState> replacement_document_state;
+    bool resource_cleared = false;
+
+    void apply_to(GC::Ref<SessionHistoryEntry> entry);
+
+private:
+    virtual void visit_edges(Cell::Visitor&) override;
 };
 
 WEB_API HashTable<GC::RawRef<Navigable>>& all_navigables();
