@@ -1,0 +1,39 @@
+Harness status: OK
+
+Found 34 tests
+
+34 Pass
+Pass	Empty CSSFunctionRule
+Pass	Single CSSFunctionDeclarations
+Pass	CSSFunctionDescriptors (result)
+Pass	CSSFunctionDescriptors (result, repeated)
+Pass	CSSFunctionDescriptors (local variables)
+Pass	CSSFunctionDescriptors (local variables, repeated)
+Pass	CSSFunctionDescriptors (local variables and result)
+Pass	CSSFunctionDescriptors serialization
+Pass	Unknown descriptors
+Pass	Unknown descriptors (mutation)
+Pass	item()
+Pass	Indexed property getter
+Pass	@supports in body
+Pass	CSSFunctionRule.name
+Pass	CSSFunctionRule.getParameters()
+Pass	CSSFunctionRule.returnType
+Pass	CSSFunctionRule escapes
+Pass	CSSFunctionRule.cssText (--empty)
+Pass	CSSFunctionRule.cssText (--ret-length)
+Pass	CSSFunctionRule.cssText (--ret-length-auto)
+Pass	CSSFunctionRule.cssText (--param-single)
+Pass	CSSFunctionRule.cssText (--param-typed)
+Pass	CSSFunctionRule.cssText (--param-typed-default)
+Pass	CSSFunctionRule.cssText (--param-default)
+Pass	CSSFunctionRule.cssText (--param-multi)
+Pass	CSSFunctionRule.cssText (--param-multi-mixed)
+Pass	CSSFunctionRule.cssText (--body-result)
+Pass	CSSFunctionRule.cssText (--body-locals)
+Pass	CSSFunctionRule.cssText (--param-type-fn)
+Pass	CSSFunctionRule.cssText (--param-type-fn-uni)
+Pass	CSSFunctionRule.cssText (--ret-type-fn)
+Pass	CSSFunctionRule.cssText (--ret-type-fn-uni)
+Pass	CSSFunctionRule.cssText (--body-result-multi)
+Pass	CSSFunctionRule.cssText (--escaped-)

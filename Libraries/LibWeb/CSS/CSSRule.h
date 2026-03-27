@@ -42,6 +42,8 @@ public:
         LayerStatement = 101,
         NestedDeclarations = 102,
         Property = 103,
+        Function = 104,
+        FunctionDeclarations = 105,
     };
 
     Type type() const { return m_type; }

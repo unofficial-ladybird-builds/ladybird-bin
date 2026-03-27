@@ -12,9 +12,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/HeapVector.h>
 #include <LibWeb/CSS/CSSCounterStyleRule.h>
 #include <LibWeb/CSS/CSSFontFaceRule.h>
 #include <LibWeb/CSS/CSSFontFeatureValuesRule.h>
+#include <LibWeb/CSS/CSSFunctionDeclarations.h>
+#include <LibWeb/CSS/CSSFunctionRule.h>
 #include <LibWeb/CSS/CSSImportRule.h>
 #include <LibWeb/CSS/CSSKeyframeRule.h>
 #include <LibWeb/CSS/CSSKeyframesRule.h>
@@ -43,6 +46,7 @@
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
+#include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
 
 namespace Web::CSS::Parser {
 
@@ -56,8 +60,8 @@ public:
 
     void append(Descriptor&& descriptor)
     {
-        if (is_shorthand(m_at_rule, descriptor.descriptor_id)) {
-            for_each_expanded_longhand(m_at_rule, descriptor.descriptor_id, descriptor.value, [this](auto longhand_id, auto longhand_value) {
+        if (is_shorthand(m_at_rule, descriptor.descriptor_name_and_id)) {
+            for_each_expanded_longhand(m_at_rule, descriptor.descriptor_name_and_id, descriptor.value, [this](auto longhand_id, auto longhand_value) {
                 append_internal(Descriptor { longhand_id, longhand_value.release_nonnull() });
             });
             return;
@@ -74,21 +78,22 @@ public:
 private:
     void append_internal(Descriptor&& descriptor)
     {
-        if (m_seen_descriptor_ids.contains(descriptor.descriptor_id)) {
+        if (m_seen_descriptor_ids.contains(descriptor.descriptor_name_and_id)) {
             m_descriptors.remove_first_matching([&descriptor](Descriptor const& existing) {
-                return existing.descriptor_id == descriptor.descriptor_id;
+                return existing.descriptor_name_and_id == descriptor.descriptor_name_and_id;
             });
         } else {
-            m_seen_descriptor_ids.set(descriptor.descriptor_id);
+            m_seen_descriptor_ids.set(descriptor.descriptor_name_and_id);
         }
         m_descriptors.append(move(descriptor));
     }
 
     AtRuleID m_at_rule;
     Vector<Descriptor> m_descriptors;
-    HashTable<DescriptorID> m_seen_descriptor_ids;
+    HashTable<DescriptorNameAndID> m_seen_descriptor_ids;
 };
 
+template<typename NestedDeclarationsRule>
 GC::Ptr<CSSRule> Parser::convert_to_rule(Rule const& rule, Nested nested)
 {
     return rule.visit(
@@ -110,17 +115,20 @@ GC::Ptr<CSSRule> Parser::convert_to_rule(Rule const& rule, Nested nested)
             if (at_rule.name.equals_ignoring_ascii_case("font-feature-values"sv))
                 return convert_to_font_feature_values_rule(at_rule);
 
+            if (at_rule.name.equals_ignoring_ascii_case("function"sv))
+                return convert_to_function_rule(at_rule);
+
             if (at_rule.name.equals_ignoring_ascii_case("import"sv))
                 return convert_to_import_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("layer"sv))
-                return convert_to_layer_rule(at_rule, nested);
+                return convert_to_layer_rule<NestedDeclarationsRule>(at_rule, nested);
 
             if (is_margin_rule_name(at_rule.name))
                 return convert_to_margin_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("media"sv))
-                return convert_to_media_rule(at_rule, nested);
+                return convert_to_media_rule<NestedDeclarationsRule>(at_rule, nested);
 
             if (at_rule.name.equals_ignoring_ascii_case("namespace"sv))
                 return convert_to_namespace_rule(at_rule);
@@ -132,7 +140,7 @@ GC::Ptr<CSSRule> Parser::convert_to_rule(Rule const& rule, Nested nested)
                 return convert_to_property_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("supports"sv))
-                return convert_to_supports_rule(at_rule, nested);
+                return convert_to_supports_rule<NestedDeclarationsRule>(at_rule, nested);
 
             // FIXME: More at rules!
             ErrorReporter::the().report(UnknownRuleError { .rule_name = MUST(String::formatted("@{}", at_rule.name)) });
@@ -183,7 +191,7 @@ GC::Ptr<CSSStyleRule> Parser::convert_to_style_rule(QualifiedRule const& qualifi
                 // "In addition to nested style rules, this specification allows nested group rules inside of style rules:
                 // any at-rule whose body contains style rules can be nested inside of a style rule as well."
                 // https://drafts.csswg.org/css-nesting-1/#nested-group-rules
-                if (auto converted_rule = convert_to_rule(rule, Nested::Yes)) {
+                if (auto converted_rule = convert_to_rule<CSSNestedDeclarations>(rule, Nested::Yes)) {
                     if (is<CSSGroupingRule>(*converted_rule)) {
                         child_rules.append(*converted_rule);
                     } else {
@@ -195,7 +203,7 @@ GC::Ptr<CSSStyleRule> Parser::convert_to_style_rule(QualifiedRule const& qualifi
                 }
             },
             [&](Vector<Declaration> const& declarations) {
-                child_rules.append(CSSNestedDeclarations::create(realm(), *convert_to_style_declaration(declarations)));
+                child_rules.append(CSSNestedDeclarations::create(realm(), *this, declarations));
             });
     }
     auto nested_rules = CSSRuleList::create(realm(), child_rules);
@@ -341,6 +349,7 @@ Optional<FlyString> Parser::parse_layer_name(TokenStream<ComponentValue>& tokens
     return builder.to_fly_string_without_validation();
 }
 
+template<typename NestedDeclarationsRule>
 GC::Ptr<CSSRule> Parser::convert_to_layer_rule(AtRule const& rule, Nested nested)
 {
     // https://drafts.csswg.org/css-cascade-5/#at-layer
@@ -379,11 +388,11 @@ GC::Ptr<CSSRule> Parser::convert_to_layer_rule(AtRule const& rule, Nested nested
         for (auto const& child : rule.child_rules_and_lists_of_declarations) {
             child.visit(
                 [&](Rule const& rule) {
-                    if (auto child_rule = convert_to_rule(rule, nested))
+                    if (auto child_rule = convert_to_rule<NestedDeclarationsRule>(rule, nested))
                         child_rules.append(*child_rule);
                 },
                 [&](Vector<Declaration> const& declarations) {
-                    child_rules.append(CSSNestedDeclarations::create(realm(), *convert_to_style_declaration(declarations)));
+                    child_rules.append(NestedDeclarationsRule::create(realm(), *this, declarations));
                 });
         }
         auto rule_list = CSSRuleList::create(realm(), child_rules);
@@ -640,6 +649,7 @@ GC::Ptr<CSSNamespaceRule> Parser::convert_to_namespace_rule(AtRule const& rule)
     return CSSNamespaceRule::create(realm(), prefix, namespace_uri);
 }
 
+template<typename NestedDeclarationsRule>
 GC::Ptr<CSSSupportsRule> Parser::convert_to_supports_rule(AtRule const& rule, Nested nested)
 {
     // https://drafts.csswg.org/css-conditional-3/#at-supports
@@ -679,11 +689,11 @@ GC::Ptr<CSSSupportsRule> Parser::convert_to_supports_rule(AtRule const& rule, Ne
     for (auto const& child : rule.child_rules_and_lists_of_declarations) {
         child.visit(
             [&](Rule const& rule) {
-                if (auto child_rule = convert_to_rule(rule, nested))
+                if (auto child_rule = convert_to_rule<NestedDeclarationsRule>(rule, nested))
                     child_rules.append(*child_rule);
             },
             [&](Vector<Declaration> const& declarations) {
-                child_rules.append(CSSNestedDeclarations::create(realm(), *convert_to_style_declaration(declarations)));
+                child_rules.append(NestedDeclarationsRule::create(realm(), *this, declarations));
             });
     }
 
@@ -756,12 +766,12 @@ GC::Ptr<CSSPropertyRule> Parser::convert_to_property_rule(AtRule const& rule)
 
     rule.for_each_as_declaration_list([&](auto& declaration) {
         if (auto descriptor = convert_to_descriptor(AtRuleID::Property, declaration); descriptor.has_value()) {
-            if (descriptor->descriptor_id == DescriptorID::Syntax) {
+            if (descriptor->descriptor_name_and_id.id() == DescriptorID::Syntax) {
                 if (descriptor->value->is_string())
                     syntax_maybe = descriptor->value->as_string().string_value();
                 return;
             }
-            if (descriptor->descriptor_id == DescriptorID::Inherits) {
+            if (descriptor->descriptor_name_and_id.id() == DescriptorID::Inherits) {
                 switch (descriptor->value->to_keyword()) {
                 case Keyword::True:
                     inherits_maybe = true;
@@ -774,7 +784,7 @@ GC::Ptr<CSSPropertyRule> Parser::convert_to_property_rule(AtRule const& rule)
                 }
                 return;
             }
-            if (descriptor->descriptor_id == DescriptorID::InitialValue) {
+            if (descriptor->descriptor_name_and_id.id() == DescriptorID::InitialValue) {
                 initial_value_maybe = *descriptor->value;
                 return;
             }
@@ -893,7 +903,7 @@ GC::Ptr<CSSCounterStyleRule> Parser::convert_to_counter_style_rule(AtRule const&
         if (!descriptor.has_value())
             return;
 
-        switch (descriptor->descriptor_id) {
+        switch (descriptor->descriptor_name_and_id.id()) {
         case DescriptorID::System:
             system = descriptor->value;
             break;
@@ -1119,6 +1129,210 @@ GC::Ptr<CSSFontFeatureValuesRule> Parser::convert_to_font_feature_values_rule(At
     return font_feature_values_rule;
 }
 
+static OwnPtr<SyntaxNode> parse_css_type(TokenStream<ComponentValue>& tokens)
+{
+    // https://drafts.csswg.org/css-mixins-1/#function-rule
+    // <css-type> = <syntax-component> | <type()>
+    // <type()> = type( <syntax> )
+
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    // <syntax-component>
+    if (auto maybe_syntax_component = parse_syntax_component(tokens)) {
+        transaction.commit();
+        return maybe_syntax_component;
+    }
+
+    // <type()>
+    auto maybe_type_function_token = tokens.consume_a_token();
+
+    if (!maybe_type_function_token.is_function("type"sv))
+        return nullptr;
+
+    if (auto maybe_type_function_syntax = parse_as_syntax(maybe_type_function_token.function().value)) {
+        transaction.commit();
+        return maybe_type_function_syntax;
+    }
+
+    return nullptr;
+}
+
+Optional<Parser::FunctionPrelude> Parser::parse_function_prelude(TokenStream<ComponentValue>& tokens)
+{
+    // https://drafts.csswg.org/css-mixins-1/#function-rule
+    // <function-token> <function-parameter>#? ) [ returns <css-type> ]?
+    // <function-parameter> = <custom-property-name> <css-type>? [ : <default-value> ]?
+    // <default-value> = <declaration-value>
+    auto transaction = tokens.begin_transaction();
+
+    tokens.discard_whitespace();
+
+    auto const& function_token = tokens.consume_a_token();
+
+    if (!function_token.is_function()) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@function"_fly_string,
+            .prelude = tokens.dump_string(),
+            .description = "Prelude must start with a function token."_string,
+        });
+        return {};
+    }
+
+    auto function_name = function_token.function().name;
+
+    // The <function-token> production must start with two dashes (U+002D HYPHEN-MINUS), similar to <dashed-ident>, or
+    // else the definition is invalid.
+    if (!function_name.starts_with_bytes("--"sv)) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@function"_fly_string,
+            .prelude = tokens.dump_string(),
+            .description = "Function name must start with two dashes."_string,
+        });
+        return {};
+    }
+
+    Vector<FunctionParameterInternal> parsed_parameters;
+
+    TokenStream parameters_tokens { function_token.function().value };
+    parameters_tokens.discard_whitespace();
+    auto parameters_component_values = parse_a_comma_separated_list_of_component_values(parameters_tokens);
+
+    // <function-parameter>#?
+    for (auto const& parameter_component_values : parameters_component_values) {
+        TokenStream parameter_tokens { parameter_component_values };
+        parameter_tokens.discard_whitespace();
+
+        // <custom-property-name>
+        auto maybe_name = parse_dashed_ident(parameter_tokens);
+        if (!maybe_name.has_value() || !is_a_custom_property_name_string(maybe_name.value())) {
+            ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+                .rule_name = "@function"_fly_string,
+                .prelude = parameter_tokens.dump_string(),
+                .description = "Parameter must have a name."_string,
+            });
+            return {};
+        }
+
+        // <css-type>?
+        NonnullOwnPtr<SyntaxNode> type = UniversalSyntaxNode::create();
+        if (auto maybe_type = parse_css_type(parameter_tokens))
+            type = maybe_type.release_nonnull();
+
+        parameter_tokens.discard_whitespace();
+
+        // [ : <default-value> ]?
+        Optional<Vector<ComponentValue>> default_value;
+        if (parameter_tokens.peek_token().is(Token::Type::Colon)) {
+            parameter_tokens.discard_a_token(); // :
+            parameter_tokens.discard_whitespace();
+
+            auto maybe_default_value = parse_declaration_value(parameter_tokens);
+
+            if (!maybe_default_value.has_value()) {
+                ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+                    .rule_name = "@function"_fly_string,
+                    .prelude = parameter_tokens.dump_string(),
+                    .description = "Expected default value after ':' in parameter"_string,
+                });
+                return {};
+            }
+
+            // If a default value and a parameter type are both provided, then the default value must parse successfully
+            // according to that parameter type’s syntax. Otherwise, the @function rule is invalid.
+            TokenStream default_value_token_stream { maybe_default_value.value() };
+            if (!parse_according_to_syntax_node(default_value_token_stream, *type) || !default_value_token_stream.is_empty())
+                return {};
+
+            default_value = maybe_default_value;
+        }
+
+        parameter_tokens.discard_whitespace();
+
+        if (!parameter_tokens.is_empty()) {
+            ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+                .rule_name = "@function"_fly_string,
+                .prelude = parameter_tokens.dump_string(),
+                .description = "Trailing tokens after parameter"_string,
+            });
+            return {};
+        }
+
+        parsed_parameters.append({ maybe_name.release_value(), move(type), move(default_value) });
+    }
+
+    tokens.discard_whitespace();
+
+    NonnullOwnPtr<SyntaxNode> return_type = UniversalSyntaxNode::create();
+    if (tokens.peek_token().is_ident("returns"sv)) {
+        tokens.discard_a_token();
+        tokens.discard_whitespace();
+
+        auto maybe_return_type = parse_css_type(tokens);
+
+        if (!maybe_return_type) {
+            ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+                .rule_name = "@function"_fly_string,
+                .prelude = tokens.dump_string(),
+                .description = "Expected return type after 'returns' in prelude."_string,
+            });
+            return {};
+        }
+
+        return_type = maybe_return_type.release_nonnull();
+    }
+
+    tokens.discard_whitespace();
+
+    if (tokens.has_next_token()) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@function"_fly_string,
+            .prelude = tokens.dump_string(),
+            .description = "Trailing tokens in prelude."_string,
+        });
+        return {};
+    }
+
+    transaction.commit();
+    return FunctionPrelude { move(function_name), move(parsed_parameters), move(return_type) };
+}
+
+GC::Ptr<CSSFunctionRule> Parser::convert_to_function_rule(AtRule const& function_rule)
+{
+    // https://drafts.csswg.org/css-mixins-1/#function-rule
+    TokenStream prelude_stream { function_rule.prelude };
+
+    if (!function_rule.is_block_rule) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@function"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Must be a block, not a statement."_string,
+        });
+        return nullptr;
+    }
+
+    auto prelude = parse_function_prelude(prelude_stream);
+
+    if (!prelude.has_value())
+        return nullptr;
+
+    Vector<GC::Ref<CSSRule>> child_rules {};
+
+    // https://drafts.csswg.org/css-mixins-1/#function-body
+    for (auto const& child : function_rule.child_rules_and_lists_of_declarations) {
+        child.visit(
+            [&](Rule const& rule) {
+                if (auto child_rule = convert_to_rule<CSSFunctionDeclarations>(rule, Nested::Yes))
+                    child_rules.append(*child_rule);
+            },
+            [&](Vector<Declaration> const& declarations) {
+                child_rules.append(CSSFunctionDeclarations::create(realm(), *this, declarations));
+            });
+    }
+
+    return CSSFunctionRule::create(realm(), CSSRuleList::create(realm(), child_rules), move(prelude->name), move(prelude->parameters), move(prelude->return_type));
+}
+
 GC::Ptr<CSSPageRule> Parser::convert_to_page_rule(AtRule const& page_rule)
 {
     // https://drafts.csswg.org/css-page-3/#syntax-page-selector
@@ -1141,7 +1355,7 @@ GC::Ptr<CSSPageRule> Parser::convert_to_page_rule(AtRule const& page_rule)
     DescriptorList descriptors { AtRuleID::Page };
     page_rule.for_each_as_declaration_rule_list(
         [&](auto& at_rule) {
-            if (auto converted_rule = convert_to_rule(at_rule, Nested::No)) {
+            if (auto converted_rule = convert_to_rule<CSSNestedDeclarations>(at_rule, Nested::No)) {
                 if (is<CSSMarginRule>(*converted_rule)) {
                     child_rules.append(*converted_rule);
                 } else {
@@ -1198,5 +1412,28 @@ GC::Ptr<CSSMarginRule> Parser::convert_to_margin_rule(AtRule const& rule)
     auto style = CSSStyleProperties::create(realm(), move(properties.properties), move(properties.custom_properties));
     return CSSMarginRule::create(realm(), rule.name, style);
 }
+
+template<typename Descriptors>
+GC::Ref<Descriptors> Parser::convert_to_descriptors(AtRuleID at_rule_id, Vector<Declaration> const& declarations)
+{
+    DescriptorList descriptor_list { at_rule_id };
+
+    for (auto const& declaration : declarations) {
+        if (auto descriptor = convert_to_descriptor(at_rule_id, declaration); descriptor.has_value())
+            descriptor_list.append(descriptor.release_value());
+    }
+
+    return Descriptors::create(realm(), descriptor_list.release_descriptors());
+}
+
+template GC::Ref<CSSFunctionDescriptors> Parser::convert_to_descriptors(AtRuleID at_rule_id, Vector<Declaration> const& declarations);
+
+template GC::Ptr<CSSRule> Parser::convert_to_rule<CSSNestedDeclarations>(Rule const&, Parser::Nested);
+template GC::Ptr<CSSRule> Parser::convert_to_rule<CSSFunctionDeclarations>(Rule const&, Parser::Nested);
+
+template GC::Ptr<CSSRule> Parser::convert_to_layer_rule<CSSNestedDeclarations>(AtRule const& rule, Parser::Nested);
+
+template GC::Ptr<CSSSupportsRule> Parser::convert_to_supports_rule<CSSNestedDeclarations>(AtRule const&, Parser::Nested);
+template GC::Ptr<CSSSupportsRule> Parser::convert_to_supports_rule<CSSFunctionDeclarations>(AtRule const&, Parser::Nested);
 
 }

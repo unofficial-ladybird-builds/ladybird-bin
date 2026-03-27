@@ -16,6 +16,7 @@
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibURL/Parser.h>
 #include <LibWeb/CSS/CSSFontFeatureValuesRule.h>
+#include <LibWeb/CSS/CSSFunctionDeclarations.h>
 #include <LibWeb/CSS/CSSMarginRule.h>
 #include <LibWeb/CSS/CSSStyleDeclaration.h>
 #include <LibWeb/CSS/CSSStyleProperties.h>
@@ -124,7 +125,7 @@ GC::RootVector<GC::Ref<CSSRule>> Parser::convert_rules(Vector<Rule> const& raw_r
     // Interpret all of the resulting top-level qualified rules as style rules, defined below.
     GC::RootVector<GC::Ref<CSSRule>> rules(realm().heap());
     for (auto const& raw_rule : raw_rules) {
-        auto rule = convert_to_rule(raw_rule, Nested::No);
+        auto rule = convert_to_rule<CSSNestedDeclarations>(raw_rule, Nested::No);
         // If any style rule is invalid, or any at-rule is not recognized or is invalid according to its grammar or context, it’s a parse error.
         // Discard that rule.
         if (!rule) {
@@ -1248,7 +1249,7 @@ void Parser::consume_the_remnants_of_a_bad_declaration(TokenStream<T>& input, Ne
 CSSRule* Parser::parse_as_css_rule()
 {
     if (auto maybe_rule = parse_a_rule(m_token_stream); maybe_rule.has_value())
-        return convert_to_rule(maybe_rule.value(), Nested::No);
+        return convert_to_rule<CSSNestedDeclarations>(maybe_rule.value(), Nested::No);
     return {};
 }
 
@@ -1472,6 +1473,8 @@ Vector<Descriptor> Parser::parse_as_descriptor_declaration_block(AtRuleID at_rul
         switch (at_rule_id) {
         case AtRuleID::FontFace:
             return RuleContext::AtFontFace;
+        case AtRuleID::Function:
+            return RuleContext::AtFunction;
         case AtRuleID::Page:
             return RuleContext::AtPage;
         case AtRuleID::Property:
@@ -1533,11 +1536,15 @@ bool Parser::is_valid_in_the_current_context(Declaration const&) const
     case RuleContext::AtLayer:
     case RuleContext::AtMedia:
     case RuleContext::AtSupports:
-        // Grouping rules can contain declarations if they are themselves inside a style rule
-        return m_rule_context.contains_slow(RuleContext::Style);
+        // Grouping rules can contain declarations if they are themselves inside a style or function rule
+        return m_rule_context.contains([](auto const& context) { return context == RuleContext::Style || context == RuleContext::AtFunction; });
 
     case RuleContext::FontFeatureValue:
         // Each feature value block accepts a list of declarations
+        return true;
+
+    case RuleContext::AtFunction:
+        // @function rules contain descriptor declarations
         return true;
 
     case RuleContext::AtCounterStyle:
@@ -1570,6 +1577,12 @@ bool Parser::is_valid_in_the_current_context(AtRule const& at_rule) const
     // Only grouping rules can be nested within style rules
     if (m_rule_context.contains_slow(RuleContext::Style))
         return first_is_one_of(at_rule.name, "layer", "media", "supports");
+
+    if (m_rule_context.contains_slow(RuleContext::AtFunction)) {
+        // https://drafts.csswg.org/css-mixins-1/#function-body
+        // The body of a @function rule accepts conditional group rules
+        return first_is_one_of(at_rule.name, "media", "supports");
+    }
 
     switch (m_rule_context.last()) {
     case RuleContext::Unknown:
@@ -1605,6 +1618,9 @@ bool Parser::is_valid_in_the_current_context(AtRule const& at_rule) const
         return false;
     case RuleContext::AtFontFeatureValues:
         return CSSFontFeatureValuesRule::is_font_feature_value_type_at_keyword(at_rule.name);
+    case RuleContext::AtFunction:
+        // Already handled above
+        VERIFY_NOT_REACHED();
     }
 
     VERIFY_NOT_REACHED();
@@ -1645,6 +1661,7 @@ bool Parser::is_valid_in_the_current_context(QualifiedRule const&) const
     case RuleContext::AtFontFace:
     case RuleContext::AtFontFeatureValues:
     case RuleContext::FontFeatureValue:
+    case RuleContext::AtFunction:
     case RuleContext::AtPage:
     case RuleContext::AtProperty:
     case RuleContext::Keyframe:
@@ -1807,11 +1824,11 @@ RefPtr<StyleValue const> Parser::parse_as_css_value(PropertyID property_id)
     return parsed_value.release_value();
 }
 
-RefPtr<StyleValue const> Parser::parse_as_descriptor_value(AtRuleID at_rule_id, DescriptorID descriptor_id)
+RefPtr<StyleValue const> Parser::parse_as_descriptor_value(AtRuleID at_rule_id, DescriptorNameAndID const& descriptor_name_and_id)
 {
     auto component_values = parse_a_list_of_component_values(m_token_stream);
     auto tokens = TokenStream(component_values);
-    auto parsed_value = parse_descriptor_value(at_rule_id, descriptor_id, tokens);
+    auto parsed_value = parse_descriptor_value(at_rule_id, descriptor_name_and_id, tokens);
     if (parsed_value.is_error())
         return nullptr;
     return parsed_value.release_value();

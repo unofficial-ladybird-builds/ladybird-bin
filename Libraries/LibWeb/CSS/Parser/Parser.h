@@ -160,7 +160,7 @@ public:
     RefPtr<Supports> parse_as_supports();
 
     RefPtr<StyleValue const> parse_as_css_value(PropertyID);
-    RefPtr<StyleValue const> parse_as_descriptor_value(AtRuleID, DescriptorID);
+    RefPtr<StyleValue const> parse_as_descriptor_value(AtRuleID, DescriptorNameAndID const&);
     RefPtr<StyleValue const> parse_as_type(ValueType);
 
     Optional<ComponentValue> parse_as_component_value();
@@ -179,6 +179,10 @@ public:
     RefPtr<TreeCountingFunctionStyleValue const> parse_tree_counting_function(TokenStream<ComponentValue>&, TreeCountingFunctionStyleValue::ComputedType);
 
     OwnPtr<BooleanExpression> parse_if_condition(TokenStream<ComponentValue>&);
+
+    template<typename Descriptors>
+    GC::Ref<Descriptors> convert_to_descriptors(AtRuleID, Vector<Declaration> const& declarations);
+    GC::Ref<CSSStyleProperties> convert_to_style_declaration(Vector<Declaration> const&);
 
 private:
     Parser(ParsingParams const&, Vector<Token>);
@@ -288,25 +292,40 @@ private:
     Optional<FlyString> parse_layer_name(TokenStream<ComponentValue>&, AllowBlankLayerName);
     Optional<Vector<FlyString>> parse_comma_separated_family_name_list(TokenStream<ComponentValue>&);
 
+    struct FunctionPrelude {
+        FlyString name;
+        Vector<FunctionParameterInternal> parameters;
+        NonnullOwnPtr<SyntaxNode> return_type;
+    };
+    Optional<FunctionPrelude> parse_function_prelude(TokenStream<ComponentValue>&);
+
     bool is_valid_in_the_current_context(Declaration const&) const;
     bool is_valid_in_the_current_context(AtRule const&) const;
     bool is_valid_in_the_current_context(QualifiedRule const&) const;
+
+    template<typename NestedDeclarationsRule>
     GC::Ptr<CSSRule> convert_to_rule(Rule const&, Nested);
     GC::Ptr<CSSStyleRule> convert_to_style_rule(QualifiedRule const&, Nested);
     GC::Ptr<CSSCounterStyleRule> convert_to_counter_style_rule(AtRule const&);
     GC::Ptr<CSSFontFaceRule> convert_to_font_face_rule(AtRule const&);
     GC::Ptr<CSSFontFeatureValuesRule> convert_to_font_feature_values_rule(AtRule const&);
+    GC::Ptr<CSSFunctionRule> convert_to_function_rule(AtRule const&);
     GC::Ptr<CSSKeyframesRule> convert_to_keyframes_rule(AtRule const&);
     GC::Ptr<CSSImportRule> convert_to_import_rule(AtRule const&);
+
+    template<typename NestedDeclarationsRule>
     GC::Ptr<CSSRule> convert_to_layer_rule(AtRule const&, Nested);
     GC::Ptr<CSSMarginRule> convert_to_margin_rule(AtRule const&);
+
+    template<typename NestedDeclarationsRule>
     GC::Ptr<CSSMediaRule> convert_to_media_rule(AtRule const&, Nested);
     GC::Ptr<CSSNamespaceRule> convert_to_namespace_rule(AtRule const&);
     GC::Ptr<CSSPageRule> convert_to_page_rule(AtRule const& rule);
     GC::Ptr<CSSPropertyRule> convert_to_property_rule(AtRule const& rule);
+
+    template<typename NestedDeclarationsRule>
     GC::Ptr<CSSSupportsRule> convert_to_supports_rule(AtRule const&, Nested);
 
-    GC::Ref<CSSStyleProperties> convert_to_style_declaration(Vector<Declaration> const&);
     Optional<StylePropertyAndName> convert_to_style_property(Declaration const&);
 
     Optional<Descriptor> convert_to_descriptor(AtRuleID, Declaration const&);
@@ -382,7 +401,7 @@ private:
     RefPtr<RadialGradientStyleValue const> parse_radial_gradient_function(TokenStream<ComponentValue>&);
 
     ParseErrorOr<NonnullRefPtr<StyleValue const>> parse_css_value(PropertyID, TokenStream<ComponentValue>&, Optional<String> original_source_text = {});
-    ParseErrorOr<NonnullRefPtr<StyleValue const>> parse_descriptor_value(AtRuleID, DescriptorID, TokenStream<ComponentValue>&);
+    ParseErrorOr<NonnullRefPtr<StyleValue const>> parse_descriptor_value(AtRuleID, DescriptorNameAndID const&, TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_positional_value_list_shorthand(PropertyID, TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_css_value_for_property(PropertyID, TokenStream<ComponentValue>&);
     struct PropertyAndValue {
@@ -645,7 +664,7 @@ CSS::Parser::Parser::PropertiesAndCustomProperties parse_css_property_declaratio
 Vector<CSS::Descriptor> parse_css_descriptor_declaration_block(CSS::Parser::ParsingParams const&, CSS::AtRuleID, StringView);
 RefPtr<CSS::StyleValue const> parse_css_value(CSS::Parser::ParsingParams const&, StringView, CSS::PropertyID);
 RefPtr<CSS::StyleValue const> parse_css_type(CSS::Parser::ParsingParams const&, StringView, CSS::ValueType);
-RefPtr<CSS::StyleValue const> parse_css_descriptor(CSS::Parser::ParsingParams const&, CSS::AtRuleID, CSS::DescriptorID, StringView);
+RefPtr<CSS::StyleValue const> parse_css_descriptor(CSS::Parser::ParsingParams const&, CSS::AtRuleID, CSS::DescriptorNameAndID const&, StringView);
 Optional<CSS::SelectorList> parse_selector(CSS::Parser::ParsingParams const&, StringView);
 Optional<CSS::SelectorList> parse_selector_for_nested_style_rule(CSS::Parser::ParsingParams const&, StringView);
 Optional<CSS::PageSelectorList> parse_page_selector_list(CSS::Parser::ParsingParams const&, StringView);

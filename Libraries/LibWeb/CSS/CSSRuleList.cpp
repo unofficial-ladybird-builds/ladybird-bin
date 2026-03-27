@@ -9,6 +9,7 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSFontFaceRule.h>
 #include <LibWeb/CSS/CSSFontFeatureValuesRule.h>
+#include <LibWeb/CSS/CSSFunctionRule.h>
 #include <LibWeb/CSS/CSSImportRule.h>
 #include <LibWeb/CSS/CSSKeyframesRule.h>
 #include <LibWeb/CSS/CSSLayerBlockRule.h>
@@ -220,6 +221,8 @@ void CSSRuleList::for_each_effective_rule(TraversalOrder order, Function<void(We
         case CSSRule::Type::CounterStyle:
         case CSSRule::Type::FontFace:
         case CSSRule::Type::FontFeatureValues:
+        case CSSRule::Type::Function:
+        case CSSRule::Type::FunctionDeclarations:
         case CSSRule::Type::Keyframe:
         case CSSRule::Type::Keyframes:
         case CSSRule::Type::LayerStatement:
@@ -241,6 +244,10 @@ bool CSSRuleList::evaluate_media_queries(DOM::Document const& document)
 
     for (auto& rule : m_rules) {
         switch (rule->type()) {
+        case CSSRule::Type::Function: {
+            any_media_queries_changed_match_state |= as<CSSFunctionRule>(*rule).css_rules().evaluate_media_queries(document);
+            break;
+        }
         case CSSRule::Type::Import: {
             auto& import_rule = as<CSSImportRule>(*rule);
             if (import_rule.loaded_style_sheet() && import_rule.loaded_style_sheet()->evaluate_media_queries(document))
@@ -278,6 +285,7 @@ bool CSSRuleList::evaluate_media_queries(DOM::Document const& document)
         case CSSRule::Type::CounterStyle:
         case CSSRule::Type::FontFace:
         case CSSRule::Type::FontFeatureValues:
+        case CSSRule::Type::FunctionDeclarations:
         case CSSRule::Type::Keyframe:
         case CSSRule::Type::Keyframes:
         case CSSRule::Type::LayerStatement:
