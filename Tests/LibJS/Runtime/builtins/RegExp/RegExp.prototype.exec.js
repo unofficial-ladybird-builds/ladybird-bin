@@ -137,6 +137,24 @@ test("brace quantifier with invalid contents", () => {
     expect(res[0]).toBe("{{lit-746579221856449}}");
 });
 
+test("lazy quantified capture restores the previous iteration when backtracking", () => {
+    let res = /^(b+|a){1,2}?bc/.exec("bbc");
+
+    expect(res.length).toBe(2);
+    expect(res[0]).toBe("bbc");
+    expect(res[1]).toBe("b");
+    expect(res.index).toBe(0);
+});
+
+test("zero-width quantified captures fall back to the pre-iteration state", () => {
+    let res = /(a*)*/.exec("b");
+
+    expect(res.length).toBe(2);
+    expect(res[0]).toBe("");
+    expect(res[1]).toBeUndefined();
+    expect(res.index).toBe(0);
+});
+
 // #6256
 test("empty character class semantics", () => {
     // Should not match zero-length strings.
@@ -327,4 +345,32 @@ test("invalid named group references", () => {
     expect(() => {
         new RegExp("(?<a>x)\\k<nonexistent>");
     }).toThrow();
+});
+
+test("pathological backtracking pattern should match", () => {
+    // This pattern requires many backtracking steps but should still match.
+    let result = /(a?){17}a{17}/.exec("aaaaaaaaaaaaaaaaa");
+    expect(result).not.toBe(null);
+    expect(result[0].length).toBe(17);
+});
+
+test("alternation uses leftmost-first semantics", () => {
+    // ECMAScript requires the first alternative to win, not the longest.
+    let result = /a|ab/.exec("ab");
+    expect(result).not.toBe(null);
+    expect(result[0]).toBe("a");
+
+    expect("ab".replace(/a|ab/g, "X")).toBe("Xb");
+});
+
+test("case-insensitive Unicode matching of astral characters", () => {
+    // U+10400 (Deseret Capital Letter Long I) should case-fold to U+10428.
+    let result = /\u{10400}/iu.exec("\u{10428}");
+    expect(result).not.toBe(null);
+    expect(result[0]).toBe("\u{10428}");
+
+    // And vice versa.
+    result = /\u{10428}/iu.exec("\u{10400}");
+    expect(result).not.toBe(null);
+    expect(result[0]).toBe("\u{10400}");
 });

@@ -71,6 +71,26 @@ test("override exec with function", () => {
     expect(calls).toBe(1);
 });
 
+test("override exec on prototype", () => {
+    let calls = 0;
+    let original = RegExp.prototype.exec;
+    try {
+        RegExp.prototype.exec = function (s) {
+            ++calls;
+            return original.call(this, s);
+        };
+
+        let re = /abc.+de/;
+        expect(re.test("abcXdef")).toBe(true);
+        expect(calls).toBe(1);
+
+        expect(re.test("no match")).toBe(false);
+        expect(calls).toBe(2);
+    } finally {
+        RegExp.prototype.exec = original;
+    }
+});
+
 test("override exec with bad function", () => {
     let calls = 0;
 
@@ -102,4 +122,11 @@ test("property escapes", () => {
     expect(/\p{ASCII_Hex_Digit}/u.test("x")).toBeFalse();
     expect(/\p{Any}/u.test("\u0378")).toBeTrue();
     expect(/\p{Assigned}/u.test("\u0378")).toBeFalse();
+});
+
+test("case-insensitive character class with mixed builtins and literals", () => {
+    expect(/[\dA]/i.test("a")).toBeTrue();
+    expect(/[\dA]/i.test("A")).toBeTrue();
+    expect(/[\dA]/i.test("5")).toBeTrue();
+    expect(/[\dA]/i.test("b")).toBeFalse();
 });
