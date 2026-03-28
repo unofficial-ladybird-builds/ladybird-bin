@@ -141,8 +141,8 @@ impl FunctionTable {
 
     fn collect_from_statement(&mut self, stmt: &Statement, result: &mut FunctionTable) {
         match &stmt.inner {
-            StatementKind::FunctionDeclaration { function_id, .. } => {
-                self.transfer(*function_id, result);
+            StatementKind::FunctionDeclaration(data) => {
+                self.transfer(data.function_id, result);
             }
             StatementKind::Expression(expr) => self.collect_from_expression(expr, result),
             StatementKind::Block(scope) | StatementKind::FunctionBody { scope, .. } => {
@@ -155,53 +155,44 @@ impl FunctionTable {
                     self.collect_from_statement(child, result);
                 }
             }
-            StatementKind::If {
-                test,
-                consequent,
-                alternate,
-            } => {
-                self.collect_from_expression(test, result);
-                self.collect_from_statement(consequent, result);
-                if let Some(alt) = alternate {
+            StatementKind::If(data) => {
+                self.collect_from_expression(&data.test, result);
+                self.collect_from_statement(&data.consequent, result);
+                if let Some(alt) = &data.alternate {
                     self.collect_from_statement(alt, result);
                 }
             }
-            StatementKind::While { test, body } => {
-                self.collect_from_expression(test, result);
-                self.collect_from_statement(body, result);
+            StatementKind::While(data) => {
+                self.collect_from_expression(&data.test, result);
+                self.collect_from_statement(&data.body, result);
             }
-            StatementKind::DoWhile { test, body } => {
-                self.collect_from_statement(body, result);
-                self.collect_from_expression(test, result);
+            StatementKind::DoWhile(data) => {
+                self.collect_from_statement(&data.body, result);
+                self.collect_from_expression(&data.test, result);
             }
-            StatementKind::For {
-                init,
-                test,
-                update,
-                body,
-            } => {
-                if let Some(init) = init {
+            StatementKind::For(data) => {
+                if let Some(init) = &data.init {
                     match init {
                         ForInit::Expression(expr) => self.collect_from_expression(expr, result),
                         ForInit::Declaration(decl) => self.collect_from_statement(decl, result),
                     }
                 }
-                if let Some(test) = test {
+                if let Some(test) = &data.test {
                     self.collect_from_expression(test, result);
                 }
-                if let Some(update) = update {
+                if let Some(update) = &data.update {
                     self.collect_from_expression(update, result);
                 }
-                self.collect_from_statement(body, result);
+                self.collect_from_statement(&data.body, result);
             }
-            StatementKind::ForInOf { lhs, rhs, body, .. } => {
-                match lhs {
+            StatementKind::ForInOf(data) => {
+                match &data.lhs {
                     ForInOfLhs::Declaration(decl) => self.collect_from_statement(decl, result),
                     ForInOfLhs::Expression(expr) => self.collect_from_expression(expr, result),
                     ForInOfLhs::Pattern(pattern) => self.collect_from_pattern(pattern, result),
                 }
-                self.collect_from_expression(rhs, result);
-                self.collect_from_statement(body, result);
+                self.collect_from_expression(&data.rhs, result);
+                self.collect_from_statement(&data.body, result);
             }
             StatementKind::Switch(data) => {
                 self.collect_from_expression(&data.discriminant, result);
@@ -214,12 +205,12 @@ impl FunctionTable {
                     }
                 }
             }
-            StatementKind::With { object, body } => {
-                self.collect_from_expression(object, result);
-                self.collect_from_statement(body, result);
+            StatementKind::With(data) => {
+                self.collect_from_expression(&data.object, result);
+                self.collect_from_statement(&data.body, result);
             }
-            StatementKind::Labelled { item, .. } => {
-                self.collect_from_statement(item, result);
+            StatementKind::Labelled(data) => {
+                self.collect_from_statement(&data.item, result);
             }
             StatementKind::Return(arg) => {
                 if let Some(expr) = arg {
@@ -241,16 +232,16 @@ impl FunctionTable {
                     self.collect_from_statement(finalizer, result);
                 }
             }
-            StatementKind::VariableDeclaration { declarations, .. } => {
-                for decl in declarations {
+            StatementKind::VariableDeclaration(data) => {
+                for decl in &data.declarations {
                     self.collect_from_target(&decl.target, result);
                     if let Some(ref init) = decl.init {
                         self.collect_from_expression(init, result);
                     }
                 }
             }
-            StatementKind::UsingDeclaration { declarations } => {
-                for decl in declarations {
+            StatementKind::UsingDeclaration(declarations) => {
+                for decl in declarations.iter() {
                     self.collect_from_target(&decl.target, result);
                     if let Some(ref init) = decl.init {
                         self.collect_from_expression(init, result);
@@ -265,8 +256,8 @@ impl FunctionTable {
                     self.collect_from_statement(stmt, result);
                 }
             }
-            StatementKind::ClassFieldInitializer { expression, .. } => {
-                self.collect_from_expression(expression, result);
+            StatementKind::ClassFieldInitializer(data) => {
+                self.collect_from_expression(&data.expression, result);
             }
             StatementKind::Empty
             | StatementKind::Debugger
@@ -286,46 +277,44 @@ impl FunctionTable {
             ExpressionKind::Class(class_data) => {
                 self.collect_from_class(class_data, result);
             }
-            ExpressionKind::Binary { lhs, rhs, .. } | ExpressionKind::Logical { lhs, rhs, .. } => {
-                self.collect_from_expression(lhs, result);
-                self.collect_from_expression(rhs, result);
+            ExpressionKind::Binary(data) => {
+                self.collect_from_expression(&data.lhs, result);
+                self.collect_from_expression(&data.rhs, result);
+            }
+            ExpressionKind::Logical(data) => {
+                self.collect_from_expression(&data.lhs, result);
+                self.collect_from_expression(&data.rhs, result);
             }
             ExpressionKind::Unary { operand, .. } => {
                 self.collect_from_expression(operand, result);
             }
-            ExpressionKind::Update { argument, .. } => {
-                self.collect_from_expression(argument, result);
+            ExpressionKind::Update(data) => {
+                self.collect_from_expression(&data.argument, result);
             }
-            ExpressionKind::Assignment { lhs, rhs, .. } => {
-                match lhs {
+            ExpressionKind::Assignment(data) => {
+                match &data.lhs {
                     AssignmentLhs::Expression(expr) => self.collect_from_expression(expr, result),
                     AssignmentLhs::Pattern(pat) => self.collect_from_pattern(pat, result),
                 }
-                self.collect_from_expression(rhs, result);
+                self.collect_from_expression(&data.rhs, result);
             }
-            ExpressionKind::Conditional {
-                test,
-                consequent,
-                alternate,
-            } => {
-                self.collect_from_expression(test, result);
-                self.collect_from_expression(consequent, result);
-                self.collect_from_expression(alternate, result);
+            ExpressionKind::Conditional(data) => {
+                self.collect_from_expression(&data.test, result);
+                self.collect_from_expression(&data.consequent, result);
+                self.collect_from_expression(&data.alternate, result);
             }
             ExpressionKind::Sequence(exprs) => {
-                for expr in exprs {
+                for expr in exprs.iter() {
                     self.collect_from_expression(expr, result);
                 }
             }
-            ExpressionKind::Member {
-                object, property, ..
-            } => {
-                self.collect_from_expression(object, result);
-                self.collect_from_expression(property, result);
+            ExpressionKind::Member(data) => {
+                self.collect_from_expression(&data.object, result);
+                self.collect_from_expression(&data.property, result);
             }
-            ExpressionKind::OptionalChain { base, references } => {
-                self.collect_from_expression(base, result);
-                for reference in references {
+            ExpressionKind::OptionalChain(data) => {
+                self.collect_from_expression(&data.base, result);
+                for reference in &data.references {
                     match reference {
                         OptionalChainReference::Call { arguments, .. } => {
                             for arg in arguments {
@@ -360,7 +349,7 @@ impl FunctionTable {
                 }
             }
             ExpressionKind::Object(properties) => {
-                for prop in properties {
+                for prop in properties.iter() {
                     self.collect_from_expression(&prop.key, result);
                     if let Some(ref val) = prop.value {
                         self.collect_from_expression(val, result);
@@ -372,21 +361,18 @@ impl FunctionTable {
                     self.collect_from_expression(expr, result);
                 }
             }
-            ExpressionKind::TaggedTemplateLiteral {
-                tag,
-                template_literal,
-            } => {
-                self.collect_from_expression(tag, result);
-                self.collect_from_expression(template_literal, result);
+            ExpressionKind::TaggedTemplateLiteral(data) => {
+                self.collect_from_expression(&data.tag, result);
+                self.collect_from_expression(&data.template_literal, result);
             }
-            ExpressionKind::Yield { argument, .. } => {
-                if let Some(expr) = argument {
+            ExpressionKind::Yield(data) => {
+                if let Some(ref expr) = data.argument {
                     self.collect_from_expression(expr, result);
                 }
             }
-            ExpressionKind::ImportCall { specifier, options } => {
-                self.collect_from_expression(specifier, result);
-                if let Some(opts) = options {
+            ExpressionKind::ImportCall(data) => {
+                self.collect_from_expression(&data.specifier, result);
+                if let Some(ref opts) = data.options {
                     self.collect_from_expression(opts, result);
                 }
             }
@@ -1316,6 +1302,76 @@ pub struct VarToInit {
 }
 
 // =============================================================================
+// Expression data structs (boxed variants)
+// =============================================================================
+
+#[derive(Clone, Debug)]
+pub struct BinaryExprData {
+    pub op: BinaryOp,
+    pub lhs: Box<Expression>,
+    pub rhs: Box<Expression>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LogicalExprData {
+    pub op: LogicalOp,
+    pub lhs: Box<Expression>,
+    pub rhs: Box<Expression>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpdateExprData {
+    pub op: UpdateOp,
+    pub argument: Box<Expression>,
+    pub prefixed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssignmentExprData {
+    pub op: AssignmentOp,
+    pub lhs: AssignmentLhs,
+    pub rhs: Box<Expression>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConditionalExprData {
+    pub test: Box<Expression>,
+    pub consequent: Box<Expression>,
+    pub alternate: Box<Expression>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemberExprData {
+    pub object: Box<Expression>,
+    pub property: Box<Expression>,
+    pub computed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct OptionalChainData {
+    pub base: Box<Expression>,
+    pub references: Vec<OptionalChainReference>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaggedTemplateData {
+    pub tag: Box<Expression>,
+    pub template_literal: Box<Expression>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImportCallData {
+    pub specifier: Box<Expression>,
+    pub options: Option<Box<Expression>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct YieldExprData {
+    pub argument: Option<Box<Expression>>,
+    pub is_yield_from: bool,
+}
+
+// =============================================================================
 // Expression enum
 // =============================================================================
 
@@ -1323,63 +1379,36 @@ pub struct VarToInit {
 pub enum ExpressionKind {
     // Literals
     NumericLiteral(f64),
-    StringLiteral(Utf16String),
+    StringLiteral(Box<Utf16String>),
     BooleanLiteral(bool),
     NullLiteral,
-    BigIntLiteral(String),
-    RegExpLiteral(RegExpLiteralData),
+    BigIntLiteral(Box<String>),
+    RegExpLiteral(Box<RegExpLiteralData>),
 
     // Identifiers
     Identifier(Rc<Identifier>),
-    PrivateIdentifier(PrivateIdentifier),
+    PrivateIdentifier(Box<PrivateIdentifier>),
 
     // Operators
-    Binary {
-        op: BinaryOp,
-        lhs: Box<Expression>,
-        rhs: Box<Expression>,
-    },
-    Logical {
-        op: LogicalOp,
-        lhs: Box<Expression>,
-        rhs: Box<Expression>,
-    },
+    Binary(Box<BinaryExprData>),
+    Logical(Box<LogicalExprData>),
     Unary {
         op: UnaryOp,
         operand: Box<Expression>,
     },
-    Update {
-        op: UpdateOp,
-        argument: Box<Expression>,
-        prefixed: bool,
-    },
-    Assignment {
-        op: AssignmentOp,
-        lhs: AssignmentLhs,
-        rhs: Box<Expression>,
-    },
-    Conditional {
-        test: Box<Expression>,
-        consequent: Box<Expression>,
-        alternate: Box<Expression>,
-    },
-    Sequence(Vec<Expression>),
+    Update(Box<UpdateExprData>),
+    Assignment(Box<AssignmentExprData>),
+    Conditional(Box<ConditionalExprData>),
+    Sequence(Box<Vec<Expression>>),
 
     // Member access
-    Member {
-        object: Box<Expression>,
-        property: Box<Expression>,
-        computed: bool,
-    },
-    OptionalChain {
-        base: Box<Expression>,
-        references: Vec<OptionalChainReference>,
-    },
+    Member(Box<MemberExprData>),
+    OptionalChain(Box<OptionalChainData>),
 
     // Calls
-    Call(CallExpressionData),
-    New(CallExpressionData),
-    SuperCall(SuperCallData),
+    Call(Box<CallExpressionData>),
+    New(Box<CallExpressionData>),
+    SuperCall(Box<SuperCallData>),
 
     // Spread
     Spread(Box<Expression>),
@@ -1395,32 +1424,88 @@ pub enum ExpressionKind {
     Class(Box<ClassData>),
 
     // Collections
-    Array(Vec<Option<Expression>>),
-    Object(Vec<ObjectProperty>),
+    Array(Box<Vec<Option<Expression>>>),
+    Object(Box<Vec<ObjectProperty>>),
 
     // Templates
-    TemplateLiteral(TemplateLiteralData),
-    TaggedTemplateLiteral {
-        tag: Box<Expression>,
-        template_literal: Box<Expression>,
-    },
+    TemplateLiteral(Box<TemplateLiteralData>),
+    TaggedTemplateLiteral(Box<TaggedTemplateData>),
 
     // Meta
     MetaProperty(MetaPropertyType),
-    ImportCall {
-        specifier: Box<Expression>,
-        options: Option<Box<Expression>>,
-    },
+    ImportCall(Box<ImportCallData>),
 
     // Async / Generator
-    Yield {
-        argument: Option<Box<Expression>>,
-        is_yield_from: bool,
-    },
+    Yield(Box<YieldExprData>),
     Await(Box<Expression>),
 
     // Error recovery
     Error,
+}
+
+// =============================================================================
+// Statement data structs
+// =============================================================================
+
+#[derive(Clone, Debug)]
+pub struct IfStatementData {
+    pub test: Box<Expression>,
+    pub consequent: Box<Statement>,
+    pub alternate: Option<Box<Statement>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WhileStatementData {
+    pub test: Box<Expression>,
+    pub body: Box<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForStatementData {
+    pub init: Option<ForInit>,
+    pub test: Option<Box<Expression>>,
+    pub update: Option<Box<Expression>>,
+    pub body: Box<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForInOfStatementData {
+    pub kind: ForInOfKind,
+    pub lhs: ForInOfLhs,
+    pub rhs: Box<Expression>,
+    pub body: Box<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WithStatementData {
+    pub object: Box<Expression>,
+    pub body: Box<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LabelledStatementData {
+    pub label: Utf16String,
+    pub item: Box<Statement>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VariableDeclarationData {
+    pub kind: DeclarationKind,
+    pub declarations: Vec<VariableDeclarator>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionDeclarationData {
+    pub function_id: FunctionId,
+    pub name: Option<Rc<Identifier>>,
+    pub kind: FunctionKind,
+    pub is_hoisted: Cell<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClassFieldInitializerData {
+    pub expression: Box<Expression>,
+    pub field_name: Utf16String,
 }
 
 // =============================================================================
@@ -1441,43 +1526,17 @@ pub enum StatementKind {
         scope: Rc<RefCell<ScopeData>>,
         in_strict_mode: bool,
     },
-    Program(ProgramData),
+    Program(Box<ProgramData>),
 
     // Control flow
-    If {
-        test: Box<Expression>,
-        consequent: Box<Statement>,
-        alternate: Option<Box<Statement>>,
-    },
-    While {
-        test: Box<Expression>,
-        body: Box<Statement>,
-    },
-    DoWhile {
-        test: Box<Expression>,
-        body: Box<Statement>,
-    },
-    For {
-        init: Option<ForInit>,
-        test: Option<Box<Expression>>,
-        update: Option<Box<Expression>>,
-        body: Box<Statement>,
-    },
-    ForInOf {
-        kind: ForInOfKind,
-        lhs: ForInOfLhs,
-        rhs: Box<Expression>,
-        body: Box<Statement>,
-    },
-    Switch(SwitchStatementData),
-    With {
-        object: Box<Expression>,
-        body: Box<Statement>,
-    },
-    Labelled {
-        label: Utf16String,
-        item: Box<Statement>,
-    },
+    If(Box<IfStatementData>),
+    While(Box<WhileStatementData>),
+    DoWhile(Box<WhileStatementData>),
+    For(Box<ForStatementData>),
+    ForInOf(Box<ForInOfStatementData>),
+    Switch(Box<SwitchStatementData>),
+    With(Box<WithStatementData>),
+    Labelled(Box<LabelledStatementData>),
 
     // Jumps
     Break {
@@ -1488,34 +1547,21 @@ pub enum StatementKind {
     },
     Return(Option<Box<Expression>>),
     Throw(Box<Expression>),
-    Try(TryStatementData),
+    Try(Box<TryStatementData>),
 
     // Declarations
-    VariableDeclaration {
-        kind: DeclarationKind,
-        declarations: Vec<VariableDeclarator>,
-    },
-    UsingDeclaration {
-        declarations: Vec<VariableDeclarator>,
-    },
-    FunctionDeclaration {
-        function_id: FunctionId,
-        name: Option<Rc<Identifier>>,
-        kind: FunctionKind,
-        is_hoisted: Cell<bool>,
-    },
+    VariableDeclaration(Box<VariableDeclarationData>),
+    UsingDeclaration(Box<Vec<VariableDeclarator>>),
+    FunctionDeclaration(Box<FunctionDeclarationData>),
     ClassDeclaration(Box<ClassData>),
     ErrorDeclaration,
 
     // Module
-    Import(ImportStatementData),
-    Export(ExportStatementData),
+    Import(Box<ImportStatementData>),
+    Export(Box<ExportStatementData>),
 
     // Special
-    ClassFieldInitializer {
-        expression: Box<Expression>,
-        field_name: Utf16String,
-    },
+    ClassFieldInitializer(Box<ClassFieldInitializerData>),
 }
 
 // =============================================================================

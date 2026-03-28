@@ -28,24 +28,24 @@ fn expression_into_identifier(expression: Expression) -> Rc<Identifier> {
 /// Extract bound names from a declaration for export statements.
 fn get_declaration_export_names(statement: &Statement) -> Vec<Utf16String> {
     match &statement.inner {
-        StatementKind::VariableDeclaration { declarations, .. } => {
+        StatementKind::VariableDeclaration(vd) => {
             let mut names = Vec::new();
-            for declaration in declarations {
+            for declaration in &vd.declarations {
                 collect_declarator_names(&declaration.target, &mut names);
             }
             names
         }
-        StatementKind::UsingDeclaration { declarations } => {
+        StatementKind::UsingDeclaration(declarations) => {
             let mut names = Vec::new();
-            for declaration in declarations {
+            for declaration in declarations.iter() {
                 if let VariableDeclaratorTarget::Identifier(id) = &declaration.target {
                     names.push(id.name.clone());
                 }
             }
             names
         }
-        StatementKind::FunctionDeclaration { name, .. } => {
-            if let Some(name) = name {
+        StatementKind::FunctionDeclaration(fd) => {
+            if let Some(ref name) = fd.name {
                 vec![name.name.clone()]
             } else {
                 Vec::new()
@@ -272,10 +272,10 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::VariableDeclaration {
+            StatementKind::VariableDeclaration(Box::new(VariableDeclarationData {
                 kind,
                 declarations: declarators,
-            },
+            })),
         )
     }
 
@@ -362,9 +362,7 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::UsingDeclaration {
-                declarations: declarators,
-            },
+            StatementKind::UsingDeclaration(Box::new(declarators)),
         )
     }
 
@@ -436,12 +434,12 @@ impl Parser<'_> {
         let function_id = self.function_table.insert(fd);
         self.statement(
             start,
-            StatementKind::FunctionDeclaration {
+            StatementKind::FunctionDeclaration(Box::new(FunctionDeclarationData {
                 function_id,
                 name: decl_name,
                 kind: decl_kind,
                 is_hoisted: Cell::new(false),
-            },
+            })),
         )
     }
 
@@ -792,13 +790,13 @@ impl Parser<'_> {
 
             let super_call = self.expression(
                 start,
-                ExpressionKind::SuperCall(SuperCallData {
+                ExpressionKind::SuperCall(Box::new(SuperCallData {
                     arguments: vec![CallArgument {
                         value: arguments_expression,
                         is_spread: true,
                     }],
                     is_synthetic: true,
-                }),
+                })),
             );
             let return_statement =
                 self.statement(start, StatementKind::Return(Some(Box::new(super_call))));
@@ -986,7 +984,7 @@ impl Parser<'_> {
             };
             let expression = self.expression(
                 class_start,
-                ExpressionKind::StringLiteral(Utf16String(name.to_vec())),
+                ExpressionKind::StringLiteral(Box::new(Utf16String(name.to_vec()))),
             );
             PropertyKey {
                 expression,
@@ -1751,13 +1749,13 @@ impl Parser<'_> {
             self.consume_or_insert_semicolon();
             return self.statement(
                 start,
-                StatementKind::Import(ImportStatementData {
+                StatementKind::Import(Box::new(ImportStatementData {
                     module_request: ModuleRequest {
                         module_specifier,
                         attributes,
                     },
                     entries: Vec::new(),
-                }),
+                })),
             );
         }
 
@@ -1879,13 +1877,13 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::Import(ImportStatementData {
+            StatementKind::Import(Box::new(ImportStatementData {
                 module_request: ModuleRequest {
                     module_specifier,
                     attributes,
                 },
                 entries,
-            }),
+            })),
         )
     }
 
@@ -1922,10 +1920,8 @@ impl Parser<'_> {
                 let has_default_name = matches_function == MatchesFunctionDeclaration::WithoutName;
                 let declaration = self.parse_function_declaration_for_export(has_default_name);
                 if !has_default_name
-                    && let StatementKind::FunctionDeclaration {
-                        name: Some(ref name_id),
-                        ..
-                    } = declaration.inner
+                    && let StatementKind::FunctionDeclaration(ref fd) = declaration.inner
+                    && let Some(ref name_id) = fd.name
                 {
                     local_name = Some(name_id.name.clone());
                 }
@@ -2116,12 +2112,12 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::Export(ExportStatementData {
+            StatementKind::Export(Box::new(ExportStatementData {
                 statement,
                 entries,
                 is_default_export: is_default,
                 module_request,
-            }),
+            })),
         )
     }
 

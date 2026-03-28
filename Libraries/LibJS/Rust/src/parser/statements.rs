@@ -300,11 +300,11 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::If {
+            StatementKind::If(Box::new(IfStatementData {
                 test: Box::new(predicate),
                 consequent: Box::new(consequent),
                 alternate,
-            },
+            })),
         )
     }
 
@@ -344,10 +344,10 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::While {
+            StatementKind::While(Box::new(WhileStatementData {
                 test: Box::new(test),
                 body: Box::new(body),
-            },
+            })),
         )
     }
 
@@ -368,10 +368,10 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::DoWhile {
+            StatementKind::DoWhile(Box::new(WhileStatementData {
                 test: Box::new(test),
                 body: Box::new(body),
-            },
+            })),
         )
     }
 
@@ -463,12 +463,12 @@ impl Parser<'_> {
             let lhs = self.synthesize_for_in_of_lhs(init, init_start);
             let result = self.statement(
                 forin_start,
-                StatementKind::ForInOf {
+                StatementKind::ForInOf(Box::new(ForInOfStatementData {
                     kind: ForInOfKind::ForIn,
                     lhs,
                     rhs: Box::new(rhs),
                     body: Box::new(body),
-                },
+                })),
             );
             return self.close_for_loop_scope(start, result);
         }
@@ -503,8 +503,8 @@ impl Parser<'_> {
                     }
                     // https://tc39.es/ecma262/#sec-for-in-and-for-of-statements
                     if let LocalForInit::Expression(ref expression) = init
-                        && let ExpressionKind::Member { ref object, .. } = expression.inner
-                        && let ExpressionKind::Identifier(ref ident) = object.inner
+                        && let ExpressionKind::Member(ref data) = expression.inner
+                        && let ExpressionKind::Identifier(ref ident) = data.object.inner
                         && ident.name == utf16!("let")
                     {
                         self.syntax_error("For of statement may not start with let.");
@@ -524,12 +524,12 @@ impl Parser<'_> {
                 };
                 let result = self.statement(
                     forof_start,
-                    StatementKind::ForInOf {
+                    StatementKind::ForInOf(Box::new(ForInOfStatementData {
                         kind: for_of_kind,
                         lhs,
                         rhs: Box::new(rhs),
                         body: Box::new(body),
-                    },
+                    })),
                 );
                 return self.close_for_loop_scope(start, result);
             }
@@ -537,12 +537,10 @@ impl Parser<'_> {
 
         // Standard for loop — const requires initializer.
         if let LocalForInit::Declaration(ref declaration) = init
-            && let StatementKind::VariableDeclaration {
-                kind: DeclarationKind::Const,
-                ref declarations,
-            } = declaration.inner
+            && let StatementKind::VariableDeclaration(ref vd) = declaration.inner
+            && vd.kind == DeclarationKind::Const
         {
-            for d in declarations {
+            for d in &vd.declarations {
                 if d.init.is_none() {
                     self.syntax_error("Missing initializer in const declaration");
                 }
@@ -587,12 +585,12 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::For {
+            StatementKind::For(Box::new(ForStatementData {
                 init,
                 test,
                 update,
                 body: Box::new(body),
-            },
+            })),
         )
     }
 
@@ -609,10 +607,10 @@ impl Parser<'_> {
         self.scope_collector.close_scope();
         self.statement(
             start,
-            StatementKind::With {
+            StatementKind::With(Box::new(WithStatementData {
                 object: Box::new(object),
                 body: Box::new(body),
-            },
+            })),
         )
     }
 
@@ -655,11 +653,11 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::Switch(SwitchStatementData {
+            StatementKind::Switch(Box::new(SwitchStatementData {
                 scope,
                 discriminant: Box::new(discriminant),
                 cases,
-            }),
+            })),
         )
     }
 
@@ -728,11 +726,11 @@ impl Parser<'_> {
 
         self.statement(
             start,
-            StatementKind::Try(TryStatementData {
+            StatementKind::Try(Box::new(TryStatementData {
                 block: Box::new(block),
                 handler,
                 finalizer,
-            }),
+            })),
         )
     }
 
@@ -834,10 +832,8 @@ impl Parser<'_> {
         {
             for child in &scope.borrow().children {
                 match &child.inner {
-                    StatementKind::VariableDeclaration { kind, declarations }
-                        if *kind != DeclarationKind::Var =>
-                    {
-                        for decl in declarations {
+                    StatementKind::VariableDeclaration(vd) if vd.kind != DeclarationKind::Var => {
+                        for decl in &vd.declarations {
                             if let VariableDeclaratorTarget::Identifier(ref id) = decl.target {
                                 for cn in &catch_names {
                                     if cn.as_slice() == id.name.as_slice() {
@@ -850,7 +846,8 @@ impl Parser<'_> {
                             }
                         }
                     }
-                    StatementKind::FunctionDeclaration { name: Some(id), .. } => {
+                    StatementKind::FunctionDeclaration(fd) if fd.name.is_some() => {
+                        let id = fd.name.as_ref().unwrap();
                         for cn in &catch_names {
                             if cn.as_slice() == id.name.as_slice() {
                                 let n = String::from_utf16_lossy(cn);
@@ -958,8 +955,8 @@ impl Parser<'_> {
         self.last_inner_label_is_iteration = false;
         let body = if self.match_token(TokenType::Function) {
             let fn_decl = self.parse_function_declaration();
-            if let StatementKind::FunctionDeclaration { kind, .. } = fn_decl.inner {
-                match kind {
+            if let StatementKind::FunctionDeclaration(ref fd) = fn_decl.inner {
+                match fd.kind {
                     FunctionKind::Generator | FunctionKind::AsyncGenerator => {
                         self.syntax_error(
                             "Generator functions cannot be defined in labelled statements",
@@ -994,10 +991,10 @@ impl Parser<'_> {
 
         Some(self.statement(
             start,
-            StatementKind::Labelled {
+            StatementKind::Labelled(Box::new(LabelledStatementData {
                 label,
                 item: Box::new(body),
-            },
+            })),
         ))
     }
 
@@ -1036,7 +1033,7 @@ impl Parser<'_> {
                     self.syntax_error("Invalid left-hand side in for-loop");
                 }
                 ExpressionKind::Identifier(_)
-                | ExpressionKind::Member { .. }
+                | ExpressionKind::Member(_)
                 | ExpressionKind::Call(_)
                 | ExpressionKind::Object(_)
                 | ExpressionKind::Array(_) => {}

@@ -304,7 +304,7 @@ impl Parser<'_> {
                 self.report_invalid_private_identifier_usage(&expression);
                 expressions.push(expression);
             }
-            return self.expression(start, ExpressionKind::Sequence(expressions));
+            return self.expression(start, ExpressionKind::Sequence(Box::new(expressions)));
         }
         expression
     }
@@ -378,10 +378,10 @@ impl Parser<'_> {
                     (
                         self.expression(
                             after_super,
-                            ExpressionKind::SuperCall(SuperCallData {
+                            ExpressionKind::SuperCall(Box::new(SuperCallData {
                                 arguments,
                                 is_synthetic: false,
-                            }),
+                            })),
                         ),
                         true,
                     )
@@ -423,7 +423,7 @@ impl Parser<'_> {
                     })
                     .collect();
                 (
-                    self.expression(start, ExpressionKind::BigIntLiteral(value_utf8)),
+                    self.expression(start, ExpressionKind::BigIntLiteral(Box::new(value_utf8))),
                     true,
                 )
             }
@@ -454,7 +454,7 @@ impl Parser<'_> {
                     }
                 }
                 (
-                    self.expression(after_string, ExpressionKind::StringLiteral(value)),
+                    self.expression(after_string, ExpressionKind::StringLiteral(Box::new(value))),
                     true,
                 )
             }
@@ -567,10 +567,10 @@ impl Parser<'_> {
                     (
                         self.expression(
                             start,
-                            ExpressionKind::ImportCall {
+                            ExpressionKind::ImportCall(Box::new(ImportCallData {
                                 specifier: Box::new(specifier),
                                 options,
-                            },
+                            })),
                         ),
                         true,
                     )
@@ -605,7 +605,7 @@ impl Parser<'_> {
             TokenType::PrivateIdentifier => {
                 let id = self.parse_private_identifier(start);
                 (
-                    self.expression(start, ExpressionKind::PrivateIdentifier(id)),
+                    self.expression(start, ExpressionKind::PrivateIdentifier(Box::new(id))),
                     true,
                 )
             }
@@ -699,11 +699,11 @@ impl Parser<'_> {
         };
         self.expression(
             start,
-            ExpressionKind::RegExpLiteral(RegExpLiteralData {
+            ExpressionKind::RegExpLiteral(Box::new(RegExpLiteralData {
                 pattern: pattern.into(),
                 flags: flags.into(),
                 compiled_regex,
-            }),
+            })),
         )
     }
 
@@ -755,11 +755,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Binary {
+                        ExpressionKind::Binary(Box::new(BinaryExprData {
                             op,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -783,11 +783,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Binary {
+                        ExpressionKind::Binary(Box::new(BinaryExprData {
                             op: BinaryOp::In,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -805,11 +805,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::And,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
@@ -821,11 +821,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::Or,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
@@ -838,11 +838,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::NullishCoalescing,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
@@ -895,11 +895,11 @@ impl Parser<'_> {
                     return (
                         self.expression(
                             start,
-                            ExpressionKind::Assignment {
+                            ExpressionKind::Assignment(Box::new(AssignmentExprData {
                                 op,
                                 lhs: AssignmentLhs::Pattern(binding_pattern),
                                 rhs: Box::new(rhs),
-                            },
+                            })),
                         ),
                         ForbiddenTokens::none(),
                     );
@@ -921,11 +921,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Assignment {
+                        ExpressionKind::Assignment(Box::new(AssignmentExprData {
                             op,
                             lhs: AssignmentLhs::Expression(Box::new(lhs)),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -941,11 +941,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Conditional {
+                        ExpressionKind::Conditional(Box::new(ConditionalExprData {
                             test: Box::new(lhs),
                             consequent: Box::new(consequent),
                             alternate: Box::new(alternate),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -963,15 +963,16 @@ impl Parser<'_> {
                     }
                     // C++ uses rule_start (period position) for property identifiers.
                     let id = self.parse_private_identifier(start);
-                    let property = self.expression(start, ExpressionKind::PrivateIdentifier(id));
+                    let property =
+                        self.expression(start, ExpressionKind::PrivateIdentifier(Box::new(id)));
                     (
                         self.expression(
                             start,
-                            ExpressionKind::Member {
+                            ExpressionKind::Member(Box::new(MemberExprData {
                                 object: Box::new(lhs),
                                 property: Box::new(property),
                                 computed: false,
-                            },
+                            })),
                         ),
                         ForbiddenTokens::none(),
                     )
@@ -986,11 +987,11 @@ impl Parser<'_> {
                     (
                         self.expression(
                             start,
-                            ExpressionKind::Member {
+                            ExpressionKind::Member(Box::new(MemberExprData {
                                 object: Box::new(lhs),
                                 property: Box::new(property),
                                 computed: false,
-                            },
+                            })),
                         ),
                         ForbiddenTokens::none(),
                     )
@@ -1008,11 +1009,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Member {
+                        ExpressionKind::Member(Box::new(MemberExprData {
                             object: Box::new(lhs),
                             property: Box::new(property),
                             computed: true,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1061,11 +1062,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Update {
+                        ExpressionKind::Update(Box::new(UpdateExprData {
                             op: UpdateOp::Increment,
                             argument: Box::new(lhs),
                             prefixed: false,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1081,11 +1082,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Update {
+                        ExpressionKind::Update(Box::new(UpdateExprData {
                             op: UpdateOp::Decrement,
                             argument: Box::new(lhs),
                             prefixed: false,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1118,11 +1119,11 @@ impl Parser<'_> {
                 }
                 self.expression(
                     start,
-                    ExpressionKind::Update {
+                    ExpressionKind::Update(Box::new(UpdateExprData {
                         op: UpdateOp::Increment,
                         argument: Box::new(expression),
                         prefixed: true,
-                    },
+                    })),
                 )
             }
             TokenType::MinusMinus => {
@@ -1140,11 +1141,11 @@ impl Parser<'_> {
                 }
                 self.expression(
                     start,
-                    ExpressionKind::Update {
+                    ExpressionKind::Update(Box::new(UpdateExprData {
                         op: UpdateOp::Decrement,
                         argument: Box::new(expression),
                         prefixed: true,
-                    },
+                    })),
                 )
             }
             TokenType::ExclamationMark
@@ -1195,8 +1196,8 @@ impl Parser<'_> {
                         rhs_start.column,
                     );
                 }
-                if let ExpressionKind::Member { property, .. } = &expression.inner
-                    && matches!(property.inner, ExpressionKind::PrivateIdentifier(_))
+                if let ExpressionKind::Member(ref data) = expression.inner
+                    && matches!(data.property.inner, ExpressionKind::PrivateIdentifier(_))
                 {
                     self.syntax_error("Private fields cannot be deleted");
                 }
@@ -1257,7 +1258,7 @@ impl Parser<'_> {
             self.parse_expression(PRECEDENCE_MEMBER, Associativity::Right, forbidden)
         };
 
-        if matches!(callee.inner, ExpressionKind::ImportCall { .. }) {
+        if matches!(callee.inner, ExpressionKind::ImportCall(_)) {
             self.syntax_error("Cannot call new on dynamic import");
         }
 
@@ -1265,23 +1266,23 @@ impl Parser<'_> {
             let arguments = self.parse_arguments();
             self.expression(
                 start,
-                ExpressionKind::New(CallExpressionData {
+                ExpressionKind::New(Box::new(CallExpressionData {
                     callee: Box::new(callee),
                     arguments,
                     // Mirrors C++ InvocationStyle::Parenthesized for `new Foo(...)`.
                     is_parenthesized: true,
                     is_inside_parens: false,
-                }),
+                })),
             )
         } else {
             self.expression(
                 start,
-                ExpressionKind::New(CallExpressionData {
+                ExpressionKind::New(Box::new(CallExpressionData {
                     callee: Box::new(callee),
                     arguments: Vec::new(),
                     is_parenthesized: false,
                     is_inside_parens: false,
-                }),
+                })),
             )
         }
     }
@@ -1304,12 +1305,12 @@ impl Parser<'_> {
         }
         self.expression(
             start,
-            ExpressionKind::Call(CallExpressionData {
+            ExpressionKind::Call(Box::new(CallExpressionData {
                 callee: Box::new(callee),
                 arguments,
                 is_parenthesized: false,
                 is_inside_parens: false,
-            }),
+            })),
         )
     }
 
@@ -1445,10 +1446,10 @@ impl Parser<'_> {
 
         self.expression(
             start,
-            ExpressionKind::OptionalChain {
+            ExpressionKind::OptionalChain(Box::new(OptionalChainData {
                 base: Box::new(base),
                 references,
-            },
+            })),
         )
     }
 
@@ -1473,10 +1474,10 @@ impl Parser<'_> {
         if self.current_token.trivia_has_line_terminator {
             return self.expression(
                 start,
-                ExpressionKind::Yield {
+                ExpressionKind::Yield(Box::new(YieldExprData {
                     argument: None,
                     is_yield_from: false,
-                },
+                })),
             );
         }
 
@@ -1489,18 +1490,18 @@ impl Parser<'_> {
             let argument = self.parse_assignment_expression();
             self.expression(
                 start,
-                ExpressionKind::Yield {
+                ExpressionKind::Yield(Box::new(YieldExprData {
                     argument: Some(Box::new(argument)),
                     is_yield_from,
-                },
+                })),
             )
         } else {
             self.expression(
                 start,
-                ExpressionKind::Yield {
+                ExpressionKind::Yield(Box::new(YieldExprData {
                     argument: None,
                     is_yield_from: false,
-                },
+                })),
             )
         }
     }
@@ -1573,7 +1574,7 @@ impl Parser<'_> {
         }
 
         self.consume_token(TokenType::CurlyClose);
-        self.expression(start, ExpressionKind::Object(properties))
+        self.expression(start, ExpressionKind::Object(Box::new(properties)))
     }
 
     fn parse_object_property(&mut self, obj_start: Position) -> ObjectProperty {
@@ -1847,8 +1848,10 @@ impl Parser<'_> {
                     }
                 }
                 let is_proto = value == proto_name;
-                let expression =
-                    self.expression(after_string, ExpressionKind::StringLiteral(value.clone()));
+                let expression = self.expression(
+                    after_string,
+                    ExpressionKind::StringLiteral(Box::new(value.clone())),
+                );
                 PropertyKey {
                     expression,
                     name: Some(value),
@@ -1884,7 +1887,8 @@ impl Parser<'_> {
                         c as u8 as char
                     })
                     .collect();
-                let expression = self.expression(start, ExpressionKind::BigIntLiteral(value_utf8));
+                let expression =
+                    self.expression(start, ExpressionKind::BigIntLiteral(Box::new(value_utf8)));
                 PropertyKey {
                     expression,
                     name: None,
@@ -1905,10 +1909,10 @@ impl Parser<'_> {
                 let key_start = ident_pos_override.unwrap_or(start);
                 let expression = self.expression(
                     key_start,
-                    ExpressionKind::PrivateIdentifier(PrivateIdentifier {
+                    ExpressionKind::PrivateIdentifier(Box::new(PrivateIdentifier {
                         range: self.range_from(key_start),
                         name: value.clone(),
-                    }),
+                    })),
                 );
                 PropertyKey {
                     expression,
@@ -1929,8 +1933,10 @@ impl Parser<'_> {
                     let is_proto = value == proto_name;
                     // C++ uses the object expression start position for identifier-name keys.
                     let key_start = ident_pos_override.unwrap_or(start);
-                    let expression =
-                        self.expression(key_start, ExpressionKind::StringLiteral(value.clone()));
+                    let expression = self.expression(
+                        key_start,
+                        ExpressionKind::StringLiteral(Box::new(value.clone())),
+                    );
                     PropertyKey {
                         expression,
                         name: Some(value),
@@ -1941,8 +1947,10 @@ impl Parser<'_> {
                 } else {
                     self.expected("property key");
                     self.consume();
-                    let expression =
-                        self.expression(start, ExpressionKind::StringLiteral(Utf16String::new()));
+                    let expression = self.expression(
+                        start,
+                        ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+                    );
                     PropertyKey {
                         expression,
                         name: None,
@@ -1983,7 +1991,7 @@ impl Parser<'_> {
         }
 
         self.consume_token(TokenType::BracketClose);
-        self.expression(start, ExpressionKind::Array(elements))
+        self.expression(start, ExpressionKind::Array(Box::new(elements)))
     }
 
     /// Parse a template literal (`` `...${expression}...` ``).
@@ -2005,10 +2013,10 @@ impl Parser<'_> {
             let template = self.parse_template_literal(true);
             expression = self.expression(
                 tag_start,
-                ExpressionKind::TaggedTemplateLiteral {
+                ExpressionKind::TaggedTemplateLiteral(Box::new(TaggedTemplateData {
                     tag: Box::new(expression),
                     template_literal: Box::new(template),
-                },
+                })),
             );
         }
         expression
@@ -2026,8 +2034,10 @@ impl Parser<'_> {
             if is_tagged {
                 raw_strings.push(Utf16String::new());
             }
-            expressions
-                .push(self.expression(start, ExpressionKind::StringLiteral(Utf16String::new())));
+            expressions.push(self.expression(
+                start,
+                ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+            ));
         }
 
         // For non-tagged templates, we collect parts as expressions (alternating
@@ -2049,9 +2059,10 @@ impl Parser<'_> {
                     let raw_value = raw_template_value(&raw);
                     raw_strings.push(raw_value);
                     match self.process_template_escape_sequences(&raw) {
-                        Some(cooked) => expressions.push(
-                            self.expression(string_pos, ExpressionKind::StringLiteral(cooked)),
-                        ),
+                        Some(cooked) => expressions.push(self.expression(
+                            string_pos,
+                            ExpressionKind::StringLiteral(Box::new(cooked)),
+                        )),
                         // C++ uses rule_start (template literal start) for NullLiteral.
                         None => {
                             expressions.push(self.expression(start, ExpressionKind::NullLiteral));
@@ -2062,8 +2073,9 @@ impl Parser<'_> {
                     if has_octal {
                         self.syntax_error("Octal escape sequence not allowed in template literal");
                     }
-                    expressions
-                        .push(self.expression(string_pos, ExpressionKind::StringLiteral(value)));
+                    expressions.push(
+                        self.expression(string_pos, ExpressionKind::StringLiteral(Box::new(value))),
+                    );
                 }
             } else if self.match_token(TokenType::TemplateLiteralExprStart) {
                 self.consume();
@@ -2072,9 +2084,10 @@ impl Parser<'_> {
                 self.consume_token(TokenType::TemplateLiteralExprEnd);
                 // After an expression, if no template string follows, insert empty.
                 if !self.match_token(TokenType::TemplateLiteralString) {
-                    expressions.push(
-                        self.expression(start, ExpressionKind::StringLiteral(Utf16String::new())),
-                    );
+                    expressions.push(self.expression(
+                        start,
+                        ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+                    ));
                     if is_tagged {
                         raw_strings.push(Utf16String::new());
                     }
@@ -2089,10 +2102,10 @@ impl Parser<'_> {
 
         self.expression(
             start,
-            ExpressionKind::TemplateLiteral(TemplateLiteralData {
+            ExpressionKind::TemplateLiteral(Box::new(TemplateLiteralData {
                 expressions,
                 raw_strings,
-            }),
+            })),
         )
     }
 

@@ -934,7 +934,7 @@ impl<'a> Parser<'a> {
         strict_mode: bool,
     ) -> bool {
         match &expression.inner {
-            ExpressionKind::Identifier(_) | ExpressionKind::Member { .. } => true,
+            ExpressionKind::Identifier(_) | ExpressionKind::Member(_) => true,
             // CallExpression: In strict mode, call expressions are always ~invalid~ as
             // assignment targets. In non-strict mode, they are ~web-compat~ (runtime error).
             // NewExpression is always ~invalid~.
@@ -956,11 +956,11 @@ impl<'a> Parser<'a> {
     }
 
     fn is_member_expression(expression: &Expression) -> bool {
-        matches!(&expression.inner, ExpressionKind::Member { .. })
+        matches!(&expression.inner, ExpressionKind::Member(_))
     }
 
     fn is_update_expression(expression: &Expression) -> bool {
-        matches!(&expression.inner, ExpressionKind::Update { .. })
+        matches!(&expression.inner, ExpressionKind::Update(_))
     }
 
     // === Main entry point ===
@@ -977,12 +977,12 @@ impl<'a> Parser<'a> {
             self.scope_collector.close_scope();
             self.statement(
                 start,
-                StatementKind::Program(ProgramData {
+                StatementKind::Program(Box::new(ProgramData {
                     scope,
                     program_type: ProgramType::Script,
                     is_strict_mode: is_strict,
                     has_top_level_await: false,
-                }),
+                })),
             )
         } else {
             let (children, has_top_level_await) = self.parse_module();
@@ -991,12 +991,12 @@ impl<'a> Parser<'a> {
             self.scope_collector.close_scope();
             self.statement(
                 start,
-                StatementKind::Program(ProgramData {
+                StatementKind::Program(Box::new(ProgramData {
                     scope,
                     program_type: ProgramType::Module,
                     is_strict_mode: true,
                     has_top_level_await,
-                }),
+                })),
             )
         }
     }
@@ -1387,17 +1387,16 @@ fn collect_module_declared_names(
 ) {
     use crate::ast::*;
     match &statement.inner {
-        StatementKind::VariableDeclaration { declarations, kind } => {
+        StatementKind::VariableDeclaration(data) => {
             // All top-level declarations (var, let, const) are module-scoped.
-            let _ = kind;
-            for decl in declarations {
+            for decl in &data.declarations {
                 collect_binding_names(&decl.target, names);
             }
         }
-        StatementKind::FunctionDeclaration {
-            name: Some(name), ..
-        } => {
-            names.insert(name.name.clone());
+        StatementKind::FunctionDeclaration(data) => {
+            if let Some(ref name) = data.name {
+                names.insert(name.name.clone());
+            }
         }
         StatementKind::ClassDeclaration(data) => {
             if let Some(ref name) = data.name {
@@ -1428,11 +1427,8 @@ fn collect_module_declared_names(
 fn collect_var_declared_names(statement: &crate::ast::Statement, names: &mut HashSet<Utf16String>) {
     use crate::ast::*;
     match &statement.inner {
-        StatementKind::VariableDeclaration {
-            kind: DeclarationKind::Var,
-            declarations,
-        } => {
-            for decl in declarations {
+        StatementKind::VariableDeclaration(data) if matches!(data.kind, DeclarationKind::Var) => {
+            for decl in &data.declarations {
                 collect_binding_names(&decl.target, names);
             }
         }
@@ -1441,32 +1437,29 @@ fn collect_var_declared_names(statement: &crate::ast::Statement, names: &mut Has
                 collect_var_declared_names(child, names);
             }
         }
-        StatementKind::If {
-            consequent,
-            alternate,
-            ..
-        } => {
-            collect_var_declared_names(consequent, names);
-            if let Some(alt) = alternate {
+        StatementKind::If(data) => {
+            collect_var_declared_names(&data.consequent, names);
+            if let Some(ref alt) = data.alternate {
                 collect_var_declared_names(alt, names);
             }
         }
-        StatementKind::While { body, .. }
-        | StatementKind::DoWhile { body, .. }
-        | StatementKind::With { body, .. } => {
-            collect_var_declared_names(body, names);
+        StatementKind::While(data) | StatementKind::DoWhile(data) => {
+            collect_var_declared_names(&data.body, names);
         }
-        StatementKind::For { init, body, .. } => {
-            if let Some(ForInit::Declaration(decl)) = init {
+        StatementKind::With(data) => {
+            collect_var_declared_names(&data.body, names);
+        }
+        StatementKind::For(data) => {
+            if let Some(ForInit::Declaration(ref decl)) = data.init {
                 collect_var_declared_names(decl, names);
             }
-            collect_var_declared_names(body, names);
+            collect_var_declared_names(&data.body, names);
         }
-        StatementKind::ForInOf { lhs, body, .. } => {
-            if let ForInOfLhs::Declaration(decl) = lhs {
+        StatementKind::ForInOf(data) => {
+            if let ForInOfLhs::Declaration(ref decl) = data.lhs {
                 collect_var_declared_names(decl, names);
             }
-            collect_var_declared_names(body, names);
+            collect_var_declared_names(&data.body, names);
         }
         StatementKind::Switch(data) => {
             for case in &data.cases {
@@ -1484,8 +1477,8 @@ fn collect_var_declared_names(statement: &crate::ast::Statement, names: &mut Has
                 collect_var_declared_names(finalizer, names);
             }
         }
-        StatementKind::Labelled { item, .. } => {
-            collect_var_declared_names(item, names);
+        StatementKind::Labelled(data) => {
+            collect_var_declared_names(&data.item, names);
         }
         // Don't recurse into functions (var doesn't hoist out of functions).
         // Don't recurse into let/const (they are block-scoped, not hoisted).

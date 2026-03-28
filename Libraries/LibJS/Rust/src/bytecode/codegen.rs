@@ -96,11 +96,13 @@ fn generate_expression_inner(
 
         ExpressionKind::NullLiteral => Some(generator.add_constant_null()),
 
-        ExpressionKind::StringLiteral(value) => Some(generator.add_constant_string(value.clone())),
+        ExpressionKind::StringLiteral(value) => {
+            Some(generator.add_constant_string((**value).clone()))
+        }
 
         ExpressionKind::BigIntLiteral(value) => {
             // The AST stores the raw value including the 'n' suffix; strip it for codegen.
-            let digits = value.strip_suffix('n').unwrap_or(value);
+            let digits = value.strip_suffix('n').unwrap_or(value.as_str());
             Some(generator.add_constant_bigint(digits.to_string()))
         }
 
@@ -140,26 +142,28 @@ fn generate_expression_inner(
         }
 
         // === Binary ===
-        ExpressionKind::Binary { op, lhs, rhs } => {
-            generate_binary_expression(generator, *op, lhs, rhs, preferred_dst)
+        ExpressionKind::Binary(data) => {
+            generate_binary_expression(generator, data.op, &data.lhs, &data.rhs, preferred_dst)
         }
 
         // === Logical (short-circuit) ===
-        ExpressionKind::Logical { op, lhs, rhs } => {
-            generate_logical(generator, *op, lhs, rhs, preferred_dst)
+        ExpressionKind::Logical(data) => {
+            generate_logical(generator, data.op, &data.lhs, &data.rhs, preferred_dst)
         }
 
         // === Conditional (ternary) ===
-        ExpressionKind::Conditional {
-            test,
-            consequent,
-            alternate,
-        } => generate_conditional(generator, test, consequent, alternate, preferred_dst),
+        ExpressionKind::Conditional(data) => generate_conditional(
+            generator,
+            &data.test,
+            &data.consequent,
+            &data.alternate,
+            preferred_dst,
+        ),
 
         // === Sequence ===
         ExpressionKind::Sequence(expressions) => {
             let mut last = None;
-            for expression in expressions {
+            for expression in expressions.iter() {
                 last = generate_expression(expression, generator, None);
                 if generator.is_current_block_terminated() {
                     break;
@@ -183,11 +187,13 @@ fn generate_expression_inner(
         )),
 
         // === Member access ===
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => generate_member_expression(generator, object, property, *computed, preferred_dst),
+        ExpressionKind::Member(data) => generate_member_expression(
+            generator,
+            &data.object,
+            &data.property,
+            data.computed,
+            preferred_dst,
+        ),
 
         // === Call ===
         ExpressionKind::Call(data) => {
@@ -208,13 +214,10 @@ fn generate_expression_inner(
         }
 
         // === Yield ===
-        ExpressionKind::Yield {
-            argument,
-            is_yield_from,
-        } => Some(generate_yield_expression(
+        ExpressionKind::Yield(data) => Some(generate_yield_expression(
             generator,
-            argument.as_deref(),
-            *is_yield_from,
+            data.argument.as_deref(),
+            data.is_yield_from,
         )),
 
         // === Await ===
@@ -249,9 +252,9 @@ fn generate_expression_inner(
         }
 
         // === ImportCall ===
-        ExpressionKind::ImportCall { specifier, options } => {
-            let spec = generate_expression(specifier, generator, None)?;
-            let opts = match options {
+        ExpressionKind::ImportCall(ic_data) => {
+            let spec = generate_expression(&ic_data.specifier, generator, None)?;
+            let opts = match &ic_data.options {
                 Some(o) => generate_expression(o, generator, None)?,
                 None => generator.add_constant_undefined(),
             };
@@ -265,15 +268,13 @@ fn generate_expression_inner(
         }
 
         // === Update (++/--) ===
-        ExpressionKind::Update {
-            op,
-            argument,
-            prefixed,
-        } => generate_update_expression(generator, *op, argument, *prefixed),
+        ExpressionKind::Update(data) => {
+            generate_update_expression(generator, data.op, &data.argument, data.prefixed)
+        }
 
         // === Assignment ===
-        ExpressionKind::Assignment { op, lhs, rhs } => {
-            generate_assignment_expression(generator, *op, lhs, rhs, preferred_dst)
+        ExpressionKind::Assignment(data) => {
+            generate_assignment_expression(generator, data.op, &data.lhs, &data.rhs, preferred_dst)
         }
 
         // === Template literals ===
@@ -282,13 +283,10 @@ fn generate_expression_inner(
         }
 
         // === Tagged template literals ===
-        ExpressionKind::TaggedTemplateLiteral {
-            tag,
-            template_literal,
-        } => Some(generate_tagged_template_literal(
+        ExpressionKind::TaggedTemplateLiteral(data) => Some(generate_tagged_template_literal(
             generator,
-            tag,
-            template_literal,
+            &data.tag,
+            &data.template_literal,
             preferred_dst,
         )),
 
@@ -298,7 +296,7 @@ fn generate_expression_inner(
         }
 
         // === OptionalChain ===
-        ExpressionKind::OptionalChain { base, references } => {
+        ExpressionKind::OptionalChain(oc_data) => {
             // Allocate current_base first, current_value second.
             let current_base = generator.allocate_register();
             let current_value = choose_dst(generator, preferred_dst);
@@ -306,8 +304,8 @@ fn generate_expression_inner(
             generator.emit_mov(&current_base, &undef);
             generate_optional_chain_inner(
                 generator,
-                base,
-                references,
+                &oc_data.base,
+                &oc_data.references,
                 &current_value,
                 &current_base,
             )?;
@@ -464,16 +462,13 @@ fn might_contain_assignment_expression(expression: &Expression) -> bool {
         | ExpressionKind::NullLiteral
         | ExpressionKind::Identifier(_) => false,
         ExpressionKind::Unary { op: _, operand } => might_contain_assignment_expression(operand),
-        ExpressionKind::Binary { op: _, lhs, rhs } => {
-            might_contain_assignment_expression(lhs) || might_contain_assignment_expression(rhs)
+        ExpressionKind::Binary(data) => {
+            might_contain_assignment_expression(&data.lhs)
+                || might_contain_assignment_expression(&data.rhs)
         }
-        ExpressionKind::Member {
-            object,
-            property,
-            computed: _,
-        } => {
-            might_contain_assignment_expression(object)
-                || might_contain_assignment_expression(property)
+        ExpressionKind::Member(data) => {
+            might_contain_assignment_expression(&data.object)
+                || might_contain_assignment_expression(&data.property)
         }
         // Conservatively consider everything else, including assignments themselves as potentially
         // assigning.
@@ -949,40 +944,31 @@ pub fn generate_statement(
         }
 
         // === If ===
-        StatementKind::If {
-            test,
-            consequent,
-            alternate,
-        } => generate_if_statement(
+        StatementKind::If(data) => generate_if_statement(
             generator,
-            test,
-            consequent,
-            alternate.as_deref(),
+            &data.test,
+            &data.consequent,
+            data.alternate.as_deref(),
             preferred_dst,
         ),
 
         // === While ===
-        StatementKind::While { test, body } => {
-            generate_while_statement(generator, test, body, preferred_dst)
+        StatementKind::While(data) => {
+            generate_while_statement(generator, &data.test, &data.body, preferred_dst)
         }
 
         // === DoWhile ===
-        StatementKind::DoWhile { test, body } => {
-            generate_do_while_statement(generator, test, body, preferred_dst)
+        StatementKind::DoWhile(data) => {
+            generate_do_while_statement(generator, &data.test, &data.body, preferred_dst)
         }
 
         // === For ===
-        StatementKind::For {
-            init,
-            test,
-            update,
-            body,
-        } => generate_for_statement(
+        StatementKind::For(data) => generate_for_statement(
             generator,
-            init.as_ref(),
-            test.as_deref(),
-            update.as_deref(),
-            body,
+            data.init.as_ref(),
+            data.test.as_deref(),
+            data.update.as_deref(),
+            &data.body,
             preferred_dst,
         ),
 
@@ -1023,8 +1009,8 @@ pub fn generate_statement(
         }
 
         // === Variable declarations ===
-        StatementKind::VariableDeclaration { kind, declarations } => {
-            generate_variable_declaration(generator, *kind, declarations);
+        StatementKind::VariableDeclaration(data) => {
+            generate_variable_declaration(generator, data.kind, &data.declarations);
             None
         }
 
@@ -1041,8 +1027,8 @@ pub fn generate_statement(
         }
 
         // === Labelled ===
-        StatementKind::Labelled { label, item } => {
-            generate_labelled_statement(generator, label, item, preferred_dst)
+        StatementKind::Labelled(data) => {
+            generate_labelled_statement(generator, &data.label, &data.item, preferred_dst)
         }
 
         // === Switch ===
@@ -1052,13 +1038,11 @@ pub fn generate_statement(
         StatementKind::Try(data) => generate_try_statement(generator, data, preferred_dst),
 
         // === FunctionDeclaration ===
-        StatementKind::FunctionDeclaration {
-            name, is_hoisted, ..
-        } => {
-            if is_hoisted.get() {
+        StatementKind::FunctionDeclaration(fd) => {
+            if fd.is_hoisted.get() {
                 // Annex B.3.3: Copy the function from the lexical (block) scope
                 // to the var scope.
-                if let Some(name_ident) = name {
+                if let Some(name_ident) = &fd.name {
                     let id = generator.intern_identifier(&name_ident.name);
                     let value = generator.allocate_register();
                     generator.emit(Instruction::GetBinding {
@@ -1077,8 +1061,8 @@ pub fn generate_statement(
         }
 
         // === With ===
-        StatementKind::With { object, body } => {
-            let obj = generate_expression(object, generator, None)?;
+        StatementKind::With(data) => {
+            let obj = generate_expression(&data.object, generator, None)?;
             let object_environment = generator.allocate_register();
             generator.emit(Instruction::EnterObjectEnvironment {
                 dst: object_environment.operand(),
@@ -1089,7 +1073,7 @@ pub fn generate_statement(
                 .push(object_environment);
             generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
 
-            let result = generate_statement(body, generator, preferred_dst);
+            let result = generate_statement(&data.body, generator, preferred_dst);
 
             generator.end_variable_scope();
             // Per spec 13.11.7 step 10: if body completion value is empty,
@@ -1098,15 +1082,17 @@ pub fn generate_statement(
         }
 
         // === ForIn / ForOf / ForAwaitOf ===
-        StatementKind::ForInOf {
-            kind,
-            lhs,
-            rhs,
-            body,
-        } => generate_for_in_of_statement(generator, *kind, lhs, rhs, body, preferred_dst),
+        StatementKind::ForInOf(data) => generate_for_in_of_statement(
+            generator,
+            data.kind,
+            &data.lhs,
+            &data.rhs,
+            &data.body,
+            preferred_dst,
+        ),
 
         // === UsingDeclaration ===
-        StatementKind::UsingDeclaration { .. } => {
+        StatementKind::UsingDeclaration(_) => {
             // Disposal semantics are not yet implemented.
             let error = generator.allocate_register();
             let msg = generator.intern_string(utf16!("TODO: UsingDeclaration"));
@@ -1163,8 +1149,7 @@ pub fn generate_statement(
                 }
             } else if let Some(ref child_statement) = export_data.statement {
                 match &child_statement.inner {
-                    StatementKind::FunctionDeclaration { .. }
-                    | StatementKind::ClassDeclaration(_) => {
+                    StatementKind::FunctionDeclaration(_) | StatementKind::ClassDeclaration(_) => {
                         generate_statement(child_statement, generator, None)
                     }
                     _ => {
@@ -1194,16 +1179,13 @@ pub fn generate_statement(
         }
 
         // === ClassFieldInitializer ===
-        StatementKind::ClassFieldInitializer {
-            expression,
-            field_name,
-        } => {
+        StatementKind::ClassFieldInitializer(data) => {
             // Only set pending_lhs_name for compile-time-known keys (non-empty names).
             // For computed keys, field_name is empty and the name is set at runtime.
-            if !field_name.is_empty() {
-                generator.pending_lhs_name = Some(generator.intern_identifier(field_name));
+            if !data.field_name.is_empty() {
+                generator.pending_lhs_name = Some(generator.intern_identifier(&data.field_name));
             }
-            let value = generate_expression_or_undefined(expression, generator, None);
+            let value = generate_expression_or_undefined(&data.expression, generator, None);
             generator.pending_lhs_name = None;
             generator.emit(Instruction::Return {
                 value: value.operand(),
@@ -2470,16 +2452,16 @@ fn generate_for_statement(
     let mut per_iteration_binding_names: Vec<Utf16String> = Vec::new();
 
     if let Some(ForInit::Declaration(init)) = init
-        && let StatementKind::VariableDeclaration { kind, declarations } = &init.inner
-        && (*kind == DeclarationKind::Let || *kind == DeclarationKind::Const)
+        && let StatementKind::VariableDeclaration(vd) = &init.inner
+        && (vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const)
     {
         let mut non_local_names: Vec<(Utf16String, bool)> = Vec::new();
-        for declaration in declarations {
+        for declaration in &vd.declarations {
             collect_target_names(&declaration.target, &mut non_local_names);
         }
         if !non_local_names.is_empty() {
             has_lexical_environment = true;
-            let is_const = *kind == DeclarationKind::Const;
+            let is_const = vd.kind == DeclarationKind::Const;
 
             // begin_variable_scope: CreateLexicalEnvironment + boundary
             generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
@@ -2736,10 +2718,10 @@ fn emit_lexical_declarations_for_block<'a>(
 ) {
     for child in children {
         match &child.inner {
-            StatementKind::VariableDeclaration { kind, declarations } => {
-                if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                    let is_constant = *kind == DeclarationKind::Const;
-                    for declaration in declarations {
+            StatementKind::VariableDeclaration(vd) => {
+                if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                    let is_constant = vd.kind == DeclarationKind::Const;
+                    for declaration in &vd.declarations {
                         let mut names = Vec::new();
                         collect_target_names(&declaration.target, &mut names);
                         for (name, _) in &names {
@@ -2761,8 +2743,8 @@ fn emit_lexical_declarations_for_block<'a>(
                     }
                 }
             }
-            StatementKind::UsingDeclaration { declarations } => {
-                for declaration in declarations {
+            StatementKind::UsingDeclaration(declarations) => {
+                for declaration in declarations.iter() {
                     let mut names = Vec::new();
                     collect_target_names(&declaration.target, &mut names);
                     for (name, _) in &names {
@@ -2787,11 +2769,8 @@ fn emit_lexical_declarations_for_block<'a>(
                     });
                 }
             }
-            StatementKind::FunctionDeclaration {
-                function_id,
-                name: Some(name_ident),
-                ..
-            } => {
+            StatementKind::FunctionDeclaration(fd) if fd.name.is_some() => {
+                let name_ident = fd.name.as_ref().unwrap();
                 // a. Create binding.
                 if !name_ident.is_local() {
                     let id = generator.intern_identifier(&name_ident.name);
@@ -2802,7 +2781,7 @@ fn emit_lexical_declarations_for_block<'a>(
                     });
                 }
                 // b. Instantiate function object.
-                let function_data = generator.function_table.take(*function_id);
+                let function_data = generator.function_table.take(fd.function_id);
                 let sfd_index = emit_new_function(generator, function_data, None);
                 let fo = generator.allocate_register();
                 generator.emit(Instruction::NewFunction {
@@ -3210,11 +3189,7 @@ fn generate_call_expression(
     // For method calls (obj.method()), we need to use the object as `this`.
     let (callee, this_value) = if !is_new {
         match &data.callee.inner {
-            ExpressionKind::Member {
-                object,
-                property,
-                computed,
-            } if matches!(object.inner, ExpressionKind::Super) => {
+            ExpressionKind::Member(data) if matches!(data.object.inner, ExpressionKind::Super) => {
                 // Super member call: super.method() or super[expr]()
                 // Spec evaluation order:
                 // 1. ResolveThisBinding
@@ -3222,8 +3197,12 @@ fn generate_call_expression(
                 // 3. ResolveSuperBase
                 // 4. GetByIdWithThis / GetByValueWithThis
                 let this_value = emit_resolve_this_binding(generator);
-                let computed_key = if *computed {
-                    Some(generate_expression_or_undefined(property, generator, None))
+                let computed_key = if data.computed {
+                    Some(generate_expression_or_undefined(
+                        &data.property,
+                        generator,
+                        None,
+                    ))
                 } else {
                     None
                 };
@@ -3234,7 +3213,7 @@ fn generate_call_expression(
                 let method = generator.allocate_register();
                 if let Some(key) = computed_key {
                     emit_get_by_value_with_this(generator, &method, &super_base, &key, &this_value);
-                } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                } else if let ExpressionKind::Identifier(ident) = &data.property.inner {
                     emit_get_by_id_with_this(
                         generator,
                         &method,
@@ -3245,20 +3224,17 @@ fn generate_call_expression(
                 }
                 (method, Some(this_value))
             }
-            ExpressionKind::Member {
-                object,
-                property,
-                computed,
-            } => {
-                let obj = generate_expression_or_undefined(object, generator, None);
-                let base_id = intern_base_identifier(generator, object);
+            ExpressionKind::Member(data) => {
+                let obj = generate_expression_or_undefined(&data.object, generator, None);
+                let base_id = intern_base_identifier(generator, &data.object);
                 let method = generator.allocate_register();
-                if *computed {
-                    let property = generate_expression_or_undefined(property, generator, None);
+                if data.computed {
+                    let property =
+                        generate_expression_or_undefined(&data.property, generator, None);
                     emit_get_by_value(generator, &method, &obj, &property, None);
-                } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                } else if let ExpressionKind::Identifier(ident) = &data.property.inner {
                     emit_get_by_id(generator, &method, &obj, &ident.name, base_id);
-                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &data.property.inner {
                     let id = generator.intern_identifier(&priv_ident.name);
                     generator.emit(Instruction::GetPrivateById {
                         dst: method.operand(),
@@ -3300,12 +3276,18 @@ fn generate_call_expression(
                 });
                 (callee_reg, Some(this_reg))
             }
-            ExpressionKind::OptionalChain { base, references } => {
+            ExpressionKind::OptionalChain(oc_data) => {
                 // Allocate callee (current_value) first, this_value
                 // (current_base) second.
                 let callee = generator.allocate_register();
                 let this_value = generator.allocate_register();
-                generate_optional_chain_inner(generator, base, references, &callee, &this_value)?;
+                generate_optional_chain_inner(
+                    generator,
+                    &oc_data.base,
+                    &oc_data.references,
+                    &callee,
+                    &this_value,
+                )?;
                 (callee, Some(this_value))
             }
             _ => {
@@ -3499,12 +3481,8 @@ fn generate_update_expression(
             emit_set_variable(generator, ident, &value);
             Some(result)
         }
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
-            let is_super = matches!(object.inner, ExpressionKind::Super);
+        ExpressionKind::Member(data) => {
+            let is_super = matches!(data.object.inner, ExpressionKind::Super);
 
             if is_super {
                 // Per spec, evaluation order for super property access is:
@@ -3513,8 +3491,12 @@ fn generate_update_expression(
                 // 3. ResolveSuperBase
                 // 4. Property lookup with this
                 let this_value = emit_resolve_this_binding(generator);
-                let computed_key = if *computed {
-                    Some(generate_expression_or_undefined(property, generator, None))
+                let computed_key = if data.computed {
+                    Some(generate_expression_or_undefined(
+                        &data.property,
+                        generator,
+                        None,
+                    ))
                 } else {
                     None
                 };
@@ -3525,15 +3507,15 @@ fn generate_update_expression(
                 let value = generator.allocate_register();
                 if let Some(ref key) = computed_key {
                     emit_get_by_value_with_this(generator, &value, &base, key, &this_value);
-                } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                } else if let ExpressionKind::Identifier(ident) = &data.property.inner {
                     emit_get_by_id_with_this(generator, &value, &base, &ident.name, &this_value);
                 }
                 let result = emit_update_op(generator, op, prefixed, &value);
                 emit_super_put(
                     generator,
                     &base,
-                    property,
-                    *computed,
+                    &data.property,
+                    data.computed,
                     &this_value,
                     &value,
                     computed_key.as_ref(),
@@ -3541,16 +3523,16 @@ fn generate_update_expression(
                 Some(result)
             } else {
                 // Non-super member update expression.
-                let base = generate_expression(object, generator, None)?;
-                let base_id = intern_base_identifier(generator, object);
-                if *computed {
-                    let property = generate_expression(property, generator, None)?;
+                let base = generate_expression(&data.object, generator, None)?;
+                let base_id = intern_base_identifier(generator, &data.object);
+                if data.computed {
+                    let property = generate_expression(&data.property, generator, None)?;
                     let value = generator.allocate_register();
                     emit_get_by_value(generator, &value, &base, &property, base_id);
                     let result = emit_update_op(generator, op, prefixed, &value);
                     emit_put_normal_by_value(generator, &base, &property, &value, None);
                     Some(result)
-                } else if let ExpressionKind::Identifier(property_ident) = &property.inner {
+                } else if let ExpressionKind::Identifier(property_ident) = &data.property.inner {
                     let value = generator.allocate_register();
                     emit_get_by_id(generator, &value, &base, &property_ident.name, base_id);
                     let key = generator.intern_property_key(&property_ident.name);
@@ -3565,7 +3547,7 @@ fn generate_update_expression(
                         kind: 0,
                     });
                     Some(result)
-                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &data.property.inner {
                     let id = generator.intern_identifier(&priv_ident.name);
                     let value = generator.allocate_register();
                     generator.emit(Instruction::GetPrivateById {
@@ -3694,13 +3676,8 @@ fn generate_assignment_expression(
                 return Some(dst);
             }
             // Member expression LHS (e.g., obj.foo = x, obj[key] = x)
-            if let ExpressionKind::Member {
-                object,
-                property,
-                computed,
-            } = &lhs_expression.inner
-            {
-                let is_super = matches!(object.inner, ExpressionKind::Super);
+            if let ExpressionKind::Member(member_data) = &lhs_expression.inner {
+                let is_super = matches!(member_data.object.inner, ExpressionKind::Super);
 
                 if is_super {
                     // Per spec, evaluation order for super property reference is:
@@ -3710,8 +3687,12 @@ fn generate_assignment_expression(
                     let super_this = emit_resolve_this_binding(generator);
 
                     if op == AssignmentOp::Assignment {
-                        let computed_key = if *computed {
-                            Some(generate_expression_or_undefined(property, generator, None))
+                        let computed_key = if member_data.computed {
+                            Some(generate_expression_or_undefined(
+                                &member_data.property,
+                                generator,
+                                None,
+                            ))
                         } else {
                             None
                         };
@@ -3723,8 +3704,8 @@ fn generate_assignment_expression(
                         emit_super_put(
                             generator,
                             &base,
-                            property,
-                            *computed,
+                            &member_data.property,
+                            member_data.computed,
                             &super_this,
                             &rhs_val,
                             computed_key.as_ref(),
@@ -3734,8 +3715,12 @@ fn generate_assignment_expression(
 
                     // Compound/logical assignment: evaluate property, resolve
                     // super base, then get old value.
-                    let computed_key = if *computed {
-                        Some(generate_expression_or_undefined(property, generator, None))
+                    let computed_key = if member_data.computed {
+                        Some(generate_expression_or_undefined(
+                            &member_data.property,
+                            generator,
+                            None,
+                        ))
                     } else {
                         None
                     };
@@ -3746,7 +3731,7 @@ fn generate_assignment_expression(
                     let old_val = generator.allocate_register();
                     if let Some(ref key) = computed_key {
                         emit_get_by_value_with_this(generator, &old_val, &base, key, &super_this);
-                    } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                    } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
                         emit_get_by_id_with_this(
                             generator,
                             &old_val,
@@ -3773,8 +3758,8 @@ fn generate_assignment_expression(
                         emit_super_put(
                             generator,
                             &base,
-                            property,
-                            *computed,
+                            &member_data.property,
+                            member_data.computed,
                             &super_this,
                             &dst,
                             computed_key.as_ref(),
@@ -3792,8 +3777,8 @@ fn generate_assignment_expression(
                     emit_super_put(
                         generator,
                         &base,
-                        property,
-                        *computed,
+                        &member_data.property,
+                        member_data.computed,
                         &super_this,
                         &dst,
                         computed_key.as_ref(),
@@ -3802,28 +3787,32 @@ fn generate_assignment_expression(
                 }
 
                 // Non-super member assignment.
-                let base_raw = generate_expression(object, generator, None)?;
+                let base_raw = generate_expression(&member_data.object, generator, None)?;
 
                 if op == AssignmentOp::Assignment {
                     let base = generator.copy_if_needed_to_preserve_evaluation_order(&base_raw);
-                    let precomputed_key = if *computed {
-                        let key_val = generate_expression_or_undefined(property, generator, None);
+                    let precomputed_key = if member_data.computed {
+                        let key_val = generate_expression_or_undefined(
+                            &member_data.property,
+                            generator,
+                            None,
+                        );
                         Some(generator.copy_if_needed_to_preserve_evaluation_order(&key_val))
                     } else {
                         None
                     };
                     let rhs_val = generate_expression(rhs, generator, None)?;
                     if let Some(key) = precomputed_key {
-                        let base_id = intern_base_identifier(generator, object);
+                        let base_id = intern_base_identifier(generator, &member_data.object);
                         emit_put_normal_by_value(generator, &base, &key, &rhs_val, base_id);
                     } else {
                         emit_put_to_member(
                             generator,
                             &base,
-                            property,
+                            &member_data.property,
                             false,
                             &rhs_val,
-                            Some(object),
+                            Some(&member_data.object),
                         );
                     }
                     return Some(rhs_val);
@@ -3831,7 +3820,7 @@ fn generate_assignment_expression(
 
                 // Compound/logical member assignment.
                 let base = base_raw;
-                let base_id = intern_base_identifier(generator, object);
+                let base_id = intern_base_identifier(generator, &member_data.object);
                 let is_logical = matches!(
                     op,
                     AssignmentOp::AndAssignment
@@ -3839,8 +3828,8 @@ fn generate_assignment_expression(
                         | AssignmentOp::NullishAssignment
                 );
 
-                if *computed {
-                    let property = generate_expression(property, generator, None)?;
+                if member_data.computed {
+                    let property = generate_expression(&member_data.property, generator, None)?;
                     let old_val = generator.allocate_register();
                     emit_get_by_value(generator, &old_val, &base, &property, base_id);
                     // Copy property to a fresh register so RHS evaluation
@@ -3870,7 +3859,7 @@ fn generate_assignment_expression(
                     emit_compound_assignment(generator, op, &dst, &old_val, &rhs_val);
                     emit_put_normal_by_value(generator, &base, &saved_property, &dst, None);
                     return Some(dst);
-                } else if let ExpressionKind::Identifier(ident) = &property.inner {
+                } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
                     let old_val = generator.allocate_register();
                     emit_get_by_id(generator, &old_val, &base, &ident.name, base_id);
                     if is_logical {
@@ -3913,7 +3902,9 @@ fn generate_assignment_expression(
                         kind: 0,
                     });
                     return Some(dst);
-                } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+                } else if let ExpressionKind::PrivateIdentifier(priv_ident) =
+                    &member_data.property.inner
+                {
                     let old_val = generator.allocate_register();
                     let id = generator.intern_identifier(&priv_ident.name);
                     generator.emit(Instruction::GetPrivateById {
@@ -4478,19 +4469,19 @@ fn emit_delete_reference(generator: &mut Generator, operand: &Expression) -> Sco
             });
             dst
         }
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
+        ExpressionKind::Member(data) => {
             // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
             // Deleting a super property is always a ReferenceError.
-            if matches!(object.inner, ExpressionKind::Super) {
+            if matches!(data.object.inner, ExpressionKind::Super) {
                 let this_value = emit_resolve_this_binding(generator);
                 // Evaluate computed property for side effects before throwing.
                 // Per spec, property key evaluation precedes ResolveSuperBase.
-                let _computed_key = if *computed {
-                    Some(generate_expression_or_undefined(property, generator, None))
+                let _computed_key = if data.computed {
+                    Some(generate_expression_or_undefined(
+                        &data.property,
+                        generator,
+                        None,
+                    ))
                 } else {
                     None
                 };
@@ -4514,16 +4505,16 @@ fn emit_delete_reference(generator: &mut Generator, operand: &Expression) -> Sco
                 let _ = (this_value, _computed_key);
                 return generator.add_constant_undefined();
             }
-            let base = generate_expression_or_undefined(object, generator, None);
+            let base = generate_expression_or_undefined(&data.object, generator, None);
             let dst = generator.allocate_register();
-            if *computed {
-                let key = generate_expression_or_undefined(property, generator, None);
+            if data.computed {
+                let key = generate_expression_or_undefined(&data.property, generator, None);
                 generator.emit(Instruction::DeleteByValue {
                     dst: dst.operand(),
                     base: base.operand(),
                     property: key.operand(),
                 });
-            } else if let ExpressionKind::Identifier(property_ident) = &property.inner {
+            } else if let ExpressionKind::Identifier(property_ident) = &data.property.inner {
                 let key = generator.intern_property_key(&property_ident.name);
                 generator.emit(Instruction::DeleteById {
                     dst: dst.operand(),
@@ -4582,13 +4573,8 @@ fn emit_evaluate_member_reference(
     generator: &mut Generator,
     target: &Expression,
 ) -> EvaluatedReference {
-    if let ExpressionKind::Member {
-        object,
-        property,
-        computed,
-    } = &target.inner
-    {
-        let is_super = matches!(object.inner, ExpressionKind::Super);
+    if let ExpressionKind::Member(member_data) = &target.inner {
+        let is_super = matches!(member_data.object.inner, ExpressionKind::Super);
 
         if is_super {
             // ResolveThisBinding first, then ResolveSuperBase.
@@ -4597,8 +4583,9 @@ fn emit_evaluate_member_reference(
             generator.emit(Instruction::ResolveSuperBase {
                 dst: base.operand(),
             });
-            if *computed {
-                let property = generate_expression_or_undefined(property, generator, None);
+            if member_data.computed {
+                let property =
+                    generate_expression_or_undefined(&member_data.property, generator, None);
                 // If the computed property is a constant string (e.g. super["minutes"]),
                 // optimize to SuperMemberId.
                 if let Some(key) = generator.try_constant_string_to_property_key(&property) {
@@ -4618,7 +4605,7 @@ fn emit_evaluate_member_reference(
                         this_value,
                     }
                 }
-            } else if let ExpressionKind::Identifier(ident) = &property.inner {
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
                 let key = generator.intern_property_key(&ident.name);
                 let cache = generator.next_property_lookup_cache();
                 EvaluatedReference::SuperMemberId {
@@ -4631,9 +4618,10 @@ fn emit_evaluate_member_reference(
                 unreachable!("non-computed super member property must be an identifier")
             }
         } else {
-            let base = generate_expression_or_undefined(object, generator, None);
-            if *computed {
-                let property = generate_expression_or_undefined(property, generator, None);
+            let base = generate_expression_or_undefined(&member_data.object, generator, None);
+            if member_data.computed {
+                let property =
+                    generate_expression_or_undefined(&member_data.property, generator, None);
                 // If the computed property is a constant string (e.g. obj["key"]),
                 // optimize to MemberId.
                 if let Some(key) = generator.try_constant_string_to_property_key(&property) {
@@ -4653,7 +4641,7 @@ fn emit_evaluate_member_reference(
                         base_identifier: None,
                     }
                 }
-            } else if let ExpressionKind::Identifier(ident) = &property.inner {
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
                 let key = generator.intern_property_key(&ident.name);
                 let cache = generator.next_property_lookup_cache();
                 EvaluatedReference::MemberId {
@@ -4662,7 +4650,9 @@ fn emit_evaluate_member_reference(
                     cache,
                     base_identifier: None,
                 }
-            } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+            } else if let ExpressionKind::PrivateIdentifier(priv_ident) =
+                &member_data.property.inner
+            {
                 let id = generator.intern_identifier(&priv_ident.name);
                 EvaluatedReference::PrivateMember { base, property: id }
             } else {
@@ -4742,12 +4732,8 @@ fn emit_store_to_reference(generator: &mut Generator, target: &Expression, value
         ExpressionKind::Identifier(ident) => {
             emit_set_variable(generator, ident, value);
         }
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
-            if matches!(object.inner, ExpressionKind::Super) {
+        ExpressionKind::Member(data) => {
+            if matches!(data.object.inner, ExpressionKind::Super) {
                 // ResolveThisBinding first, then ResolveSuperBase.
                 let this_value = emit_resolve_this_binding(generator);
                 let base = generator.allocate_register();
@@ -4757,15 +4743,15 @@ fn emit_store_to_reference(generator: &mut Generator, target: &Expression, value
                 emit_super_put(
                     generator,
                     &base,
-                    property,
-                    *computed,
+                    &data.property,
+                    data.computed,
                     &this_value,
                     value,
                     None,
                 );
             } else {
-                let base = generate_expression_or_undefined(object, generator, None);
-                emit_put_to_member(generator, &base, property, *computed, value, None);
+                let base = generate_expression_or_undefined(&data.object, generator, None);
+                emit_put_to_member(generator, &base, &data.property, data.computed, value, None);
             }
         }
         _ => {
@@ -4958,17 +4944,19 @@ fn generate_tagged_template_literal(
 ) -> ScopedOperand {
     // Resolve tag and this_value based on the tag expression type.
     let (tag_reg, this_value) = match &tag.inner {
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } if matches!(object.inner, ExpressionKind::Super) => {
+        ExpressionKind::Member(member_data)
+            if matches!(member_data.object.inner, ExpressionKind::Super) =>
+        {
             // super.func`` or super["func"]``
             // Per spec, evaluation order: ResolveThisBinding, evaluate
             // computed property, then ResolveSuperBase.
             let this_value = emit_resolve_this_binding(generator);
-            let computed_key = if *computed {
-                Some(generate_expression_or_undefined(property, generator, None))
+            let computed_key = if member_data.computed {
+                Some(generate_expression_or_undefined(
+                    &member_data.property,
+                    generator,
+                    None,
+                ))
             } else {
                 None
             };
@@ -4979,25 +4967,24 @@ fn generate_tagged_template_literal(
             let method = generator.allocate_register();
             if let Some(key) = computed_key {
                 emit_get_by_value_with_this(generator, &method, &super_base, &key, &this_value);
-            } else if let ExpressionKind::Identifier(ident) = &property.inner {
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
                 emit_get_by_id_with_this(generator, &method, &super_base, &ident.name, &this_value);
             }
             (method, Some(this_value))
         }
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
-            let obj = generate_expression_or_undefined(object, generator, None);
+        ExpressionKind::Member(member_data) => {
+            let obj = generate_expression_or_undefined(&member_data.object, generator, None);
             let method = generator.allocate_register();
-            if *computed {
-                let property = generate_expression_or_undefined(property, generator, None);
+            if member_data.computed {
+                let property =
+                    generate_expression_or_undefined(&member_data.property, generator, None);
                 emit_get_by_value(generator, &method, &obj, &property, None);
-            } else if let ExpressionKind::Identifier(ident) = &property.inner {
-                let base_id = intern_base_identifier(generator, object);
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
+                let base_id = intern_base_identifier(generator, &member_data.object);
                 emit_get_by_id(generator, &method, &obj, &ident.name, base_id);
-            } else if let ExpressionKind::PrivateIdentifier(priv_ident) = &property.inner {
+            } else if let ExpressionKind::PrivateIdentifier(priv_ident) =
+                &member_data.property.inner
+            {
                 let id = generator.intern_identifier(&priv_ident.name);
                 generator.emit(Instruction::GetPrivateById {
                     dst: method.operand(),
@@ -5177,10 +5164,8 @@ fn generate_switch_statement(
             // For function declarations in switch cases: emit AnnexB hoisting
             // only if the scope collector approved it (name is in annexb_function_names).
             if did_create_env
-                && let StatementKind::FunctionDeclaration {
-                    name: Some(ref name_ident),
-                    ..
-                } = child.inner
+                && let StatementKind::FunctionDeclaration(ref fd) = child.inner
+                && let Some(ref name_ident) = fd.name
                 && generator.annexb_function_names.contains(&name_ident.name)
             {
                 let id = generator.intern_identifier(&name_ident.name);
@@ -5252,10 +5237,10 @@ fn emit_switch_block_declaration_instantiation(
     // Check if we need a lexical environment.
     // Only needed if there are non-local lexical declarations.
     let needs_env = all_children.iter().any(|child| match &child.inner {
-        StatementKind::FunctionDeclaration { .. } => true,
-        StatementKind::VariableDeclaration { kind, declarations } => {
-            if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                declarations.iter().any(|declaration| {
+        StatementKind::FunctionDeclaration(_) => true,
+        StatementKind::VariableDeclaration(vd) => {
+            if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                vd.declarations.iter().any(|declaration| {
                     let mut names = Vec::new();
                     collect_target_names(&declaration.target, &mut names);
                     !names.is_empty()
@@ -5368,7 +5353,7 @@ fn generate_object_expression(
         // ProtoSetter (__proto__) skips NamedEvaluation per spec.
         if !effectively_computed && property.property_type != ObjectPropertyType::ProtoSetter {
             let base_name: Option<Utf16String> = match &property.key.inner {
-                ExpressionKind::StringLiteral(s) => Some(s.clone()),
+                ExpressionKind::StringLiteral(s) => Some((**s).clone()),
                 ExpressionKind::Identifier(ident) => Some(ident.name.clone()),
                 _ => None,
             };
@@ -5659,12 +5644,8 @@ fn generate_optional_chain_inner(
 ) -> Option<()> {
     // Evaluate base expression.
     let new_current_value = match &base.inner {
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
-            let is_super = matches!(object.inner, ExpressionKind::Super);
+        ExpressionKind::Member(member_data) => {
+            let is_super = matches!(member_data.object.inner, ExpressionKind::Super);
             // For super property access, resolve this binding first (before
             // ResolveSuperBase) per spec evaluation order.
             let this_value = if is_super {
@@ -5672,21 +5653,28 @@ fn generate_optional_chain_inner(
             } else {
                 None
             };
-            let obj = generate_expression(object, generator, None)?;
+            let obj = generate_expression(&member_data.object, generator, None)?;
             let val = generator.allocate_register();
             if is_super {
                 let this_value = this_value.unwrap();
-                emit_super_get(generator, &val, &obj, property, *computed, &this_value);
+                emit_super_get(
+                    generator,
+                    &val,
+                    &obj,
+                    &member_data.property,
+                    member_data.computed,
+                    &this_value,
+                );
                 generator.emit_mov(current_base, &this_value);
-            } else if *computed {
-                let property = generate_expression(property, generator, None)?;
+            } else if member_data.computed {
+                let property = generate_expression(&member_data.property, generator, None)?;
                 emit_get_by_value(generator, &val, &obj, &property, None);
                 generator.emit_mov(current_base, &obj);
-            } else if let ExpressionKind::Identifier(ident) = &property.inner {
-                let base_id = intern_base_identifier(generator, object);
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
+                let base_id = intern_base_identifier(generator, &member_data.object);
                 emit_get_by_id(generator, &val, &obj, &ident.name, base_id);
                 generator.emit_mov(current_base, &obj);
-            } else if let ExpressionKind::PrivateIdentifier(name) = &property.inner {
+            } else if let ExpressionKind::PrivateIdentifier(name) = &member_data.property.inner {
                 let id = generator.intern_identifier(&name.name);
                 generator.emit(Instruction::GetPrivateById {
                     dst: val.operand(),
@@ -5695,20 +5683,17 @@ fn generate_optional_chain_inner(
                 });
                 generator.emit_mov(current_base, &obj);
             } else {
-                let property = generate_expression(property, generator, None)?;
+                let property = generate_expression(&member_data.property, generator, None)?;
                 emit_get_by_value(generator, &val, &obj, &property, None);
                 generator.emit_mov(current_base, &obj);
             }
             val
         }
-        ExpressionKind::OptionalChain {
-            base: inner_base,
-            references: inner_refs,
-        } => {
+        ExpressionKind::OptionalChain(oc_data) => {
             generate_optional_chain_inner(
                 generator,
-                inner_base,
-                inner_refs,
+                &oc_data.base,
+                &oc_data.references,
                 current_value,
                 current_base,
             )?;
@@ -6063,7 +6048,7 @@ fn generate_class_expression(
                         }
                         ExpressionKind::StringLiteral(s) => {
                             literal_value_kind = LiteralValueKind::String;
-                            literal_value_string = s.clone();
+                            literal_value_string = (**s).clone();
                             true
                         }
                         ExpressionKind::Unary { op, operand } if *op == UnaryOp::Minus => {
@@ -6082,11 +6067,11 @@ fn generate_class_expression(
                         // Determine field name for anonymous function naming.
                         let field_name = match &key.inner {
                             ExpressionKind::Identifier(ident) => ident.name.clone(),
-                            ExpressionKind::StringLiteral(s) => s.clone(),
+                            ExpressionKind::StringLiteral(s) => (**s).clone(),
                             ExpressionKind::PrivateIdentifier(p) => p.name.clone(),
                             ExpressionKind::NumericLiteral(n) => super::ffi::js_number_to_utf16(*n),
                             ExpressionKind::BigIntLiteral(s) => {
-                                let digits = s.strip_suffix('n').unwrap_or(s);
+                                let digits = s.strip_suffix('n').unwrap_or(s.as_str());
                                 Utf16String(digits.encode_utf16().collect())
                             }
                             _ => Utf16String::new(),
@@ -6095,10 +6080,12 @@ fn generate_class_expression(
                         // Wrap the expression in a ClassFieldInitializer statement.
                         let body_statement = Statement::new(
                             init_expression.range,
-                            StatementKind::ClassFieldInitializer {
-                                expression: Box::new(init_expression.as_ref().clone()),
-                                field_name,
-                            },
+                            StatementKind::ClassFieldInitializer(Box::new(
+                                ClassFieldInitializerData {
+                                    expression: Box::new(init_expression.as_ref().clone()),
+                                    field_name,
+                                },
+                            )),
                         );
                         let wrapper_body = Statement::new(
                             init_expression.range,
@@ -6133,7 +6120,7 @@ fn generate_class_expression(
                         let key_name: Utf16String = match &key.inner {
                             ExpressionKind::PrivateIdentifier(ident) => ident.name.clone(),
                             ExpressionKind::Identifier(ident) => ident.name.clone(),
-                            ExpressionKind::StringLiteral(s) => s.clone(),
+                            ExpressionKind::StringLiteral(s) => (**s).clone(),
                             ExpressionKind::NumericLiteral(n) => super::ffi::js_number_to_utf16(*n),
                             _ => Utf16String::new(),
                         };
@@ -6315,8 +6302,8 @@ fn emit_default_constructor(generator: &mut Generator, has_super: bool) -> u32 {
     let function_id = if let StatementKind::Program(ref data) = program.inner {
         let scope = data.scope.borrow();
         scope.children.iter().find_map(|child| {
-            if let StatementKind::FunctionDeclaration { function_id, .. } = &child.inner {
-                Some(*function_id)
+            if let StatementKind::FunctionDeclaration(fd) = &child.inner {
+                Some(fd.function_id)
             } else {
                 None
             }
@@ -6370,11 +6357,11 @@ fn get_private_identifier_ptr(key: &Expression) -> (*const u16, usize) {
 /// meaning we need a per-iteration lexical environment.
 fn for_in_of_needs_lexical_env(lhs: &ForInOfLhs) -> bool {
     if let ForInOfLhs::Declaration(statement) = lhs
-        && let StatementKind::VariableDeclaration { kind, declarations } = &statement.inner
-        && (*kind == DeclarationKind::Let || *kind == DeclarationKind::Const)
+        && let StatementKind::VariableDeclaration(vd) = &statement.inner
+        && (vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const)
     {
         let mut names = Vec::new();
-        for declaration in declarations {
+        for declaration in &vd.declarations {
             collect_target_names(&declaration.target, &mut names);
         }
         return !names.is_empty();
@@ -6429,10 +6416,10 @@ fn create_for_in_of_lexical_env(generator: &mut Generator, lhs: &ForInOfLhs) -> 
     let mut binding_names: Vec<(Utf16String, bool)> = Vec::new();
     let mut is_constant = false;
     if let ForInOfLhs::Declaration(statement) = lhs
-        && let StatementKind::VariableDeclaration { kind, declarations } = &statement.inner
+        && let StatementKind::VariableDeclaration(vd) = &statement.inner
     {
-        is_constant = *kind == DeclarationKind::Const;
-        for declaration in declarations {
+        is_constant = vd.kind == DeclarationKind::Const;
+        for declaration in &vd.declarations {
             collect_target_names(&declaration.target, &mut binding_names);
         }
     }
@@ -6462,11 +6449,11 @@ fn create_for_in_of_lexical_env(generator: &mut Generator, lhs: &ForInOfLhs) -> 
 /// Returns true if a TDZ scope was entered (must call leave_for_in_of_head_tdz after RHS eval).
 fn enter_for_in_of_head_tdz(generator: &mut Generator, lhs: &ForInOfLhs) -> bool {
     if let ForInOfLhs::Declaration(statement) = lhs
-        && let StatementKind::VariableDeclaration { kind, declarations } = &statement.inner
-        && (*kind == DeclarationKind::Let || *kind == DeclarationKind::Const)
+        && let StatementKind::VariableDeclaration(vd) = &statement.inner
+        && (vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const)
     {
         let mut names = Vec::new();
-        for declaration in declarations {
+        for declaration in &vd.declarations {
             collect_target_names(&declaration.target, &mut names);
         }
         if !names.is_empty() {
@@ -6527,11 +6514,9 @@ fn generate_for_in_statement(
     // B.3.5 Initializers in ForIn Statement Heads
     // Evaluate the initializer for `for (var x = init in obj)` before the RHS.
     if let ForInOfLhs::Declaration(statement) = lhs
-        && let StatementKind::VariableDeclaration {
-            kind: DeclarationKind::Var,
-            declarations,
-        } = &statement.inner
-        && let Some(declaration) = declarations.first()
+        && let StatementKind::VariableDeclaration(vd) = &statement.inner
+        && vd.kind == DeclarationKind::Var
+        && let Some(declaration) = vd.declarations.first()
         && let (VariableDeclaratorTarget::Identifier(ident), Some(init)) =
             (&declaration.target, &declaration.init)
     {
@@ -6661,13 +6646,9 @@ fn generate_labelled_statement(
     // Collect all labels from nested Labelled statements.
     let mut labels = vec![label.clone()];
     let mut inner = item;
-    while let StatementKind::Labelled {
-        label: next_label,
-        item: next_item,
-    } = &inner.inner
-    {
-        labels.push(next_label.clone());
-        inner = next_item;
+    while let StatementKind::Labelled(labelled_data) = &inner.inner {
+        labels.push(labelled_data.label.clone());
+        inner = &labelled_data.item;
     }
 
     // For iteration/switch statements, set pending_labels so that
@@ -6687,10 +6668,10 @@ fn generate_labelled_statement(
     };
     let is_iteration_or_switch = matches!(
         &effective_inner.inner,
-        StatementKind::For { .. }
-            | StatementKind::ForInOf { .. }
-            | StatementKind::While { .. }
-            | StatementKind::DoWhile { .. }
+        StatementKind::For(_)
+            | StatementKind::ForInOf(_)
+            | StatementKind::While(_)
+            | StatementKind::DoWhile(_)
             | StatementKind::Switch(_)
     );
 
@@ -7164,7 +7145,7 @@ fn assign_to_for_in_of_lhs(generator: &mut Generator, lhs: &ForInOfLhs, value: &
             // in for_in_of_head_evaluation, so it is treated as Assignment
             // lhs_kind. This produces NewTypeError + Throw for the using
             // declaration, followed by NewReferenceError + Throw (dead code).
-            if matches!(statement.inner, StatementKind::UsingDeclaration { .. }) {
+            if matches!(statement.inner, StatementKind::UsingDeclaration(_)) {
                 generate_statement(statement, generator, None);
                 let exception = generator.allocate_register();
                 let error_string =
@@ -7180,12 +7161,12 @@ fn assign_to_for_in_of_lhs(generator: &mut Generator, lhs: &ForInOfLhs, value: &
                 return;
             }
             // The declaration is a VariableDeclaration with a single declarator
-            if let StatementKind::VariableDeclaration { kind, declarations } = &statement.inner
-                && let Some(declaration) = declarations.first()
+            if let StatementKind::VariableDeclaration(vd) = &statement.inner
+                && let Some(declaration) = vd.declarations.first()
             {
                 // For var: FDI already initialized the binding, so use Set.
                 // For let/const: per-iteration env created new bindings needing Initialize.
-                let mode = match kind {
+                let mode = match vd.kind {
                     DeclarationKind::Var => BindingMode::Set,
                     DeclarationKind::Let | DeclarationKind::Const => BindingMode::InitializeLexical,
                 };
@@ -8408,10 +8389,10 @@ pub fn emit_function_declaration_instantiation(
 
     for child in &body_scope.children {
         match &child.inner {
-            StatementKind::VariableDeclaration { kind, declarations } => {
-                if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                    let is_constant = *kind == DeclarationKind::Const;
-                    for declaration in declarations {
+            StatementKind::VariableDeclaration(vd) => {
+                if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                    let is_constant = vd.kind == DeclarationKind::Const;
+                    for declaration in &vd.declarations {
                         let mut names = Vec::new();
                         collect_target_names(&declaration.target, &mut names);
                         for (name, _) in names {
@@ -8451,17 +8432,12 @@ pub fn emit_function_declaration_instantiation(
     if let Some(fsd) = function_scope_data {
         for function_to_init in &fsd.functions_to_initialize {
             let child = &body_scope.children[function_to_init.child_index];
-            if let StatementKind::FunctionDeclaration {
-                function_id,
-                ref name,
-                ..
-            } = child.inner
-            {
-                let inner_function_data = generator.function_table.take(function_id);
+            if let StatementKind::FunctionDeclaration(ref fd) = child.inner {
+                let inner_function_data = generator.function_table.take(fd.function_id);
                 let sfd_index = emit_new_function(generator, inner_function_data, None);
 
                 // Check if the function name identifier is local.
-                if let Some(name_ident) = name {
+                if let Some(name_ident) = &fd.name {
                     if name_ident.is_local() {
                         let local_index = name_ident.local_index.get();
                         let local = generator.local(local_index);
@@ -8497,7 +8473,7 @@ pub fn emit_function_declaration_instantiation(
 fn is_for_loop(statement: &Statement) -> bool {
     matches!(
         statement.inner,
-        StatementKind::For { .. } | StatementKind::ForInOf { .. }
+        StatementKind::For(_) | StatementKind::ForInOf(_)
     )
 }
 
@@ -8506,12 +8482,12 @@ fn is_for_loop(statement: &Statement) -> bool {
 fn needs_block_declaration_instantiation(scope: &ScopeData) -> bool {
     for child in &scope.children {
         match &child.inner {
-            StatementKind::FunctionDeclaration { .. } => {
+            StatementKind::FunctionDeclaration(_) => {
                 return true;
             }
-            StatementKind::VariableDeclaration { kind, declarations } => {
-                if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                    for declaration in declarations {
+            StatementKind::VariableDeclaration(vd) => {
+                if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                    for declaration in &vd.declarations {
                         let mut names = Vec::new();
                         collect_target_names(&declaration.target, &mut names);
                         if !names.is_empty() {
@@ -8527,8 +8503,8 @@ fn needs_block_declaration_instantiation(scope: &ScopeData) -> bool {
                     return true;
                 }
             }
-            StatementKind::UsingDeclaration { declarations } => {
-                for declaration in declarations {
+            StatementKind::UsingDeclaration(declarations) => {
+                for declaration in declarations.iter() {
                     let mut names = Vec::new();
                     collect_target_names(&declaration.target, &mut names);
                     if !names.is_empty() {
@@ -8547,9 +8523,9 @@ fn count_non_local_lexical_bindings(scope: &ScopeData) -> u32 {
     let mut count = 0u32;
     for child in &scope.children {
         match &child.inner {
-            StatementKind::VariableDeclaration { kind, declarations } => {
-                if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                    for declaration in declarations {
+            StatementKind::VariableDeclaration(vd) => {
+                if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                    for declaration in &vd.declarations {
                         let mut names = Vec::new();
                         collect_target_names(&declaration.target, &mut names);
                         count += u32_from_usize(names.len());
@@ -8652,21 +8628,16 @@ const BUILTIN_STRING_ITERATOR_PROTOTYPE_NEXT: u8 = 20;
 /// Detect known builtin methods from a callee expression (e.g. Math.abs).
 /// Returns the Builtin enum value as u8, matching Builtins.h ordering.
 fn get_builtin(callee: &Expression) -> Option<u8> {
-    let ExpressionKind::Member {
-        object,
-        property,
-        computed,
-    } = &callee.inner
-    else {
+    let ExpressionKind::Member(member_data) = &callee.inner else {
         return None;
     };
-    if *computed {
+    if member_data.computed {
         return None;
     }
-    let ExpressionKind::Identifier(base_ident) = &object.inner else {
+    let ExpressionKind::Identifier(base_ident) = &member_data.object.inner else {
         return None;
     };
-    let ExpressionKind::Identifier(property_ident) = &property.inner else {
+    let ExpressionKind::Identifier(property_ident) = &member_data.property.inner else {
         return None;
     };
     // Must match JS_ENUMERATE_BUILTINS order in Builtins.h.
@@ -9477,17 +9448,13 @@ fn expression_identifier(expression: &Expression) -> Option<Utf16String> {
         }
         ExpressionKind::NumericLiteral(n) => Some(super::ffi::js_number_to_utf16(*n)),
         ExpressionKind::This => Some(Utf16String(utf16!("this").to_vec())),
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
+        ExpressionKind::Member(data) => {
             let mut s = Utf16String::new();
-            if let Some(obj_id) = expression_identifier(object) {
+            if let Some(obj_id) = expression_identifier(&data.object) {
                 s.0.extend_from_slice(&obj_id);
             }
-            if let Some(property_id) = expression_identifier(property) {
-                if *computed {
+            if let Some(property_id) = expression_identifier(&data.property) {
+                if data.computed {
                     s.0.extend_from_slice(utf16!("["));
                     s.0.extend_from_slice(&property_id);
                     s.0.extend_from_slice(utf16!("]"));
@@ -9508,7 +9475,7 @@ fn expression_identifier(expression: &Expression) -> Option<Utf16String> {
 fn expression_string_approximation(expression: &Expression) -> Option<Utf16String> {
     match &expression.inner {
         ExpressionKind::Identifier(ident) => Some(ident.name.clone()),
-        ExpressionKind::Member { .. } => Some(member_to_string_approximation(expression)),
+        ExpressionKind::Member(_) => Some(member_to_string_approximation(expression)),
         _ => None,
     }
 }
@@ -9516,14 +9483,10 @@ fn expression_string_approximation(expression: &Expression) -> Option<Utf16Strin
 fn member_to_string_approximation(expression: &Expression) -> Utf16String {
     match &expression.inner {
         ExpressionKind::Identifier(ident) => ident.name.clone(),
-        ExpressionKind::Member {
-            object,
-            property,
-            computed,
-        } => {
-            let mut s = member_to_string_approximation(object);
-            let property_str = member_to_string_approximation(property);
-            if *computed {
+        ExpressionKind::Member(data) => {
+            let mut s = member_to_string_approximation(&data.object);
+            let property_str = member_to_string_approximation(&data.property);
+            if data.computed {
                 s.0.extend_from_slice(utf16!("["));
                 s.0.extend_from_slice(&property_str);
                 s.0.extend_from_slice(utf16!("]"));

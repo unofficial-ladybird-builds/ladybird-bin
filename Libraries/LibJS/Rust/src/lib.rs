@@ -854,7 +854,7 @@ pub unsafe extern "C" fn rust_compile_dynamic_function(
             let function_id = if let StatementKind::Program(ref data) = program.inner {
                 let scope = data.scope.borrow();
                 scope.children.iter().find_map(|child| match &child.inner {
-                    StatementKind::FunctionDeclaration { function_id, .. } => Some(*function_id),
+                    StatementKind::FunctionDeclaration(fd) => Some(fd.function_id),
                     StatementKind::Expression(expression) => {
                         if let ast::ExpressionKind::Function(function_id) = &expression.inner {
                             Some(*function_id)
@@ -961,13 +961,8 @@ pub unsafe extern "C" fn rust_compile_builtin_file(
 
             let scope = scope_ref.borrow();
             for child in &scope.children {
-                if let StatementKind::FunctionDeclaration {
-                    function_id,
-                    ref name,
-                    ..
-                } = child.inner
-                {
-                    let function_data = parser.function_table.take(function_id);
+                if let StatementKind::FunctionDeclaration(ref fd) = child.inner {
+                    let function_data = parser.function_table.take(fd.function_id);
                     let subtable = parser.function_table.extract_reachable(&function_data);
                     let sfd_ptr = bytecode::ffi::create_sfd_for_gdi(
                         function_data,
@@ -977,7 +972,7 @@ pub unsafe extern "C" fn rust_compile_builtin_file(
                         true, // strict
                     );
                     if !sfd_ptr.is_null()
-                        && let Some(name_ident) = name
+                        && let Some(name_ident) = &fd.name
                     {
                         push_function(
                             ctx,
@@ -1340,8 +1335,7 @@ unsafe fn extract_module_metadata(scope: &ast::ScopeData, ctx: *mut c_void, cb: 
                 let is_declaration = export_data.statement.as_ref().is_some_and(|s| {
                     matches!(
                         s.inner,
-                        StatementKind::FunctionDeclaration { .. }
-                            | StatementKind::ClassDeclaration(_)
+                        StatementKind::FunctionDeclaration(_) | StatementKind::ClassDeclaration(_)
                     )
                 });
                 if !is_declaration && let Some(ref name) = entry.local_or_import_name {
@@ -1455,13 +1449,11 @@ unsafe fn extract_module_declarations(
             };
 
             match declaration {
-                StatementKind::FunctionDeclaration {
-                    function_id, name, ..
-                } => {
+                StatementKind::FunctionDeclaration(fd) => {
                     let is_default =
-                        is_exported && name.as_ref().is_some_and(|n| n.name == default_name);
+                        is_exported && fd.name.as_ref().is_some_and(|n| n.name == default_name);
 
-                    let function_data = function_table.take(*function_id);
+                    let function_data = function_table.take(fd.function_id);
                     let subtable = function_table.extract_reachable(&function_data);
                     let sfd_ptr = bytecode::ffi::create_sfd_for_gdi(
                         function_data,
@@ -1475,7 +1467,7 @@ unsafe fn extract_module_declarations(
                     }
 
                     // Get the binding name from the AST (e.g., "*default*" for anonymous defaults).
-                    let binding_name = if let Some(name_ident) = name {
+                    let binding_name = if let Some(name_ident) = &fd.name {
                         name_ident.name.clone()
                     } else {
                         continue;
@@ -1519,11 +1511,9 @@ unsafe fn extract_module_declarations(
                         );
                     }
                 }
-                StatementKind::VariableDeclaration { kind, declarations }
-                    if *kind != ast::DeclarationKind::Var =>
-                {
-                    let is_constant = *kind == ast::DeclarationKind::Const;
-                    for declaration in declarations {
+                StatementKind::VariableDeclaration(vd) if vd.kind != ast::DeclarationKind::Var => {
+                    let is_constant = vd.kind == ast::DeclarationKind::Const;
+                    for declaration in &vd.declarations {
                         for_each_bound_name(&declaration.target, &mut |name| {
                             (cb.push_lexical_binding)(
                                 ctx,
@@ -1535,8 +1525,8 @@ unsafe fn extract_module_declarations(
                         });
                     }
                 }
-                StatementKind::UsingDeclaration { declarations } => {
-                    for declaration in declarations {
+                StatementKind::UsingDeclaration(declarations) => {
+                    for declaration in declarations.iter() {
                         for_each_bound_name(&declaration.target, &mut |name| {
                             (cb.push_lexical_binding)(ctx, name.as_ptr(), name.len(), false, -1);
                         });
@@ -1556,11 +1546,8 @@ unsafe fn collect_module_var_names(
 ) {
     unsafe {
         match statement {
-            ast::StatementKind::VariableDeclaration {
-                kind: ast::DeclarationKind::Var,
-                declarations,
-            } => {
-                for declaration in declarations {
+            ast::StatementKind::VariableDeclaration(vd) if vd.kind == ast::DeclarationKind::Var => {
+                for declaration in &vd.declarations {
                     for_each_bound_name(&declaration.target, &mut |name| {
                         push_var_name(ctx, name.as_ptr(), name.len());
                     });
@@ -1720,11 +1707,8 @@ unsafe extern "C" {
 /// statements, excluding function/class bodies (which create new var scopes).
 fn collect_var_names_recursive(statement: &ast::StatementKind, push_name: &mut dyn FnMut(&[u16])) {
     match statement {
-        ast::StatementKind::VariableDeclaration {
-            kind: ast::DeclarationKind::Var,
-            declarations,
-        } => {
-            for declaration in declarations {
+        ast::StatementKind::VariableDeclaration(vd) if vd.kind == ast::DeclarationKind::Var => {
+            for declaration in &vd.declarations {
                 for_each_bound_name(&declaration.target, push_name);
             }
         }
@@ -1759,10 +1743,8 @@ fn extract_gdi_common(
     // Var names (var declarations at any nesting level + top-level function declarations)
     for child in &scope.children {
         collect_var_names_recursive(&child.inner, push_var_name);
-        if let StatementKind::FunctionDeclaration {
-            name: Some(ref name_ident),
-            ..
-        } = child.inner
+        if let StatementKind::FunctionDeclaration(ref fd) = child.inner
+            && let Some(ref name_ident) = fd.name
         {
             push_var_name(&name_ident.name);
         }
@@ -1772,14 +1754,11 @@ fn extract_gdi_common(
     let mut seen_names: HashSet<ast::Utf16String> = HashSet::new();
     let mut functions_to_init: Vec<(ast::FunctionId, ast::Utf16String)> = Vec::new();
     for child in scope.children.iter().rev() {
-        if let StatementKind::FunctionDeclaration {
-            function_id,
-            name: Some(ref name_ident),
-            ..
-        } = child.inner
+        if let StatementKind::FunctionDeclaration(ref fd) = child.inner
+            && let Some(ref name_ident) = fd.name
             && seen_names.insert(name_ident.name.clone())
         {
-            functions_to_init.push((function_id, name_ident.name.clone()));
+            functions_to_init.push((fd.function_id, name_ident.name.clone()));
         }
     }
     for (function_id, name) in &functions_to_init {
@@ -1809,18 +1788,16 @@ fn extract_gdi_common(
 
     for child in &scope.children {
         match &child.inner {
-            StatementKind::VariableDeclaration { kind, declarations }
-                if *kind != DeclarationKind::Var =>
-            {
-                let is_constant = *kind == DeclarationKind::Const;
-                for declaration in declarations {
+            StatementKind::VariableDeclaration(vd) if vd.kind != DeclarationKind::Var => {
+                let is_constant = vd.kind == DeclarationKind::Const;
+                for declaration in &vd.declarations {
                     for_each_bound_name(&declaration.target, &mut |name| {
                         push_lexical_binding(name, is_constant);
                     });
                 }
             }
-            StatementKind::UsingDeclaration { declarations } => {
-                for declaration in declarations {
+            StatementKind::UsingDeclaration(declarations) => {
+                for declaration in declarations.iter() {
                     for_each_bound_name(&declaration.target, &mut |name| {
                         push_lexical_binding(name, false);
                     });
@@ -1892,17 +1869,15 @@ unsafe fn extract_script_gdi(
         // Lexical names (let/const/using/class at top level) — script-only step.
         for child in &scope.children {
             match &child.inner {
-                StatementKind::VariableDeclaration { kind, declarations }
-                    if *kind != DeclarationKind::Var =>
-                {
-                    for declaration in declarations {
+                StatementKind::VariableDeclaration(vd) if vd.kind != DeclarationKind::Var => {
+                    for declaration in &vd.declarations {
                         for_each_bound_name(&declaration.target, &mut |name| {
                             script_gdi_push_lexical_name(ctx, name.as_ptr(), name.len());
                         });
                     }
                 }
-                StatementKind::UsingDeclaration { declarations } => {
-                    for declaration in declarations {
+                StatementKind::UsingDeclaration(declarations) => {
+                    for declaration in declarations.iter() {
                         for_each_bound_name(&declaration.target, &mut |name| {
                             script_gdi_push_lexical_name(ctx, name.as_ptr(), name.len());
                         });
@@ -1948,32 +1923,32 @@ fn for_each_child_statement(
                 f(&child.inner);
             }
         }
-        StatementKind::If {
-            consequent,
-            alternate,
-            ..
-        } => {
-            f(&consequent.inner);
-            if let Some(alt) = alternate {
+        StatementKind::If(data) => {
+            f(&data.consequent.inner);
+            if let Some(alt) = &data.alternate {
                 f(&alt.inner);
             }
         }
-        StatementKind::While { body, .. }
-        | StatementKind::DoWhile { body, .. }
-        | StatementKind::With { body, .. } => {
-            f(&body.inner);
+        StatementKind::While(data) => {
+            f(&data.body.inner);
         }
-        StatementKind::For { init, body, .. } => {
-            if let Some(ast::ForInit::Declaration(decl)) = init {
+        StatementKind::DoWhile(data) => {
+            f(&data.body.inner);
+        }
+        StatementKind::With(data) => {
+            f(&data.body.inner);
+        }
+        StatementKind::For(data) => {
+            if let Some(ast::ForInit::Declaration(decl)) = &data.init {
                 f(&decl.inner);
             }
-            f(&body.inner);
+            f(&data.body.inner);
         }
-        StatementKind::ForInOf { lhs, body, .. } => {
-            if let ast::ForInOfLhs::Declaration(declaration) = lhs {
+        StatementKind::ForInOf(data) => {
+            if let ast::ForInOfLhs::Declaration(declaration) = &data.lhs {
                 f(&declaration.inner);
             }
-            f(&body.inner);
+            f(&data.body.inner);
         }
         StatementKind::Switch(data) => {
             for case in &data.cases {
@@ -1991,8 +1966,8 @@ fn for_each_child_statement(
                 f(&finalizer.inner);
             }
         }
-        StatementKind::Labelled { item, .. } => {
-            f(&item.inner);
+        StatementKind::Labelled(data) => {
+            f(&data.item.inner);
         }
         // Don't recurse into function/class bodies (new var scopes)
         _ => {}
@@ -2424,16 +2399,16 @@ fn count_non_local_lex_declarations(scope: &Rc<RefCell<ast::ScopeData>>) -> usiz
     let mut count = 0;
     for child in &sd.children {
         match &child.inner {
-            ast::StatementKind::VariableDeclaration { kind, declarations } => {
+            ast::StatementKind::VariableDeclaration(vd) => {
                 use parser::DeclarationKind;
-                if *kind == DeclarationKind::Let || *kind == DeclarationKind::Const {
-                    for declaration in declarations {
+                if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const {
+                    for declaration in &vd.declarations {
                         count_non_local_names_in_target(&declaration.target, &mut count);
                     }
                 }
             }
-            ast::StatementKind::UsingDeclaration { declarations } => {
-                for declaration in declarations {
+            ast::StatementKind::UsingDeclaration(declarations) => {
+                for declaration in declarations.iter() {
                     count_non_local_names_in_target(&declaration.target, &mut count);
                 }
             }
