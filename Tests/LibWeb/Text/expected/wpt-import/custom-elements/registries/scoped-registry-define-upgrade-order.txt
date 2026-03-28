@@ -1,0 +1,12 @@
+Harness status: OK
+
+Found 7 tests
+
+7 Pass
+Pass	Upgrade in tree order in the same tree scope
+Pass	Upgrade in shadow-including tree order across tree scopes
+Pass	Upgrade order does not depend on shadow root attach order
+Pass	Upgrade in association order across documents, then tree order in each document
+Pass	Upgrade order is not affected by DOM order between child frames
+Pass	Upgrade order is affected by shadow tree adoption across documents
+Pass	Elements in the "owner" window of a scoped registry are not always upgraded first

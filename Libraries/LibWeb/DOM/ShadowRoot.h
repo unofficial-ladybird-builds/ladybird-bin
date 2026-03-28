@@ -97,6 +97,12 @@ public:
     using PartElementMap = HashMap<FlyString, OrderedHashTable<AbstractElement>>;
     PartElementMap const& part_element_map() const;
 
+    GC::Ptr<HTML::CustomElementRegistry> custom_element_registry() const;
+    void set_custom_element_registry(GC::Ptr<HTML::CustomElementRegistry> registry) { m_custom_element_registry = registry; }
+
+    bool keep_custom_element_registry_null() const { return m_keep_custom_element_registry_null; }
+    void set_keep_custom_element_registry_null(bool value) { m_keep_custom_element_registry_null = value; }
+
     virtual void finalize() override;
 
     GC::Ptr<Element> fullscreen_element_for_bindings() const;
@@ -144,6 +150,12 @@ private:
 
     mutable PartElementMap m_part_element_map;
     mutable u64 m_dom_tree_version_when_calculated_part_element_map { 0 };
+
+    // https://dom.spec.whatwg.org/#shadowroot-custom-element-registry
+    GC::Ptr<HTML::CustomElementRegistry> m_custom_element_registry;
+
+    // https://dom.spec.whatwg.org/#shadowroot-keep-custom-element-registry-null
+    bool m_keep_custom_element_registry_null { false };
 
 public:
     using DocumentShadowRootList = IntrusiveList<&ShadowRoot::m_list_node>;
