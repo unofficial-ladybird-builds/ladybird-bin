@@ -326,11 +326,75 @@ fn contains_u16_from<I: Input>(input: I, start: usize, needle: &[u16]) -> bool {
 }
 
 #[inline(always)]
+fn fold_ascii_for_compare(ch: u16) -> u16 {
+    match ch {
+        0x41..=0x5A => ch + 32,
+        _ => ch,
+    }
+}
+
+#[inline(always)]
+fn contains_ascii_case_insensitive_u16_from<I: Input>(
+    input: I,
+    start: usize,
+    needle: &[u16],
+) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let needle_len = needle.len();
+    if start + needle_len > input.len() {
+        return false;
+    }
+
+    let folded_first = fold_ascii_for_compare(needle[0]);
+    let mut pos = start;
+    let end = input.len() - needle_len + 1;
+    while pos < end {
+        while pos < end {
+            let code_unit = input.code_unit(pos);
+            if code_unit <= 0x7F && fold_ascii_for_compare(code_unit) == folded_first {
+                break;
+            }
+            pos += 1;
+        }
+        if pos >= end {
+            return false;
+        }
+        if matches_ascii_case_insensitive_u16_at(input, pos, needle) {
+            return true;
+        }
+        pos += 1;
+    }
+    false
+}
+
+#[inline(always)]
+fn matches_ascii_case_insensitive_u16_at<I: Input>(input: I, pos: usize, needle: &[u16]) -> bool {
+    if pos + needle.len() > input.len() {
+        return false;
+    }
+    for (offset, expected) in needle.iter().enumerate() {
+        let actual = input.code_unit(pos + offset);
+        if actual > 0x7F || fold_ascii_for_compare(actual) != fold_ascii_for_compare(*expected) {
+            return false;
+        }
+    }
+    true
+}
+
+#[inline(always)]
 fn fails_required_literal_hint<I: Input>(input: I, start: usize, hints: &PatternHints) -> bool {
-    let Some(literal) = hints.required_literal.as_deref() else {
+    let Some(literal) = hints.required_literal.as_ref() else {
         return false;
     };
-    !contains_u16_from(input, start, literal)
+    let matched = if literal.ascii_case_insensitive {
+        contains_ascii_case_insensitive_u16_from(input, start, &literal.literal)
+    } else {
+        contains_u16_from(input, start, &literal.literal)
+    };
+    !matched
 }
 
 #[inline(always)]
@@ -457,6 +521,32 @@ pub fn execute_into_with_scratch<I: Input>(
     execute_into_impl(program, input, start_pos, hints, out, scratch)
 }
 
+/// Execute the program at exactly `start_pos`.
+/// This is used for sticky regexes, which must not scan forward for later
+/// match positions.
+pub fn execute_anchored_into_with_scratch<I: Input>(
+    program: &Program,
+    input: I,
+    start_pos: usize,
+    hints: &PatternHints,
+    out: &mut [i32],
+    scratch: &mut VmScratch,
+) -> VmResult {
+    if fails_trailing_literal_hint(input, hints) {
+        return VmResult::NoMatch;
+    }
+    if fails_required_literal_hint(input, start_pos, hints) {
+        return VmResult::NoMatch;
+    }
+
+    let mut vm = Vm::new(program, input, start_pos, scratch);
+    let result = vm.run();
+    if result == VmResult::Match {
+        copy_captures_to_out(vm.registers, program.capture_count, out);
+    }
+    result
+}
+
 /// Find all non-overlapping matches, writing (start, end) i32 pairs into result_buf.
 /// Returns number of matches found, or -1 if buffer is too small, or -2 if step limit exceeded.
 /// Keeps the VM alive across matches to avoid per-match setup overhead.
@@ -484,6 +574,33 @@ pub fn find_all_with_scratch<I: Input>(
     let capacity = result_buf.len();
     let mut count = 0i32;
     let mut pos = start_pos;
+
+    if let Some(ref start_hint) = hints.start_position_hint
+        && !program.unicode
+    {
+        while let Some(candidate_pos) = next_literal_start_from_hint(input, pos, start_hint) {
+            vm.reset(candidate_pos);
+            match vm.run() {
+                VmResult::Match => {
+                    let match_start = vm.registers[0];
+                    let match_end = vm.registers[1];
+                    let idx = count as usize * 2;
+                    if idx + 1 >= capacity {
+                        return -1;
+                    }
+                    result_buf[idx] = match_start;
+                    result_buf[idx + 1] = match_end;
+                    count += 1;
+                    pos = next_search_position(match_start, match_end);
+                }
+                VmResult::LimitExceeded => return -2,
+                VmResult::NoMatch => {
+                    pos = candidate_pos + 1;
+                }
+            }
+        }
+        return count;
+    }
 
     // Fast path: non-unicode pattern starting with a literal character.
     if let Some((ch, false)) = hints.first_char
@@ -622,6 +739,29 @@ fn execute_into_impl<I: Input>(
     // Reuse a single VM across all starting positions to avoid repeated allocation.
     let mut vm = Vm::new(program, input, start_pos, scratch);
     let mut hit_limit = false;
+
+    if let Some(ref start_hint) = hints.start_position_hint
+        && !program.unicode
+    {
+        let mut pos = start_pos;
+        while let Some(candidate_pos) = next_literal_start_from_hint(input, pos, start_hint) {
+            vm.reset(candidate_pos);
+            match vm.run() {
+                VmResult::Match => {
+                    copy_captures_to_out(vm.registers, program.capture_count, out);
+                    return VmResult::Match;
+                }
+                VmResult::LimitExceeded => hit_limit = true,
+                VmResult::NoMatch => {}
+            }
+            pos = candidate_pos + 1;
+        }
+        return if hit_limit {
+            VmResult::LimitExceeded
+        } else {
+            VmResult::NoMatch
+        };
+    }
 
     // Fast path: non-unicode pattern starting with a literal character.
     // Use iter().position() for bulk scanning (LLVM can auto-vectorize this).
@@ -827,19 +967,32 @@ pub struct PatternHints {
     first_char: Option<(u32, bool)>,
     /// First instruction filter: skip positions where the first matcher can't match.
     first_filter: Option<SimpleMatch>,
+    /// Leading alternatives that can only begin at position 0 or at one of a
+    /// small set of literal code units.
+    start_position_hint: Option<StartPositionHint>,
     /// Pattern starts with ^ (AssertStart) — only try at line starts (or input start).
     starts_with_anchor: bool,
     /// Whether the anchor is multiline (^ matches at line starts, not just input start).
     anchor_multiline: bool,
     /// Literal suffix immediately before a non-multiline end anchor.
     trailing_literal: Option<Vec<u16>>,
-    /// Literal tail in the linear success path that every match must contain.
-    required_literal: Option<Vec<u16>>,
+    /// Literal substring that every match must contain.
+    required_literal: Option<RequiredLiteralHint>,
     /// Simple pattern: just a single matcher (Save(0) + matcher + Save(1) + Match).
     /// Can be executed with a fast scan without the full VM.
     simple_scan: Option<SimpleScan>,
     /// Whether the full pattern can match without consuming input.
     can_match_empty: bool,
+}
+
+pub(crate) struct RequiredLiteralHint {
+    pub literal: Vec<u16>,
+    pub ascii_case_insensitive: bool,
+}
+
+struct StartPositionHint {
+    includes_input_start: bool,
+    literal_code_units: Vec<u16>,
 }
 
 /// A simple pattern that can be scanned without the full VM.
@@ -906,8 +1059,101 @@ fn first_char_at(instructions: &[Instruction], pc: usize) -> Option<(u32, bool)>
     }
 }
 
+enum LeadingAlternativeStart {
+    InputStart,
+    LiteralCodeUnit(u16),
+}
+
+fn leading_alternative_start_at(
+    instructions: &[Instruction],
+    pc: usize,
+) -> Option<LeadingAlternativeStart> {
+    match instructions.get(pc)? {
+        Instruction::AssertStart { multiline: false } => Some(LeadingAlternativeStart::InputStart),
+        Instruction::Char(c) if *c <= 0xFFFF => {
+            Some(LeadingAlternativeStart::LiteralCodeUnit(*c as u16))
+        }
+        Instruction::Save(_) | Instruction::Nop => {
+            leading_alternative_start_at(instructions, pc + 1)
+        }
+        _ => None,
+    }
+}
+
+fn analyze_start_position_hint(
+    instructions: &[Instruction],
+    start: usize,
+) -> Option<StartPositionHint> {
+    let Instruction::Split { .. } = instructions.get(start)? else {
+        return None;
+    };
+
+    let mut hint = StartPositionHint {
+        includes_input_start: false,
+        literal_code_units: Vec::new(),
+    };
+    let mut pc = start;
+
+    loop {
+        match instructions.get(pc)? {
+            Instruction::Split { prefer, other } => {
+                match leading_alternative_start_at(instructions, *prefer as usize)? {
+                    LeadingAlternativeStart::InputStart => hint.includes_input_start = true,
+                    LeadingAlternativeStart::LiteralCodeUnit(ch) => {
+                        if !hint.literal_code_units.contains(&ch) {
+                            hint.literal_code_units.push(ch);
+                        }
+                    }
+                }
+                pc = *other as usize;
+            }
+            _ => {
+                match leading_alternative_start_at(instructions, pc)? {
+                    LeadingAlternativeStart::InputStart => hint.includes_input_start = true,
+                    LeadingAlternativeStart::LiteralCodeUnit(ch) => {
+                        if !hint.literal_code_units.contains(&ch) {
+                            hint.literal_code_units.push(ch);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Keep this hint narrowly scoped to `(^|literal)` prefixes. Wider literal
+    // sets require a single-pass scanner; repeated `find_code_unit()` probes
+    // per literal turn miss-heavy inputs quadratic.
+    if hint.includes_input_start && hint.literal_code_units.len() == 1 {
+        Some(hint)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+fn next_literal_start_from_hint<I: Input>(
+    input: I,
+    start: usize,
+    hint: &StartPositionHint,
+) -> Option<usize> {
+    let [literal] = hint.literal_code_units.as_slice() else {
+        return None;
+    };
+
+    if hint.includes_input_start && start == 0 {
+        return Some(0);
+    }
+
+    input.next_literal_start(start, *literal)
+}
+
 /// Analyze the program to extract optimization hints.
-pub fn analyze_pattern(program: &Program, can_match_empty: bool) -> PatternHints {
+pub(crate) fn analyze_pattern(
+    program: &Program,
+    can_match_empty: bool,
+    ast_required_literal: Option<RequiredLiteralHint>,
+) -> PatternHints {
     // Pattern typically starts with Save(0), then the first real instruction.
     let skip = if matches!(program.instructions.first(), Some(Instruction::Save(0))) {
         1
@@ -955,6 +1201,12 @@ pub fn analyze_pattern(program: &Program, can_match_empty: bool) -> PatternHints
         None
     };
 
+    let start_position_hint = if !program.unicode {
+        analyze_start_position_hint(&program.instructions, filter_offset)
+    } else {
+        None
+    };
+
     let (starts_with_anchor, anchor_multiline) = match first_inst {
         Some(Instruction::AssertStart { multiline }) => (true, *multiline || program.multiline),
         _ => (false, false),
@@ -972,20 +1224,32 @@ pub fn analyze_pattern(program: &Program, can_match_empty: bool) -> PatternHints
         _ => None,
     };
 
-    let required_literal = match program.instructions.as_slice() {
-        [.., Instruction::Save(1), Instruction::Match] if !program.ignore_case => {
-            extract_trailing_literal(&program.instructions, program.instructions.len() - 2)
-        }
-        [
-            ..,
-            Instruction::AssertEnd { .. },
-            Instruction::Save(1),
-            Instruction::Match,
-        ] if !program.ignore_case => {
-            extract_trailing_literal(&program.instructions, program.instructions.len() - 3)
-        }
-        _ => None,
-    };
+    let required_literal =
+        pick_more_selective_required_literal(
+            ast_required_literal,
+            match program.instructions.as_slice() {
+                [.., Instruction::Save(1), Instruction::Match] if !program.ignore_case => {
+                    extract_trailing_literal(&program.instructions, program.instructions.len() - 2)
+                        .map(|literal| RequiredLiteralHint {
+                            literal,
+                            ascii_case_insensitive: false,
+                        })
+                }
+                [
+                    ..,
+                    Instruction::AssertEnd { .. },
+                    Instruction::Save(1),
+                    Instruction::Match,
+                ] if !program.ignore_case => {
+                    extract_trailing_literal(&program.instructions, program.instructions.len() - 3)
+                        .map(|literal| RequiredLiteralHint {
+                            literal,
+                            ascii_case_insensitive: false,
+                        })
+                }
+                _ => None,
+            },
+        );
 
     // Detect simple patterns: Save(0) + single_matcher + Save(1) + Match
     let simple_scan = if !program.ignore_case
@@ -1019,12 +1283,34 @@ pub fn analyze_pattern(program: &Program, can_match_empty: bool) -> PatternHints
     PatternHints {
         first_char,
         first_filter,
+        start_position_hint,
         starts_with_anchor,
         anchor_multiline,
         trailing_literal,
         required_literal,
         simple_scan,
         can_match_empty,
+    }
+}
+
+fn pick_more_selective_required_literal(
+    lhs: Option<RequiredLiteralHint>,
+    rhs: Option<RequiredLiteralHint>,
+) -> Option<RequiredLiteralHint> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if rhs.literal.len() > lhs.literal.len()
+                || (rhs.literal.len() == lhs.literal.len()
+                    && !rhs.ascii_case_insensitive
+                    && lhs.ascii_case_insensitive)
+            {
+                Some(rhs)
+            } else {
+                Some(lhs)
+            }
+        }
+        (Some(hint), None) | (None, Some(hint)) => Some(hint),
+        (None, None) => None,
     }
 }
 
