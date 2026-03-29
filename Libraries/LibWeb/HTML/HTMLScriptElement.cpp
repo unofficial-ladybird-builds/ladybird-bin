@@ -122,8 +122,7 @@ void HTMLScriptElement::execute_script()
 {
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#read-html
     // Before any script execution occurs, the user agent must wait for scripts may run for the newly-created document to be true for document.
-    if (!m_document->ready_to_run_scripts())
-        main_thread_event_loop().spin_until(GC::create_function(heap(), [&] { return m_document->ready_to_run_scripts(); }));
+    VERIFY(document().ready_to_run_scripts());
 
     // 1. Let document be el's node document.
     GC::Ref<DOM::Document> document = this->document();
@@ -688,6 +687,9 @@ void HTMLScriptElement::mark_as_ready(Result result)
 
     // 4. Set el's delaying the load event to false.
     m_document_load_event_delayer.clear();
+
+    if (m_preparation_time_document)
+        m_preparation_time_document->schedule_html_parser_end_check();
 }
 
 void HTMLScriptElement::unmark_as_already_started(Badge<DOM::Range>)

@@ -541,7 +541,7 @@ public:
     String input_encoding() const { return encoding_or_default(); }
 
     bool ready_for_post_load_tasks() const { return m_ready_for_post_load_tasks; }
-    void set_ready_for_post_load_tasks(bool ready) { m_ready_for_post_load_tasks = ready; }
+    void set_ready_for_post_load_tasks(bool ready);
 
     void completely_finish_loading();
 
@@ -576,6 +576,9 @@ public:
     void increment_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>);
     void decrement_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>);
 
+    void set_html_parser_end_state(GC::Ptr<HTML::HTMLParserEndState>);
+    void schedule_html_parser_end_check();
+
     void add_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CSS::CSSImportRule>);
     void remove_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CSS::CSSImportRule>);
 
@@ -609,7 +612,7 @@ public:
     bool allow_focus() const;
 
     void set_parser(Badge<HTML::HTMLParser>, HTML::HTMLParser&);
-    void detach_parser(Badge<HTML::HTMLParser>);
+    void detach_parser();
 
     [[nodiscard]] bool is_temporary_document_for_fragment_parsing() const { return m_temporary_document_for_fragment_parsing == TemporaryDocumentForFragmentParsing::Yes; }
 
@@ -795,7 +798,8 @@ public:
     WebIDL::ExceptionOr<Vector<GC::Ref<Animations::Animation>>> get_animations();
 
     bool ready_to_run_scripts() const { return m_ready_to_run_scripts; }
-    void set_ready_to_run_scripts() { m_ready_to_run_scripts = true; }
+    void set_ready_to_run_scripts();
+    void set_deferred_parser_start(GC::Ref<GC::Function<void()>>);
 
     GC::Ptr<HTML::SessionHistoryEntry> latest_entry() const { return m_latest_entry; }
     void set_latest_entry(GC::Ptr<HTML::SessionHistoryEntry> e) { m_latest_entry = e; }
@@ -1214,6 +1218,7 @@ private:
     GC::Ptr<HTML::History> m_history;
 
     size_t m_number_of_things_delaying_the_load_event { 0 };
+    GC::Ptr<HTML::HTMLParserEndState> m_html_parser_end_state;
 
     // https://html.spec.whatwg.org/multipage/browsing-the-web.html#concept-document-salvageable
     bool m_salvageable { true };
@@ -1360,6 +1365,7 @@ private:
 
     // https://html.spec.whatwg.org/multipage/browsing-the-web.html#scripts-may-run-for-the-newly-created-document
     bool m_ready_to_run_scripts { false };
+    GC::Ptr<GC::Function<void()>> m_deferred_parser_start;
 
     Vector<HTML::FormAssociatedElement*> m_form_associated_elements_with_form_attribute;
 
