@@ -36,39 +36,144 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(LADYBIRD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LADYBIRD_SOURCE_DIR}/Meta/CMake")
-
-include(UI/cmake/EnableLagom.cmake)
-include(lagom_options NO_POLICY_SCOPE)
-include(lagom_compile_options)
-
-if (HAIKU)
-    # Haiku needs some extra compile definitions to make important stuff in its headers available.
-    add_compile_definitions(_DEFAULT_SOURCE)
-    add_compile_definitions(_GNU_SOURCE)
-    add_compile_definitions(__USE_GNU)
-endif()
-
-add_cxx_compile_options(-Wno-expansion-to-defined)
-add_cxx_compile_options(-Wno-user-defined-literals)
-
-if (ANDROID AND ENABLE_QT)
-    message(STATUS "Disabling Qt for Android")
-    set(ENABLE_QT OFF CACHE BOOL "" FORCE)
-endif()
-
-if (ENABLE_QT AND ENABLE_GUI_TARGETS)
-    set(CMAKE_AUTOMOC ON)
-    set(CMAKE_AUTORCC ON)
-    set(CMAKE_AUTOUIC ON)
-    find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
-endif()
-
 # We need to find OpenSSL in order to link it explicitly with all targets.
 find_package(OpenSSL REQUIRED)
 
-include(CTest) # for BUILD_TESTING option, default ON
+# Ensure that when single-value arguments are passed to `cmake_parse_arguments()`
+# with no or empty string arguments, they are still defined.
+if (POLICY CMP0174)
+    cmake_policy(SET CMP0174 NEW)
+endif()
+
+set(LADYBIRD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LADYBIRD_SOURCE_DIR}/Meta/CMake")
+
+if(NOT COMMAND ladybird_option)
+    macro(ladybird_option)
+        set(${ARGV})
+    endmacro()
+endif()
+
+include(check_for_dependencies)
+include(gui_framework)
+include(cmake_options NO_POLICY_SCOPE)
+include(compile_options)
+
+if(ENABLE_ALL_THE_DEBUG_MACROS)
+    include(all_the_debug_macros)
+endif()
+
+find_package(Threads REQUIRED)
+# FIXME: This global link libraries is required to workaround linker issues (on some systems)
+# from the Ladybird import. See https://github.com/SerenityOS/serenity/issues/16847
+link_libraries(Threads::Threads)
+
+if (ENABLE_LAGOM_CCACHE)
+    include(setup_ccache)
+endif()
+
+if (ENABLE_FUZZERS_LIBFUZZER OR ENABLE_FUZZERS_OSSFUZZ)
+    set(ENABLE_FUZZERS ON)
+endif()
+
+# We need to make sure not to build code generators for Fuzzer builds, as they already have their own main.cpp
+# Instead, we import them from a previous install of Lagom. This mandates a two-stage build for fuzzers.
+# The same concern goes for cross-compile builds, where we need the tools built for the host
+set(BUILD_LAGOM_TOOLS ON)
+if (ENABLE_FUZZERS OR CMAKE_CROSSCOMPILING)
+    find_package(LagomTools REQUIRED)
+    set(BUILD_LAGOM_TOOLS OFF)
+endif()
+
+if (ENABLE_COMPILETIME_FORMAT_CHECK)
+    add_compile_definitions(ENABLE_COMPILETIME_FORMAT_CHECK)
+endif()
+
+add_library(JSClangPlugin INTERFACE)
+add_library(GenericClangPlugin INTERFACE)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang$")
+    if (ENABLE_FUZZERS_LIBFUZZER)
+        add_cxx_compile_options(-fsanitize=fuzzer)
+        set(LINKER_FLAGS "${LINKER_FLAGS} -fsanitize=fuzzer")
+    endif()
+
+    # Vanilla host builds only for building the clang plugins
+    if (ENABLE_CLANG_PLUGINS AND NOT CROSS_COMPILING AND NOT ENABLE_FUZZERS AND NOT ENABLE_COMPILER_EXPLORER_BUILD)
+        add_subdirectory(Meta/Lagom/ClangPlugins)
+        depend_on_clang_plugin(JSClangPlugin LibJSGCClangPlugin)
+        depend_on_clang_plugin(GenericClangPlugin LambdaCaptureClangPlugin)
+    endif()
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if (ENABLE_FUZZERS_LIBFUZZER)
+        message(FATAL_ERROR
+            "Fuzzer Sanitizer (-fsanitize=fuzzer) is only supported for Fuzzer targets with LLVM. "
+            "Reconfigure CMake with -DCMAKE_C_COMPILER and -DCMAKE_CXX_COMPILER pointing to a clang-based toolchain "
+     "or build binaries without built-in fuzzing support by setting -DENABLE_FUZZERS instead."
+        )
+    endif()
+endif()
+
+# These are here to support Fuzzili builds further down the directory stack
+set(ORIGINAL_CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+set(ORIGINAL_CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+set(ORIGINAL_CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS}")
+
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINKER_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINKER_FLAGS}")
+set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${LINKER_FLAGS}")
+
+include_directories(${LADYBIRD_SOURCE_DIR})
+include_directories(Libraries)
+include_directories(Services)
+include_directories(${CMAKE_BINARY_DIR})
+include_directories(${CMAKE_BINARY_DIR}/Libraries)
+include_directories(${CMAKE_BINARY_DIR}/Services)
+
+include(lagom_install)
+
+if (WIN32)
+    find_package(pthread REQUIRED)
+    find_package(mman REQUIRED)
+endif()
+
+include(rust_crate)
+include(targets)
+
+# Plugins need to be installed in order to be used by non-lagom builds
+add_lagom_library_install_rules(GenericClangPlugin)
+add_lagom_library_install_rules(JSClangPlugin)
+
+# Create mostly empty targets for system libraries we don't need to build for Lagom
+add_library(NoCoverage INTERFACE)
+# "install" these special targets to placate CMake
+install(TARGETS NoCoverage EXPORT LagomTargets)
+
+add_subdirectory(AK)
+add_subdirectory(Libraries)
+
+# Code Generators and other host tools
+if (BUILD_LAGOM_TOOLS)
+    add_subdirectory(Meta/Lagom/Tools)
+endif()
+
+if (LAGOM_TOOLS_ONLY)
+    return()
+endif()
+
+if (ENABLE_FUZZERS)
+    add_subdirectory(Meta/Lagom/Fuzzers)
+endif()
+
+# No utilities or tests in these configs
+if (NOT (ENABLE_FUZZERS OR ENABLE_COMPILER_EXPLORER_BUILD OR ANDROID OR IOS))
+    add_subdirectory(Utilities)
+
+    include(CTest)
+    if (BUILD_TESTING)
+        add_subdirectory(Tests)
+    endif()
+endif()
 
 if (ENABLE_GUI_TARGETS)
     add_subdirectory(Services)
