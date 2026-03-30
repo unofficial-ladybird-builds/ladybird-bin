@@ -1,0 +1,11 @@
+Harness status: OK
+
+Found 6 tests
+
+6 Pass
+Pass	containerName without query
+Pass	containerQuery without name
+Pass	containerName and containerQuery
+Pass	.conditions
+Pass	.conditions without name
+Pass	multiple conditions

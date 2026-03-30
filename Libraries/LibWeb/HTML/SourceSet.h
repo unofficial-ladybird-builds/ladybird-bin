@@ -8,7 +8,8 @@
 
 #include <AK/Variant.h>
 #include <LibURL/URL.h>
-#include <LibWeb/CSS/CalculatedOr.h>
+#include <LibWeb/Forward.h>
+#include <LibWeb/PixelUnits.h>
 
 namespace Web::HTML {
 
@@ -46,10 +47,10 @@ struct SourceSet {
     SourceSet();
 
     Vector<ImageSource> m_sources;
-    CSS::LengthOrCalculated m_source_size;
+    NonnullRefPtr<CSS::StyleValue const> m_source_size;
 };
 
 SourceSet parse_a_srcset_attribute(StringView);
-[[nodiscard]] CSS::LengthOrCalculated parse_a_sizes_attribute(DOM::Element const& element, StringView sizes, HTML::HTMLImageElement const* img = nullptr);
+[[nodiscard]] NonnullRefPtr<CSS::StyleValue const> parse_a_sizes_attribute(DOM::Element const& element, StringView sizes, HTML::HTMLImageElement const* img = nullptr);
 
 }

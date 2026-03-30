@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018-2024, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2020-2021, the SerenityOS developers.
- * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2026, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  * Copyright (c) 2022, MacDue <macdue@dueutil.tech>
  * Copyright (c) 2024, Shannon Booth <shannon@serenityos.org>
@@ -21,6 +21,7 @@
 #include <LibWeb/CSS/CSSStyleDeclaration.h>
 #include <LibWeb/CSS/CSSStyleProperties.h>
 #include <LibWeb/CSS/CSSStyleSheet.h>
+#include <LibWeb/CSS/ContainerQuery.h>
 #include <LibWeb/CSS/FontFace.h>
 #include <LibWeb/CSS/MediaList.h>
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
@@ -436,6 +437,43 @@ OwnPtr<Supports::Declaration> Parser::parse_supports_declaration(TokenStream<Com
         }
     }
     return {};
+}
+
+OwnPtr<BooleanExpression> Parser::parse_container_query_condition(TokenStream<ComponentValue>& tokens)
+{
+    return parse_boolean_expression(tokens, MatchResult::False, [this](auto& tokens) {
+        return parse_container_query_feature(tokens);
+    });
+}
+
+OwnPtr<BooleanExpression> Parser::parse_container_query_feature(TokenStream<ComponentValue>&)
+{
+    // https://drafts.csswg.org/css-conditional-5/#typedef-query-in-parens
+    // <query-in-parens> = ( <container-query> )
+    //                   | ( <size-feature> )
+    //                   | style( <style-query> )
+    //                   | scroll-state( <scroll-state-query> )
+    //                   | <general-enclosed>
+
+    // https://drafts.csswg.org/css-anchor-position-2/#container-rule-anchored
+    // <query-in-parens> = ...
+    //                   | anchored( <anchored-query> )
+
+    // NB: Spec isn't yet in terms of `<boolean-condition>`, so this is the closest definition to what we want.
+    //     `( <container-query> )` and `<general-enclosed>` are handled by parse_boolean_expression() already.
+
+    // FIXME: `( <size-feature> )`
+    // FIXME: `style( <style-query> )`
+    // FIXME: `scroll-state( <scroll-state-query> )`
+    // FIXME: `anchored( <anchored-query> )`
+    return nullptr;
+}
+
+RefPtr<ContainerQuery> Parser::parse_container_query(TokenStream<ComponentValue>& tokens)
+{
+    if (auto condition = parse_container_query_condition(tokens))
+        return ContainerQuery::create(condition.release_nonnull());
+    return nullptr;
 }
 
 // https://www.w3.org/TR/mediaqueries-4/#typedef-general-enclosed
@@ -1552,6 +1590,7 @@ bool Parser::is_valid_in_the_current_context(Declaration const&) const
         // Style and keyframe rules contain property declarations
         return true;
 
+    case RuleContext::AtContainer:
     case RuleContext::AtLayer:
     case RuleContext::AtMedia:
     case RuleContext::AtSupports:
@@ -1595,12 +1634,12 @@ bool Parser::is_valid_in_the_current_context(AtRule const& at_rule) const
 
     // Only grouping rules can be nested within style rules
     if (m_rule_context.contains_slow(RuleContext::Style))
-        return first_is_one_of(at_rule.name, "layer", "media", "supports");
+        return first_is_one_of(at_rule.name, "container", "layer", "media", "supports");
 
     if (m_rule_context.contains_slow(RuleContext::AtFunction)) {
         // https://drafts.csswg.org/css-mixins-1/#function-body
         // The body of a @function rule accepts conditional group rules
-        return first_is_one_of(at_rule.name, "media", "supports");
+        return first_is_one_of(at_rule.name, "container", "media", "supports");
     }
 
     switch (m_rule_context.last()) {
@@ -1612,6 +1651,7 @@ bool Parser::is_valid_in_the_current_context(AtRule const& at_rule) const
         // Already handled above
         VERIFY_NOT_REACHED();
 
+    case RuleContext::AtContainer:
     case RuleContext::AtLayer:
     case RuleContext::AtMedia:
     case RuleContext::AtSupports:
@@ -1662,6 +1702,7 @@ bool Parser::is_valid_in_the_current_context(QualifiedRule const&) const
         // Style rules can contain style rules
         return true;
 
+    case RuleContext::AtContainer:
     case RuleContext::AtLayer:
     case RuleContext::AtMedia:
     case RuleContext::AtSupports:
@@ -1750,18 +1791,16 @@ Optional<StylePropertyAndName> Parser::convert_to_style_property(Declaration con
     };
 }
 
-Optional<LengthOrAutoOrCalculated> Parser::parse_source_size_value(TokenStream<ComponentValue>& tokens)
+RefPtr<StyleValue const> Parser::parse_source_size_value(TokenStream<ComponentValue>& tokens)
 {
     if (tokens.next_token().is_ident("auto"sv)) {
         tokens.discard_a_token(); // auto
-        return LengthOrAutoOrCalculated { LengthOrAuto::make_auto() };
+        return KeywordStyleValue::create(Keyword::Auto);
     }
 
-    if (auto parsed = parse_length(tokens); parsed.has_value()) {
-        if (parsed->is_calculated())
-            return LengthOrAutoOrCalculated { parsed->calculated() };
-        return LengthOrAutoOrCalculated { parsed->value() };
-    }
+    if (auto parsed = parse_length_value(tokens))
+        return parsed;
+
     return {};
 }
 
@@ -1861,14 +1900,14 @@ RefPtr<StyleValue const> Parser::parse_as_type(ValueType value_type)
 }
 
 // https://html.spec.whatwg.org/multipage/images.html#parsing-a-sizes-attribute
-LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element, HTML::HTMLImageElement const* img)
+NonnullRefPtr<StyleValue const> Parser::parse_as_sizes_attribute(DOM::Element const& element, HTML::HTMLImageElement const* img)
 {
     // When asked to parse a sizes attribute from an element element, with an img element or null img:
 
     // AD-HOC: If element has no sizes attribute, this algorithm always logs a parse error and then returns 100vw.
     //         The attribute is optional, so avoid spamming the debug log with false positives by just returning early.
     if (!element.has_attribute(HTML::AttributeNames::sizes))
-        return Length(100, LengthUnit::Vw);
+        return LengthStyleValue::create(Length(100, LengthUnit::Vw));
 
     // 1. Let unparsed sizes list be the result of parsing a comma-separated list of component values
     //    from the value of element's sizes attribute (or the empty string, if the attribute is absent).
@@ -1876,7 +1915,7 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
     auto unparsed_sizes_list = parse_a_comma_separated_list_of_component_values(m_token_stream);
 
     // 2. Let size be null.
-    Optional<LengthOrAutoOrCalculated> size;
+    RefPtr<StyleValue const> size;
 
     auto remove_all_consecutive_whitespace_tokens_from_the_end_of = [](auto& tokens) {
         while (!tokens.is_empty() && tokens.last().is_token() && tokens.last().token().is(Token::Type::Whitespace))
@@ -1905,8 +1944,8 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
         //    Any CSS function other than the math functions is invalid.
         //    Otherwise, there is a parse error; continue.
         auto last_value_stream = TokenStream<ComponentValue>::of_single_token(unparsed_size.last());
-        if (auto source_size_value = parse_source_size_value(last_value_stream); source_size_value.has_value()) {
-            size = source_size_value.value();
+        if (auto source_size_value = parse_source_size_value(last_value_stream)) {
+            size = source_size_value.release_nonnull();
             unparsed_size.take_last();
         } else {
             log_parse_error();
@@ -1921,7 +1960,7 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
         // 3. If size is auto, and img is not null, and img is being rendered, and img allows auto-sizes,
         //    then set size to the concrete object size width of img, in CSS pixels.
         // FIXME: "img is being rendered" - we just see if it has a bitmap for now
-        if (size->is_auto() && img && img->immutable_bitmap() && img->allows_auto_sizes()) {
+        if (size->has_auto() && img && img->immutable_bitmap() && img->allows_auto_sizes()) {
             // FIXME: The spec doesn't seem to tell us how to determine the concrete size of an <img>, so use the default sizing algorithm.
             //        Should this use some of the methods from FormattingContext?
             auto concrete_size = run_default_sizing_algorithm(
@@ -1929,7 +1968,7 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
                 { img->natural_width(), img->natural_height(), img->intrinsic_aspect_ratio() },
                 // NOTE: https://html.spec.whatwg.org/multipage/rendering.html#img-contain-size
                 CSSPixelSize { 300, 150 });
-            size = Length::make_px(concrete_size.width());
+            size = LengthStyleValue::create(Length::make_px(concrete_size.width()));
         }
 
         // 4. Remove all consecutive <whitespace-token>s from the end of unparsed size.
@@ -1947,8 +1986,8 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
             }
 
             // 2. If size is not auto, then return size. Otherwise, continue.
-            if (!size->is_auto())
-                return size->without_auto();
+            if (!size->has_auto())
+                return size.release_nonnull();
             continue;
         }
 
@@ -1961,12 +2000,12 @@ LengthOrCalculated Parser::parse_as_sizes_attribute(DOM::Element const& element,
         }
 
         // 5. If size is not auto, then return size. Otherwise, continue.
-        if (!size->is_auto())
-            return size->without_auto();
+        if (!size->has_auto())
+            return size.release_nonnull();
     }
 
     // 4. Return 100vw.
-    return Length(100, LengthUnit::Vw);
+    return LengthStyleValue::create(Length(100, LengthUnit::Vw));
 }
 
 bool Parser::has_ignored_vendor_prefix(StringView string)

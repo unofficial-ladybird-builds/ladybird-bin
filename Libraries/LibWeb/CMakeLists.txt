@@ -100,17 +100,17 @@ set(SOURCES
     CSS/Angle.cpp
     CSS/AnimationEvent.cpp
     CSS/BooleanExpression.cpp
-    CSS/CalculatedOr.cpp
     CSS/CascadedProperties.cpp
     CSS/Clip.cpp
     CSS/ComputedProperties.cpp
-    CSS/CustomPropertyData.cpp
+    CSS/ContainerQuery.cpp
     CSS/CountersSet.cpp
     CSS/CounterStyle.cpp
     CSS/CounterStyleDefinition.cpp
     CSS/CSS.cpp
     CSS/CSSAnimation.cpp
     CSS/CSSConditionRule.cpp
+    CSS/CSSContainerRule.cpp
     CSS/CSSCounterStyleRule.cpp
     CSS/CSSDescriptors.cpp
     CSS/CSSFontFaceDescriptors.cpp
@@ -167,6 +167,7 @@ set(SOURCES
     CSS/CSSUnitValue.cpp
     CSS/CSSUnparsedValue.cpp
     CSS/CSSVariableReferenceValue.cpp
+    CSS/CustomPropertyData.cpp
     CSS/Descriptor.cpp
     CSS/Display.cpp
     CSS/EasingFunction.cpp
@@ -212,6 +213,7 @@ set(SOURCES
     CSS/Parser/Tokenizer.cpp
     CSS/Parser/Types.cpp
     CSS/Parser/ValueParsing.cpp
+    CSS/Percentage.cpp
     CSS/PreferredColorScheme.cpp
     CSS/PreferredContrast.cpp
     CSS/PreferredMotion.cpp

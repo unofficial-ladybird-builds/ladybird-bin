@@ -252,17 +252,6 @@ Optional<Dimension> Parser::parse_dimension(ComponentValue const& component_valu
     return {};
 }
 
-Optional<AngleOrCalculated> Parser::parse_angle(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_angle_value(tokens)) {
-        if (value->is_angle())
-            return value->as_angle().angle();
-        if (value->is_calculated())
-            return AngleOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
 Optional<AnglePercentage> Parser::parse_angle_percentage(TokenStream<ComponentValue>& tokens)
 {
     if (auto value = parse_angle_percentage_value(tokens)) {
@@ -276,28 +265,6 @@ Optional<AnglePercentage> Parser::parse_angle_percentage(TokenStream<ComponentVa
     return {};
 }
 
-Optional<FlexOrCalculated> Parser::parse_flex(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_flex_value(tokens)) {
-        if (value->is_flex())
-            return value->as_flex().flex();
-        if (value->is_calculated())
-            return FlexOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
-Optional<FrequencyOrCalculated> Parser::parse_frequency(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_frequency_value(tokens)) {
-        if (value->is_frequency())
-            return value->as_frequency().frequency();
-        if (value->is_calculated())
-            return FrequencyOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
 Optional<FrequencyPercentage> Parser::parse_frequency_percentage(TokenStream<ComponentValue>& tokens)
 {
     if (auto value = parse_frequency_percentage_value(tokens)) {
@@ -307,32 +274,6 @@ Optional<FrequencyPercentage> Parser::parse_frequency_percentage(TokenStream<Com
             return value->as_percentage().percentage();
         if (value->is_calculated())
             return FrequencyPercentage { value->as_calculated() };
-    }
-    return {};
-}
-
-Optional<IntegerOrCalculated> Parser::parse_integer(TokenStream<ComponentValue>& tokens)
-{
-    // FIXME: We don't have a way to represent tree counting functions within IntegerOrCalculated, we should avoid
-    //        parsing directly to IntegerOrCalculated unless tree counting functions are disallowed in the relevant
-    //        context
-    if (auto value = parse_integer_value(tokens)) {
-        if (value->is_integer())
-            return value->as_integer().integer();
-        if (value->is_calculated())
-            return IntegerOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
-Optional<LengthOrCalculated> Parser::parse_length(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_length_value(tokens)) {
-        if (value->is_length())
-            return value->as_length().length();
-        if (value->is_calculated())
-            return LengthOrCalculated { value->as_calculated() };
-        // FIXME: Deal with ->is_anchor_size()
     }
     return {};
 }
@@ -351,20 +292,6 @@ Optional<LengthPercentage> Parser::parse_length_percentage(TokenStream<Component
     return {};
 }
 
-Optional<NumberOrCalculated> Parser::parse_number(TokenStream<ComponentValue>& tokens)
-{
-    // FIXME: We don't have a way to represent tree counting functions within NumberOrCalculated, we should avoid
-    //        parsing directly to NumberOrCalculated unless tree counting functions are disallowed in the relevant
-    //        context
-    if (auto value = parse_number_value(tokens)) {
-        if (value->is_number())
-            return value->as_number().number();
-        if (value->is_calculated())
-            return NumberOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
 Optional<NumberPercentage> Parser::parse_number_percentage(TokenStream<ComponentValue>& tokens)
 {
     if (auto value = parse_number_percentage_value(tokens)) {
@@ -374,28 +301,6 @@ Optional<NumberPercentage> Parser::parse_number_percentage(TokenStream<Component
             return value->as_percentage().percentage();
         if (value->is_calculated())
             return NumberPercentage { value->as_calculated() };
-    }
-    return {};
-}
-
-Optional<ResolutionOrCalculated> Parser::parse_resolution(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_resolution_value(tokens)) {
-        if (value->is_resolution())
-            return value->as_resolution().resolution();
-        if (value->is_calculated())
-            return ResolutionOrCalculated { value->as_calculated() };
-    }
-    return {};
-}
-
-Optional<TimeOrCalculated> Parser::parse_time(TokenStream<ComponentValue>& tokens)
-{
-    if (auto value = parse_time_value(tokens)) {
-        if (value->is_time())
-            return value->as_time().time();
-        if (value->is_calculated())
-            return TimeOrCalculated { value->as_calculated() };
     }
     return {};
 }
@@ -1544,7 +1449,9 @@ RefPtr<StyleValue const> Parser::parse_rect_value(TokenStream<ComponentValue>& t
 
     auto context_guard = push_temporary_value_parsing_context(FunctionContext { "rect"sv });
 
-    Vector<LengthOrAuto, 4> params;
+    StyleValueVector params;
+    params.ensure_capacity(4);
+
     auto argument_tokens = TokenStream { function_token.function().value };
 
     enum class CommaRequirement {
@@ -1572,16 +1479,13 @@ RefPtr<StyleValue const> Parser::parse_rect_value(TokenStream<ComponentValue>& t
         // Negative lengths are permitted.
         if (argument_tokens.next_token().is_ident("auto"sv)) {
             (void)argument_tokens.consume_a_token(); // `auto`
-            params.append(LengthOrAuto::make_auto());
+            params.append(KeywordStyleValue::create(Keyword::Auto));
         } else {
-            auto maybe_length = parse_length(argument_tokens);
-            if (!maybe_length.has_value())
+            auto maybe_length = parse_length_value(argument_tokens);
+            if (!maybe_length)
                 return nullptr;
-            if (maybe_length.value().is_calculated()) {
-                dbgln("FIXME: Support calculated lengths in rect(): {}", maybe_length.value().calculated()->to_string(CSS::SerializationMode::Normal));
-                return nullptr;
-            }
-            params.append(maybe_length.value().value());
+
+            params.append(maybe_length.release_nonnull());
         }
         argument_tokens.discard_whitespace();
 
@@ -1614,7 +1518,7 @@ RefPtr<StyleValue const> Parser::parse_rect_value(TokenStream<ComponentValue>& t
     }
 
     transaction.commit();
-    return RectStyleValue::create(EdgeRect { params[0], params[1], params[2], params[3] });
+    return RectStyleValue::create(params[0], params[1], params[2], params[3]);
 }
 
 // https://www.w3.org/TR/css-color-4/#typedef-hue
@@ -2257,20 +2161,9 @@ RefPtr<StyleValue const> Parser::parse_color_mix_function(TokenStream<ComponentV
             if (percentage < 0 || percentage > 100)
                 return {};
         }
-        Optional<PercentageOrCalculated> percentage_or_calculated;
-        if (percentage_style_value) {
-            if (percentage_style_value->is_calculated()) {
-                percentage_or_calculated = PercentageOrCalculated { percentage_style_value->as_calculated() };
-            } else if (percentage_style_value->is_percentage()) {
-                percentage_or_calculated = PercentageOrCalculated { percentage_style_value->as_percentage().percentage() };
-            } else {
-                VERIFY_NOT_REACHED();
-            }
-        }
-
         return ColorMixStyleValue::ColorMixComponent {
             .color = color_style_value.release_nonnull(),
-            .percentage = move(percentage_or_calculated),
+            .percentage = move(percentage_style_value),
         };
     };
 
@@ -2303,9 +2196,9 @@ RefPtr<StyleValue const> Parser::parse_color_mix_function(TokenStream<ComponentV
     if (!second_component.has_value())
         return {};
 
-    if (first_component->percentage.has_value() && second_component->percentage.has_value()
+    if (first_component->percentage && second_component->percentage
         && !first_component->percentage->is_calculated() && !second_component->percentage->is_calculated()
-        && first_component->percentage->value().value() == 0 && second_component->percentage->value().value() == 0) {
+        && first_component->percentage->as_percentage().percentage().value() == 0 && second_component->percentage->as_percentage().percentage().value() == 0) {
         return {};
     }
 
@@ -4796,16 +4689,13 @@ Optional<GridRepeat> Parser::parse_grid_track_repeat(TokenStream<ComponentValue>
     // <track-repeat> = repeat( [ <integer [1,∞]> ] , [ <line-names>? <track-size> ]+ <line-names>? )
 
     GridRepeatTypeParser parse_repeat_type = [this](TokenStream<ComponentValue>& tokens) -> Optional<GridRepeatParams> {
-        auto maybe_integer = parse_integer(tokens);
-        if (!maybe_integer.has_value())
+        auto context_guard = push_temporary_value_parsing_context(SpecialContext::GridTrackRepeatCount);
+
+        auto maybe_integer = parse_integer_value(tokens);
+        if (!maybe_integer || (maybe_integer->is_integer() && maybe_integer->as_integer().integer() < 1))
             return {};
-        if (maybe_integer->is_calculated()) {
-            // FIXME: Support calculated repeat counts.
-            return {};
-        }
-        if (maybe_integer->value() < 1)
-            return {};
-        return GridRepeatParams { GridRepeatType::Fixed, static_cast<size_t>(maybe_integer->value()) };
+
+        return GridRepeatParams { GridRepeatType::Fixed, maybe_integer };
     };
     GridTrackParser parse_track = [this](TokenStream<ComponentValue>& tokens) {
         return parse_grid_track_size(tokens);
@@ -4843,16 +4733,13 @@ Optional<GridRepeat> Parser::parse_grid_fixed_repeat(TokenStream<ComponentValue>
     // <fixed-repeat> = repeat( [ <integer [1,∞]> ] , [ <line-names>? <fixed-size> ]+ <line-names>? )
 
     GridRepeatTypeParser parse_repeat_type = [this](TokenStream<ComponentValue>& tokens) -> Optional<GridRepeatParams> {
-        auto maybe_integer = parse_integer(tokens);
-        if (!maybe_integer.has_value())
+        auto context_guard = push_temporary_value_parsing_context(SpecialContext::GridTrackRepeatCount);
+
+        auto maybe_integer = parse_integer_value(tokens);
+        if (!maybe_integer || (maybe_integer->is_integer() && maybe_integer->as_integer().integer() < 1))
             return {};
-        if (maybe_integer->is_calculated()) {
-            // FIXME: Support calculated repeat counts.
-            return {};
-        }
-        if (maybe_integer->value() < 1)
-            return {};
-        return GridRepeatParams { GridRepeatType::Fixed, static_cast<size_t>(maybe_integer->value()) };
+
+        return GridRepeatParams { GridRepeatType::Fixed, maybe_integer };
     };
     GridTrackParser parse_track = [this](TokenStream<ComponentValue>& tokens) {
         return parse_grid_fixed_size(tokens);
@@ -5024,7 +4911,7 @@ RefPtr<GridTrackPlacementStyleValue const> Parser::parse_grid_track_placement(To
     //     [ span && [ <integer [1,∞]> || <custom-ident> ] ]
     bool is_span = false;
     Optional<String> parsed_custom_ident;
-    Optional<IntegerOrCalculated> parsed_integer;
+    RefPtr<StyleValue const> parsed_integer;
 
     auto transaction = tokens.begin_transaction();
     tokens.discard_whitespace();
@@ -5042,7 +4929,7 @@ RefPtr<GridTrackPlacementStyleValue const> Parser::parse_grid_track_placement(To
             tokens.discard_a_token(); // span
 
             // NOTE: "span" must not appear in between <custom-ident> and <integer>
-            if (tokens.has_next_token() && (parsed_custom_ident.has_value() || parsed_integer.has_value()))
+            if (tokens.has_next_token() && (parsed_custom_ident.has_value() || parsed_integer))
                 return nullptr;
 
             is_span = true;
@@ -5059,8 +4946,10 @@ RefPtr<GridTrackPlacementStyleValue const> Parser::parse_grid_track_placement(To
             continue;
         }
 
-        if (auto maybe_parsed_integer = parse_integer(tokens); maybe_parsed_integer.has_value()) {
-            if (parsed_integer.has_value())
+        // FIXME: Use the correct value parsing context here to clamp calculated values (note the non-contiguous valid
+        //        range for integers for non-span)
+        if (auto maybe_parsed_integer = parse_integer_value(tokens)) {
+            if (parsed_integer)
                 return nullptr;
 
             parsed_integer = maybe_parsed_integer;
@@ -5075,13 +4964,13 @@ RefPtr<GridTrackPlacementStyleValue const> Parser::parse_grid_track_placement(To
 
     // <custom-ident>
     // [ [ <integer [-∞,-1]> | <integer [1,∞]> ] && <custom-ident>? ]
-    if (!is_span && (parsed_integer.has_value() || parsed_custom_ident.has_value()) && (!parsed_integer.has_value() || parsed_integer.value().is_calculated() || parsed_integer.value().value() != 0))
+    if (!is_span && (parsed_integer || parsed_custom_ident.has_value()) && (!parsed_integer || !parsed_integer->is_integer() || parsed_integer->as_integer().integer() != 0))
         return GridTrackPlacementStyleValue::create(GridTrackPlacement::make_line(parsed_integer, parsed_custom_ident));
 
     // [ span && [ <integer [1,∞]> || <custom-ident> ] ]
-    if (is_span && (parsed_integer.has_value() || parsed_custom_ident.has_value()) && (!parsed_integer.has_value() || parsed_integer.value().is_calculated() || parsed_integer.value().value() > 0))
+    if (is_span && (parsed_integer || parsed_custom_ident.has_value()) && (!parsed_integer || !parsed_integer->is_integer() || parsed_integer->as_integer().integer() > 0))
         // If the <integer> is omitted, it defaults to 1.
-        return GridTrackPlacementStyleValue::create(GridTrackPlacement::make_span(parsed_integer.value_or(1), parsed_custom_ident));
+        return GridTrackPlacementStyleValue::create(GridTrackPlacement::make_span(parsed_integer ? parsed_integer.release_nonnull() : IntegerStyleValue::create(1), parsed_custom_ident));
 
     return nullptr;
 }
@@ -5167,6 +5056,8 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                     return CalculationContext { .accepted_type_ranges = { { ValueType::Number, { 0, 1 } } } };
                 case SpecialContext::FontStyleAngle:
                     return CalculationContext { .accepted_type_ranges = { { ValueType::Angle, { -90, 90 } } } };
+                case SpecialContext::GridTrackRepeatCount:
+                    return CalculationContext { .resolve_numbers_as_integers = true, .accepted_type_ranges = { { ValueType::Integer, { 1, NumericLimits<i32>::max() } } } };
                 case SpecialContext::RadialSizeLengthPercentage:
                     // Radial size length-percentages are nonnegative
                     return CalculationContext { .percentages_resolve_as = ValueType::Length, .accepted_type_ranges = { { ValueType::Length, { 0, NumericLimits<float>::max() } } } };
