@@ -24,6 +24,7 @@
 #include <LibWeb/CSS/ContainerQuery.h>
 #include <LibWeb/CSS/FontFace.h>
 #include <LibWeb/CSS/MediaList.h>
+#include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyName.h>
@@ -2006,6 +2007,52 @@ NonnullRefPtr<StyleValue const> Parser::parse_as_sizes_attribute(DOM::Element co
 
     // 4. Return 100vw.
     return LengthStyleValue::create(Length(100, LengthUnit::Vw));
+}
+
+Parser::ParseErrorOr<void> Parser::collect_arbitrary_substitution_function_presence(Vector<ComponentValue> const& component_values, SubstitutionFunctionsPresence& presence)
+{
+    for (auto const& component_value : component_values) {
+        if (collect_arbitrary_substitution_function_presence(component_value, presence).is_error())
+            return ParseError::SyntaxError;
+    }
+
+    return {};
+}
+
+Parser::ParseErrorOr<void> Parser::collect_arbitrary_substitution_function_presence(ComponentValue const& component_value, SubstitutionFunctionsPresence& presence)
+{
+    if (component_value.is_function()) {
+        auto const& function = component_value.function();
+        if (auto arbitrary_substitution_function = to_arbitrary_substitution_function(function.name); arbitrary_substitution_function.has_value()) {
+            if (!parse_according_to_argument_grammar(arbitrary_substitution_function.value(), function.value).has_value())
+                return ParseError::SyntaxError;
+
+            switch (arbitrary_substitution_function.value()) {
+            case ArbitrarySubstitutionFunction::Attr:
+                presence.attr = true;
+                break;
+            case ArbitrarySubstitutionFunction::Env:
+                presence.env = true;
+                break;
+            case ArbitrarySubstitutionFunction::If:
+                presence.if_ = true;
+                break;
+            case ArbitrarySubstitutionFunction::Inherit:
+                presence.inherit = true;
+                break;
+            case ArbitrarySubstitutionFunction::Var:
+                presence.var = true;
+                break;
+            }
+        }
+
+        return collect_arbitrary_substitution_function_presence(function.value, presence);
+    }
+
+    if (component_value.is_block())
+        return collect_arbitrary_substitution_function_presence(component_value.block().value, presence);
+
+    return {};
 }
 
 bool Parser::has_ignored_vendor_prefix(StringView string)

@@ -11,6 +11,7 @@
 #include <LibWeb/CSS/CSSUnparsedValue.h>
 #include <LibWeb/CSS/CSSVariableReferenceValue.h>
 #include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/Parser/TokenStream.h>
 #include <LibWeb/CSS/PropertyName.h>
 #include <LibWeb/CSS/Serialize.h>
@@ -18,19 +19,9 @@
 
 namespace Web::CSS {
 
-ValueComparingNonnullRefPtr<UnresolvedStyleValue const> UnresolvedStyleValue::create(Vector<Parser::ComponentValue>&& values, Optional<Parser::SubstitutionFunctionsPresence> substitution_presence, Optional<String> original_source_text)
+ValueComparingNonnullRefPtr<UnresolvedStyleValue const> UnresolvedStyleValue::create(Vector<Parser::ComponentValue>&& values, Parser::SubstitutionFunctionsPresence substitution_presence, Optional<String> original_source_text)
 {
-    if (!substitution_presence.has_value()) {
-        substitution_presence = Parser::SubstitutionFunctionsPresence {};
-        for (auto const& value : values) {
-            if (value.is_function())
-                value.function().contains_arbitrary_substitution_function(*substitution_presence);
-            if (value.is_block())
-                value.block().contains_arbitrary_substitution_function(*substitution_presence);
-        }
-    }
-
-    return adopt_ref(*new (nothrow) UnresolvedStyleValue(move(values), *substitution_presence, move(original_source_text)));
+    return adopt_ref(*new (nothrow) UnresolvedStyleValue(move(values), substitution_presence, move(original_source_text)));
 }
 
 UnresolvedStyleValue::UnresolvedStyleValue(Vector<Parser::ComponentValue>&& values, Parser::SubstitutionFunctionsPresence substitution_presence, Optional<String> original_source_text)
