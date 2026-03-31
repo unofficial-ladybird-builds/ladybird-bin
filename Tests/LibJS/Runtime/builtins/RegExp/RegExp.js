@@ -23,16 +23,90 @@ describe("errors", () => {
         }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid character class");
     });
 
+    test("invalid pattern (negated v-mode class cannot contain nested strings)", () => {
+        for (const pattern of [
+            "[^[[\\p{Emoji_Keycap_Sequence}]]]",
+            "[^[[\\q{ab}]]]",
+            String.raw`[[[\p{Emoji_Presentation}]][\p{Math}]].*\p{Script=Hebrew}*\t[[^a-z]]?(?:\s{3}.+?[^[[\p{Emoji_Keycap_Sequence}]--[А-Я]][[\p{Script=Hebrew}]--[\p{Script=Latin}]]]??)`,
+        ]) {
+            expect(() => {
+                RegExp(pattern, "v");
+            }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid character class");
+        }
+    });
+
+    test("valid pattern (negated v-mode class set ops can eliminate strings)", () => {
+        for (const pattern of [
+            "[^[[a-z]--[\\q{ab}]]]",
+            "[^[[\\q{ab}]&&[a-z]]]",
+            "[^[[\\q{ab}]--[\\q{ab}]]]",
+            "[^[[\\q{ab}]&&[\\q{cd}]]]",
+        ]) {
+            expect(() => {
+                RegExp(pattern, "v");
+            }).not.toThrow();
+        }
+    });
+
     test("invalid pattern (invalid quantifier)", () => {
         expect(() => {
             RegExp("a{2,1}");
         }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid quantifier");
     });
 
+    test("large quantifier bounds clamp before order validation", () => {
+        for (const pattern of [
+            "a{2147483648}",
+            "a{2147483648,}",
+            "a{2147483648,2147483647}",
+            "a{2147483648,2147483648}",
+            "a{99999999999999999999999999999999999999999999999999}",
+        ]) {
+            expect(() => {
+                new RegExp(pattern);
+            }).not.toThrow();
+            expect(new RegExp(pattern).source).toBe(pattern);
+        }
+
+        for (const pattern of ["a{2147483647,2147483646}", "a{2147483648,2147483646}"]) {
+            expect(() => {
+                new RegExp(pattern);
+            }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid quantifier");
+        }
+    });
+
     test("invalid pattern (invalid group name)", () => {
         expect(() => {
             RegExp("(?<>a)");
         }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid group name");
+    });
+
+    test("invalid pattern (mixed surrogate forms in named group names)", () => {
+        for (const pattern of [
+            "(?<a\\uD835\udcf8>.)",
+            "(?<a\ud835\\uDCF8>.)",
+            "(?<a\\uD835\\u{DCF8}>.)",
+            "(?<a\\u{D835}\\uDCF8>.)",
+            "(?<a\\u{D835}\\u{DCF8}>.)",
+        ]) {
+            expect(() => {
+                RegExp(pattern);
+            }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid group name");
+        }
+    });
+
+    test("invalid pattern (mixed surrogate forms in named backreferences)", () => {
+        for (const pattern of [
+            "(?<a\\uD835\\uDCF8>.)\\k<a\\uD835\udcf8>",
+            "(?<a\\uD835\\uDCF8>.)\\k<a\ud835\\uDCF8>",
+            "(?<a\\uD835\\uDCF8>.)\\k<a\\uD835\\u{DCF8}>",
+            "(?<a\\uD835\\uDCF8>.)\\k<a\\u{D835}\\uDCF8>",
+            "(?<a\\uD835\\uDCF8>.)\\k<a\\u{D835}\\u{DCF8}>",
+        ]) {
+            expect(() => {
+                RegExp(pattern);
+            }).toThrowWithMessage(SyntaxError, "RegExp compile error: invalid group name");
+        }
     });
 
     test("invalid flag", () => {
@@ -55,6 +129,145 @@ test("basic functionality", () => {
     expect(RegExp("foo", undefined).toString()).toBe("/foo/");
     expect(RegExp("foo", "g").toString()).toBe("/foo/g");
     expect(RegExp(undefined, "g").toString()).toBe("/(?:)/g");
+});
+
+test("anchored regexes behave correctly on long ASCII subjects", () => {
+    const longFoo = "foo".repeat(262_144);
+    const cases = [
+        [/^bar/, false],
+        [/^foo|^bar|^baz/, true],
+        [/(^bar)/, false],
+        [/(?=^bar)\w+/, false],
+    ];
+
+    for (const [regex, expected] of cases) expect(regex.test(longFoo)).toBe(expected);
+});
+
+test("anchored and sticky regexes still prune missing required literals", () => {
+    const subject = "a".repeat(5000);
+
+    expect(/^(a+)+b/.exec(subject)).toBeNull();
+
+    const sticky = /(a+)+b/y;
+    expect(sticky.exec(subject)).toBeNull();
+
+    expect(subject.match(/^(a+)+b/g)).toBeNull();
+});
+
+test("repeated simple loops do not exceed the backtrack limit", () => {
+    const source = "a+".repeat(100) + "x";
+    const match = "a".repeat(100) + "x";
+    const subject = match.repeat(3);
+
+    expect(new RegExp(source).exec(subject)).toEqual([match]);
+    expect(new RegExp(source, "g").exec(subject)).toEqual([match]);
+    expect(subject.replace(new RegExp(source, "g"), "")).toBe("");
+    expect(
+        subject.replace(new RegExp(source, "g"), () => {
+            return "";
+        })
+    ).toBe("");
+});
+
+test("bounded repeated simple loops keep already-available suffix chars", () => {
+    const regex = /a{1,3}a{2,4}a+x/;
+
+    expect(regex.exec("aaaax")).toEqual(["aaaax"]);
+    expect(new RegExp(regex.source, "g").exec("aaaax")).toEqual(["aaaax"]);
+});
+
+test("adjacent bounded repeated simple loops fail without exhausting backtracking", () => {
+    const regex = /a{1,3}a{2,4}z/;
+
+    expect(regex.exec("aaaaay")).toBeNull();
+    expect(new RegExp(regex.source, "g").exec("aaaaay")).toBeNull();
+});
+
+test("negated unicode property lookbehind keeps backward direction", () => {
+    expect("a2".match(/(?<=[^\p{Emoji}])2/v)).toEqual(["2"]);
+    expect("{2".match(/(?<=[^\p{Emoji}])2/v)).toEqual(["2"]);
+    expect("🆎2".match(/(?<=[^\p{Emoji}])2/v)).toBeNull();
+    expect("🆎{2".match(/(?<=[^\p{Emoji}])2/v)).toEqual(["2"]);
+
+    expect("a2".match(/(?<=[[^\p{Emoji}]])2/v)).toEqual(["2"]);
+    expect("{2".match(/(?<=[[^\p{Emoji}]])2/v)).toEqual(["2"]);
+    expect("🆎2".match(/(?<=[[^\p{Emoji}]])2/v)).toBeNull();
+    expect("🆎{2".match(/(?<=[[^\p{Emoji}]])2/v)).toEqual(["2"]);
+});
+
+test("complex v-mode lookbehind with negated emoji class finds the V8 match", () => {
+    const subject =
+        "🆎🔢🔢🆑🔢🔢= מנד{2130 地地地 *=+#~^/ ش-[#####✈️?🎉ежГ😇עברית سلام ×∂∏≥≠=שززז 漢字? yaqamby 日本語\t%%%% ##\tPBZمرحباΒΒΒ@%`|^#]\n\n\n\n\nηηηη3226858 ";
+    const regex =
+        /(?<![А-Яα-ω[\p{Script=Cyrillic}][[\p{Letter_Number}]]])(?<=[[^\p{Emoji}]])(?<g65>\p{N}??)(\w)(?:[[\p{Decimal_Number}]]\p{N}+?\s+\p{Symbol}*?).*\k<g65>/v;
+    const expected =
+        "2130 地地地 *=+#~^/ ش-[#####✈️?🎉ежГ😇עברית سلام ×∂∏≥≠=שززז 漢字? yaqamby 日本語\t%%%% ##\tPBZمرحباΒΒΒ@%`|^#]";
+
+    const result = regex.exec(subject);
+    expect(result).not.toBeNull();
+    expect(result[0]).toBe(expected);
+    expect(result[2]).toBe("2");
+    expect(result.groups.g65).toBe("");
+
+    expect(subject.match(new RegExp(regex.source, "gv"))).toEqual([expected]);
+});
+
+test("unicode lastIndex retries the original low-surrogate position after a failed snap-back", () => {
+    const regex = /\p{Script=Cyrillic}?(?<!\D)/vy;
+    regex.lastIndex = 2;
+
+    const result = regex.exec("A😘");
+    expect(result).not.toBeNull();
+    expect(result.index).toBe(2);
+    expect(result[0]).toBe("");
+    expect(regex.lastIndex).toBe(2);
+
+    expect("A😘".match(/\p{Script=Cyrillic}?(?<!\D)/gv)).toEqual(["", ""]);
+});
+
+test("unicode lastIndex still snaps to the start of a surrogate pair when that matches", () => {
+    const regex = /😀/uy;
+    regex.lastIndex = 1;
+
+    const result = regex.exec("😀");
+    expect(result).not.toBeNull();
+    expect(result.index).toBe(0);
+    expect(result[0]).toBe("😀");
+    expect(regex.lastIndex).toBe(2);
+});
+
+test("unicode lastIndex does not retry consuming matches at low surrogates", () => {
+    const regex = /[^😀]/uy;
+    regex.lastIndex = 1;
+
+    expect(regex.exec("😀")).toBeNull();
+    expect(regex.lastIndex).toBe(0);
+
+    regex.lastIndex = 1;
+    expect("😀".replace(regex, "x")).toBe("😀");
+});
+
+test("global unicode matches keep low-surrogate empty matches that V8 finds", () => {
+    const subject =
+        "سلام 카차가≠ -YA😘🙂🤔 ذذذ/8️⃣ бшгА884 жЕ 🌟🎀🎀🎈✨🚀\n✨тест( \n\t \t },{ `:कगवचचजय mmmmm\t999\n⚡💢💥❤️💧;人बई÷{{😊😊🔢🔢🔢_";
+    expect(subject.match(/\p{Script=Cyrillic}?(?<!\D)/gv)).toEqual(new Array(24).fill(""));
+});
+
+test("backward v-mode class-set operations inspect the consumed code point", () => {
+    expect("A n".match(/(?<=[[^A-Z]--[A-Z]])\P{N}/gv)).toEqual(["n"]);
+    expect("A n".match(/(?<=[[^0-9]&&[^A-Z]])\P{N}/gv)).toEqual(["n"]);
+    expect("В Β".match(/(?<=[[^А-Я]--[А-Я]])\P{N}/gv)).toEqual(["Β"]);
+    expect("Дnह".match(/(?<=[[^А-Я]--[А-Я]])\P{N}/gv)).toEqual(["ह"]);
+
+    const subject =
+        "🤔🤔🤔🤔🤔 💫🎊✨🎈🎀Γ 5 208549 😂ש ∂∂∂∂ В ΒβιηδγΓ\\nYזااااا1טתזעוש M αα שלום 8🔤😐 P¥~μμμ سمвшДnहर`7*️⃣*️⃣*️⃣ 🙃🙃🙃🙃🙃привет";
+    const matches = subject.match(/(?<=[[^А-Я]--[А-Я]])(\P{N})/gv);
+    const positions = Array.from(subject.matchAll(/(?<=[[^А-Я]--[А-Я]])(\P{N})/gv), match => match.index);
+
+    expect(matches).not.toBeNull();
+    expect(matches.length).toBe(95);
+    expect(positions.includes(subject.indexOf("Β"))).toBeTrue();
+    expect(positions.includes(subject.indexOf("ह"))).toBeTrue();
 });
 
 test("regexp object as pattern parameter", () => {
@@ -130,6 +343,30 @@ test("Unicode non-ASCII matching", () => {
         const result = test.match.match(test.pattern);
         expect(result).toEqual(test.expected);
     }
+});
+
+test("named group names accept literal and escaped surrogate pairs", () => {
+    for (const pattern of ["(?<a\ud835\udcf8>.)", "(?<a\\uD835\\uDCF8>.)", "(?<a\\u{1D4F8}>.)"]) {
+        const match = RegExp(pattern).exec("x");
+        expect(match.groups["a\u{1D4F8}"]).toBe("x");
+    }
+});
+
+test("named backreferences accept literal and escaped surrogate pairs", () => {
+    for (const pattern of [
+        "(?<a\ud835\udcf8>.)\\k<a\ud835\udcf8>",
+        "(?<a\\uD835\\uDCF8>.)\\k<a\\uD835\\uDCF8>",
+        "(?<a\\u{1D4F8}>.)\\k<a\\u{1D4F8}>",
+    ]) {
+        expect(RegExp(pattern).test("xx")).toBeTrue();
+    }
+});
+
+test("legacy \\k identity escapes bypass named backreference surrogate validation", () => {
+    const subject = "k<\uDC00>";
+
+    expect(new RegExp("\\k<\uDC00>").exec(subject)).toEqual([subject]);
+    expect(/\k<\uDC00>/.exec(subject)).toEqual([subject]);
 });
 
 // https://github.com/tc39/test262/tree/main/test/built-ins/RegExp/unicodeSets/generated
@@ -392,6 +629,14 @@ test("RegExp string literal", () => {
         { pattern: /[[\d+]--[\q{1}]]/gv, match: "12", expected: ["2"] },
         { pattern: /[[\d]&&[\q{1}]]/gv, match: "21", expected: ["1"] },
         { pattern: /[\d\q{a}]/gv, match: "a1", expected: ["a", "1"] },
+        { pattern: /[[a-z]--\q{abc}]/gv, match: "abcde", expected: ["a", "b", "c", "d", "e"] },
+        { pattern: /[[a-z]--\q{a|bc}]/gv, match: "abcde", expected: ["b", "c", "d", "e"] },
+        { pattern: /[[a-z]&&\q{abc}]/gv, match: "abcde", expected: null },
+        { pattern: /[\q{abc}&&[a-z]]/gv, match: "abcde", expected: null },
+        { pattern: /[\q{a|bc}&&[a-z]]/gv, match: "abcde", expected: ["a"] },
+        { pattern: /[\q{bc|x}--\q{abc}]/gv, match: "abcde", expected: ["bc"] },
+        { pattern: /[\q{abc}--[a-z]]/gv, match: "abcde", expected: ["abc"] },
+        { pattern: /[\q{a|bc}--[a-z]]/gv, match: "abcde", expected: ["bc"] },
     ].forEach(test => {
         const result = test.match.match(test.pattern);
         expect(result).toEqual(test.expected);

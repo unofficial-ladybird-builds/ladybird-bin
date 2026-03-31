@@ -13,6 +13,8 @@
 //! - <https://tc39.es/ecma262/#sec-parsepattern>
 use crate::ast::*;
 
+const MAX_BRACED_QUANTIFIER: u32 = i32::MAX as u32;
+
 /// Parse a regex pattern string with the given flags.
 ///
 /// Spec entry point: `ParsePattern`.
@@ -447,18 +449,15 @@ impl Parser {
     /// - `Ok(None)` if no digits were found
     /// - `Ok(Some(n))` if a valid u32 was parsed
     ///
-    /// On overflow, saturates to `u32::MAX` instead of erroring,
-    /// since the spec allows arbitrarily large quantifier values.
+    /// Clamp braced quantifier bounds to 2^31 - 1 to match browser behavior.
     fn try_parse_decimal(&mut self) -> Result<Option<u32>, Error> {
         let start = self.pos;
         let mut value: u32 = 0;
         while let Some(ch) = self.peek() {
             if let Some(digit) = ch.to_digit(10) {
                 self.pos += 1;
-                value = value
-                    .checked_mul(10)
-                    .and_then(|v| v.checked_add(digit))
-                    .unwrap_or(u32::MAX);
+                value = value.saturating_mul(10).saturating_add(digit);
+                value = value.min(MAX_BRACED_QUANTIFIER);
             } else {
                 break;
             }
@@ -1049,9 +1048,15 @@ impl Parser {
         let ch = self.advance().ok_or(Error::InvalidGroupName)?;
         if ch == '\\' {
             if self.eat('u') {
+                let first_is_braced = self.peek() == Some('{');
                 let cp = self.parse_unicode_escape_in_name()?;
-                // Handle surrogate pairs: \uD800\uDC00
-                if (0xD800..=0xDBFF).contains(&cp) && self.eat('\\') && self.eat('u') {
+                // Handle surrogate pairs only for \uHHHH\uHHHH, not \u{...}.
+                if !first_is_braced
+                    && (0xD800..=0xDBFF).contains(&cp)
+                    && self.eat('\\')
+                    && self.eat('u')
+                    && self.peek() != Some('{')
+                {
                     let low = self.parse_unicode_escape_in_name()?;
                     if (0xDC00..=0xDFFF).contains(&low) {
                         let combined = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
@@ -1183,6 +1188,9 @@ impl Parser {
                 self.parse_class_set_expression()?
             };
             self.in_negated_class = saved_negated;
+            if negated && !Self::class_set_expression_strings(&expr).is_empty() {
+                return Err(Error::InvalidCharacterClass);
+            }
             self.expect(']')?;
             Ok(CharacterClass {
                 negated,
@@ -1441,6 +1449,107 @@ impl Parser {
         }
 
         Ok(())
+    }
+
+    fn get_string_property_strings(name: &str) -> std::collections::BTreeSet<Vec<u32>> {
+        let buf = crate::unicode_ffi::get_string_property_data(name);
+        if buf.is_empty() {
+            return std::collections::BTreeSet::new();
+        }
+
+        let count = buf[0] as usize;
+        let mut strings = std::collections::BTreeSet::new();
+        let mut offset = 1;
+        for _ in 0..count {
+            if offset >= buf.len() {
+                break;
+            }
+            let len = buf[offset] as usize;
+            offset += 1;
+            if offset + len > buf.len() {
+                break;
+            }
+            if len > 1 {
+                strings.insert(buf[offset..offset + len].to_vec());
+            }
+            offset += len;
+        }
+        strings
+    }
+
+    fn class_set_expression_strings(
+        expr: &ClassSetExpression,
+    ) -> std::collections::BTreeSet<Vec<u32>> {
+        match expr {
+            ClassSetExpression::Union(operands) => {
+                operands
+                    .iter()
+                    .fold(std::collections::BTreeSet::new(), |mut strings, operand| {
+                        strings.extend(Self::class_set_operand_strings(operand));
+                        strings
+                    })
+            }
+            ClassSetExpression::Intersection(operands) => {
+                let Some((first, rest)) = operands.split_first() else {
+                    return std::collections::BTreeSet::new();
+                };
+                let mut strings = Self::class_set_operand_strings(first);
+                for operand in rest {
+                    let operand_strings = Self::class_set_operand_strings(operand);
+                    strings.retain(|string| operand_strings.contains(string));
+                }
+                strings
+            }
+            ClassSetExpression::Subtraction(operands) => {
+                let Some((first, rest)) = operands.split_first() else {
+                    return std::collections::BTreeSet::new();
+                };
+                let mut strings = Self::class_set_operand_strings(first);
+                for operand in rest {
+                    let operand_strings = Self::class_set_operand_strings(operand);
+                    strings.retain(|string| !operand_strings.contains(string));
+                }
+                strings
+            }
+        }
+    }
+
+    fn class_set_operand_strings(
+        operand: &ClassSetOperand,
+    ) -> std::collections::BTreeSet<Vec<u32>> {
+        match operand {
+            ClassSetOperand::NestedClass(class) => {
+                if class.negated {
+                    return std::collections::BTreeSet::new();
+                }
+                match &class.body {
+                    CharacterClassBody::Ranges(_) => std::collections::BTreeSet::new(),
+                    CharacterClassBody::UnicodeSet(expr) => {
+                        Self::class_set_expression_strings(expr)
+                    }
+                }
+            }
+            ClassSetOperand::UnicodeProperty(property) => {
+                if !property.negated
+                    && property.value.is_none()
+                    && Self::is_string_property(&property.name)
+                {
+                    return Self::get_string_property_strings(&property.name);
+                }
+                std::collections::BTreeSet::new()
+            }
+            ClassSetOperand::StringLiteral(chars) => {
+                if chars.len() > 1 {
+                    return [chars.iter().map(|ch| *ch as u32).collect()]
+                        .into_iter()
+                        .collect();
+                }
+                std::collections::BTreeSet::new()
+            }
+            ClassSetOperand::Char(_)
+            | ClassSetOperand::Range(_, _)
+            | ClassSetOperand::BuiltinClass(_) => std::collections::BTreeSet::new(),
+        }
     }
 
     /// Parse one `/v` `ClassSetOperand`.

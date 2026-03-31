@@ -397,6 +397,25 @@ fn fails_required_literal_hint<I: Input>(input: I, start: usize, hints: &Pattern
     !matched
 }
 
+// Detect a leading input-start assertion even when it is wrapped in the
+// non-consuming setup instructions emitted for captures or lookahead.
+#[inline(always)]
+fn leading_start_anchor_at(instructions: &[Instruction], pc: usize) -> Option<bool> {
+    match instructions.get(pc)? {
+        Instruction::AssertStart { multiline } => Some(*multiline),
+        Instruction::Save(_)
+        | Instruction::Nop
+        | Instruction::ClearRegister(_)
+        | Instruction::PushModifiers { .. } => leading_start_anchor_at(instructions, pc + 1),
+        Instruction::LookStart {
+            positive: true,
+            forward: true,
+            ..
+        } => leading_start_anchor_at(instructions, pc + 1),
+        _ => None,
+    }
+}
+
 #[inline(always)]
 fn first_char_matches<I: Input>(
     program: &Program,
@@ -602,6 +621,23 @@ pub fn find_all_with_scratch<I: Input>(
         return count;
     }
 
+    // Anchored non-multiline: only try the requested start position.
+    if hints.starts_with_anchor && !hints.anchor_multiline {
+        vm.reset(start_pos);
+        match vm.run() {
+            VmResult::Match => {
+                if capacity >= 2 {
+                    result_buf[0] = vm.registers[0];
+                    result_buf[1] = vm.registers[1];
+                    return 1;
+                }
+                return -1;
+            }
+            VmResult::LimitExceeded => return -2,
+            VmResult::NoMatch => return 0,
+        }
+    }
+
     // Fast path: non-unicode pattern starting with a literal character.
     if let Some((ch, false)) = hints.first_char
         && !program.unicode
@@ -630,23 +666,6 @@ pub fn find_all_with_scratch<I: Input>(
             }
         }
         return count;
-    }
-
-    // Anchored non-multiline: only try pos 0.
-    if hints.starts_with_anchor && !hints.anchor_multiline {
-        vm.reset(start_pos);
-        match vm.run() {
-            VmResult::Match => {
-                if capacity >= 2 {
-                    result_buf[0] = vm.registers[0];
-                    result_buf[1] = vm.registers[1];
-                    return 1;
-                }
-                return -1;
-            }
-            VmResult::LimitExceeded => return -2,
-            VmResult::NoMatch => return 0,
-        }
     }
 
     // General loop.
@@ -740,6 +759,16 @@ fn execute_into_impl<I: Input>(
     let mut vm = Vm::new(program, input, start_pos, scratch);
     let mut hit_limit = false;
 
+    // Anchored non-multiline: only try the requested start position.
+    if hints.starts_with_anchor && !hints.anchor_multiline {
+        vm.reset(start_pos);
+        let result = vm.run();
+        if result == VmResult::Match {
+            copy_captures_to_out(vm.registers, program.capture_count, out);
+        }
+        return result;
+    }
+
     if let Some(ref start_hint) = hints.start_position_hint
         && !program.unicode
     {
@@ -788,16 +817,6 @@ fn execute_into_impl<I: Input>(
         } else {
             VmResult::NoMatch
         };
-    }
-
-    // Anchored non-multiline: only try pos 0.
-    if hints.starts_with_anchor && !hints.anchor_multiline {
-        vm.reset(start_pos);
-        let result = vm.run();
-        if result == VmResult::Match {
-            copy_captures_to_out(vm.registers, program.capture_count, out);
-        }
-        return result;
     }
 
     // General start-position loop.
@@ -1207,10 +1226,11 @@ pub(crate) fn analyze_pattern(
         None
     };
 
-    let (starts_with_anchor, anchor_multiline) = match first_inst {
-        Some(Instruction::AssertStart { multiline }) => (true, *multiline || program.multiline),
-        _ => (false, false),
-    };
+    let (starts_with_anchor, anchor_multiline) =
+        match leading_start_anchor_at(&program.instructions, skip) {
+            Some(multiline) => (true, multiline || program.multiline),
+            _ => (false, false),
+        };
 
     let trailing_literal = match program.instructions.as_slice() {
         [
@@ -2545,6 +2565,15 @@ impl<'a, I: Input> Vm<'a, I> {
             if self.pos == 0 {
                 return None;
             }
+            // NB: A lookbehind that starts between surrogate halves has no
+            // complete Unicode code point immediately to its left.
+            if self.program.unicode
+                && self.pos < self.input_len()
+                && is_low_surrogate(self.input_code_unit(self.pos))
+                && is_high_surrogate(self.input_code_unit(self.pos - 1))
+            {
+                return None;
+            }
             let cu = self.input_code_unit(self.pos - 1) as u32;
             // In Unicode mode, check for surrogate pair (low surrogate preceded by high).
             if self.program.unicode
@@ -2682,6 +2711,116 @@ impl<'a, I: Input> Vm<'a, I> {
         );
     }
 
+    // Sum the minimum counts of immediately following loops that match the
+    // same simple atom, so a greedy loop can leave that suffix in one step.
+    fn same_matcher_loop_suffix_min(&self, mut pc: usize, matcher: &SimpleMatch) -> Option<u32> {
+        let mut total = 0u32;
+        let mut saw_positive_min = false;
+
+        while let Some(instruction) = self.program.instructions.get(pc) {
+            let min = match instruction {
+                Instruction::GreedyLoop {
+                    matcher: next_matcher,
+                    min,
+                    ..
+                }
+                | Instruction::LazyLoop {
+                    matcher: next_matcher,
+                    min,
+                    ..
+                } if next_matcher == matcher => *min,
+                _ => break,
+            };
+            total = total.checked_add(min)?;
+            saw_positive_min |= min > 0;
+            pc += 1;
+        }
+
+        if saw_positive_min { Some(total) } else { None }
+    }
+
+    fn count_available_same_matcher_chars(
+        &self,
+        mut pos: usize,
+        matcher: &SimpleMatch,
+        max: u32,
+        backward: bool,
+    ) -> u32 {
+        let mut count = 0;
+
+        while count < max {
+            let cp = if backward {
+                let next_pos = self.retreat_one_char(pos);
+                if next_pos == pos {
+                    break;
+                }
+                pos = next_pos;
+                decode_code_point(self.program.unicode, self.input, pos)
+            } else {
+                if pos >= self.input_len() {
+                    break;
+                }
+                let cp = decode_code_point(self.program.unicode, self.input, pos);
+                pos = self.advance_one_char(pos);
+                cp
+            };
+
+            if !self.match_simple(cp, matcher) {
+                break;
+            }
+
+            count += 1;
+        }
+
+        count
+    }
+
+    fn same_matcher_loop_suffix_deficit(
+        &self,
+        pc: usize,
+        current_pos: usize,
+        backward: bool,
+    ) -> Option<u32> {
+        let matcher = match self.program.instructions.get(pc) {
+            Some(Instruction::GreedyLoop { matcher, .. }) => matcher,
+            _ => return None,
+        };
+
+        let suffix_min = self.same_matcher_loop_suffix_min(pc + 1, matcher)?;
+        let available =
+            self.count_available_same_matcher_chars(current_pos, matcher, suffix_min, backward);
+        let deficit = suffix_min.saturating_sub(available);
+        (deficit > 0).then_some(deficit)
+    }
+
+    fn retreat_n_chars(&self, mut pos: usize, count: u32) -> Option<usize> {
+        if !self.program.unicode {
+            return pos.checked_sub(count as usize);
+        }
+        for _ in 0..count {
+            let next = self.retreat_one_char(pos);
+            if next == pos {
+                return None;
+            }
+            pos = next;
+        }
+        Some(pos)
+    }
+
+    fn advance_n_chars(&self, mut pos: usize, count: u32) -> Option<usize> {
+        if !self.program.unicode {
+            return pos.checked_add(count as usize);
+        }
+        for _ in 0..count {
+            let next = self.advance_one_char(pos);
+            if next == pos {
+                return None;
+            }
+            pos = next;
+        }
+        Some(pos)
+    }
+
     fn backtrack(&mut self) -> bool {
         if self.backtrack_stack.len() <= self.bt_floor {
             return false;
@@ -2717,6 +2856,9 @@ impl<'a, I: Input> Vm<'a, I> {
                     self.modifiers = modifiers;
                     self.modifier_stack.truncate(modifier_stack_len);
 
+                    let same_matcher_loop_suffix_deficit =
+                        self.same_matcher_loop_suffix_deficit(pc as usize, current_pos, backward);
+
                     if backward {
                         // Backward mode (lookbehind): the greedy loop consumed
                         // leftward from start_pos to current_pos.
@@ -2736,61 +2878,74 @@ impl<'a, I: Input> Vm<'a, I> {
                         };
 
                         let next_inst = self.program.instructions.get(pc as usize + 1);
-                        let new_pos = match next_inst {
-                            Some(Instruction::Char(target))
-                                if !self.modifiers.ignore_case && *target <= 0xFFFF =>
-                            {
-                                let target = *target as u16;
-                                // In backward mode the next Char reads the code
-                                // point immediately to the left of the current
-                                // position, so scan candidate boundaries and
-                                // check the code unit before each boundary.
-                                let mut scan_pos = self.advance_one_char(current_pos);
-                                loop {
-                                    if scan_pos > max_pos {
-                                        return self.backtrack();
-                                    }
-                                    if scan_pos > 0 && self.input_code_unit(scan_pos - 1) == target
-                                    {
-                                        break scan_pos;
-                                    }
-                                    let next_scan_pos = self.advance_one_char(scan_pos);
-                                    if next_scan_pos == scan_pos {
-                                        return self.backtrack();
-                                    }
-                                    scan_pos = next_scan_pos;
-                                }
+                        let new_pos = if let Some(suffix_deficit) = same_matcher_loop_suffix_deficit
+                        {
+                            let Some(pos) = self.advance_n_chars(current_pos, suffix_deficit)
+                            else {
+                                return self.backtrack();
+                            };
+                            if pos > max_pos {
+                                return self.backtrack();
                             }
-                            Some(Instruction::Char(target))
-                                if !self.modifiers.ignore_case && *target > 0xFFFF =>
-                            {
-                                let hi = ((*target - 0x10000) >> 10) as u16 + 0xD800;
-                                let lo = ((*target - 0x10000) & 0x3FF) as u16 + 0xDC00;
-                                let mut scan_pos = self.advance_one_char(current_pos);
-                                loop {
-                                    if scan_pos > max_pos {
+                            pos
+                        } else {
+                            match next_inst {
+                                Some(Instruction::Char(target))
+                                    if !self.modifiers.ignore_case && *target <= 0xFFFF =>
+                                {
+                                    let target = *target as u16;
+                                    // In backward mode the next Char reads the code
+                                    // point immediately to the left of the current
+                                    // position, so scan candidate boundaries and
+                                    // check the code unit before each boundary.
+                                    let mut scan_pos = self.advance_one_char(current_pos);
+                                    loop {
+                                        if scan_pos > max_pos {
+                                            return self.backtrack();
+                                        }
+                                        if scan_pos > 0
+                                            && self.input_code_unit(scan_pos - 1) == target
+                                        {
+                                            break scan_pos;
+                                        }
+                                        let next_scan_pos = self.advance_one_char(scan_pos);
+                                        if next_scan_pos == scan_pos {
+                                            return self.backtrack();
+                                        }
+                                        scan_pos = next_scan_pos;
+                                    }
+                                }
+                                Some(Instruction::Char(target))
+                                    if !self.modifiers.ignore_case && *target > 0xFFFF =>
+                                {
+                                    let hi = ((*target - 0x10000) >> 10) as u16 + 0xD800;
+                                    let lo = ((*target - 0x10000) & 0x3FF) as u16 + 0xDC00;
+                                    let mut scan_pos = self.advance_one_char(current_pos);
+                                    loop {
+                                        if scan_pos > max_pos {
+                                            return self.backtrack();
+                                        }
+                                        if scan_pos >= 2
+                                            && self.input_code_unit(scan_pos - 2) == hi
+                                            && self.input_code_unit(scan_pos - 1) == lo
+                                        {
+                                            break scan_pos;
+                                        }
+                                        let next_scan_pos = self.advance_one_char(scan_pos);
+                                        if next_scan_pos == scan_pos {
+                                            return self.backtrack();
+                                        }
+                                        scan_pos = next_scan_pos;
+                                    }
+                                }
+                                _ => {
+                                    // Give back one character: advance rightward.
+                                    let advanced = self.advance_one_char(current_pos);
+                                    if advanced > max_pos {
                                         return self.backtrack();
                                     }
-                                    if scan_pos >= 2
-                                        && self.input_code_unit(scan_pos - 2) == hi
-                                        && self.input_code_unit(scan_pos - 1) == lo
-                                    {
-                                        break scan_pos;
-                                    }
-                                    let next_scan_pos = self.advance_one_char(scan_pos);
-                                    if next_scan_pos == scan_pos {
-                                        return self.backtrack();
-                                    }
-                                    scan_pos = next_scan_pos;
+                                    advanced
                                 }
-                            }
-                            _ => {
-                                // Give back one character: advance rightward.
-                                let advanced = self.advance_one_char(current_pos);
-                                if advanced > max_pos {
-                                    return self.backtrack();
-                                }
-                                advanced
                             }
                         };
 
@@ -2833,58 +2988,70 @@ impl<'a, I: Input> Vm<'a, I> {
                         // Char, scan backward for that char to skip positions
                         // that can't match.
                         let next_inst = self.program.instructions.get(pc as usize + 1);
-                        let new_pos = match next_inst {
-                            Some(Instruction::Char(target))
-                                if !self.modifiers.ignore_case && *target <= 0xFFFF =>
-                            {
-                                // BMP char: scan code units directly.
-                                let target = *target as u16;
-                                let mut scan_pos =
-                                    if current_pos > 0 { current_pos - 1 } else { 0 };
-                                loop {
-                                    if scan_pos < min_pos {
-                                        return self.backtrack();
-                                    }
-                                    if self.input_code_unit(scan_pos) == target {
-                                        break scan_pos;
-                                    }
-                                    if scan_pos == 0 {
-                                        return self.backtrack();
-                                    }
-                                    scan_pos -= 1;
-                                }
+                        let new_pos = if let Some(suffix_deficit) = same_matcher_loop_suffix_deficit
+                        {
+                            let Some(pos) = self.retreat_n_chars(current_pos, suffix_deficit)
+                            else {
+                                return self.backtrack();
+                            };
+                            if pos < min_pos {
+                                return self.backtrack();
                             }
-                            Some(Instruction::Char(target))
-                                if !self.modifiers.ignore_case && *target > 0xFFFF =>
-                            {
-                                // Supplementary char: scan for the surrogate pair.
-                                let hi = ((*target - 0x10000) >> 10) as u16 + 0xD800;
-                                let lo = ((*target - 0x10000) & 0x3FF) as u16 + 0xDC00;
-                                let mut scan_pos =
-                                    if current_pos > 1 { current_pos - 2 } else { 0 };
-                                loop {
-                                    if scan_pos < min_pos {
+                            pos
+                        } else {
+                            match next_inst {
+                                Some(Instruction::Char(target))
+                                    if !self.modifiers.ignore_case && *target <= 0xFFFF =>
+                                {
+                                    // BMP char: scan code units directly.
+                                    let target = *target as u16;
+                                    let mut scan_pos =
+                                        if current_pos > 0 { current_pos - 1 } else { 0 };
+                                    loop {
+                                        if scan_pos < min_pos {
+                                            return self.backtrack();
+                                        }
+                                        if self.input_code_unit(scan_pos) == target {
+                                            break scan_pos;
+                                        }
+                                        if scan_pos == 0 {
+                                            return self.backtrack();
+                                        }
+                                        scan_pos -= 1;
+                                    }
+                                }
+                                Some(Instruction::Char(target))
+                                    if !self.modifiers.ignore_case && *target > 0xFFFF =>
+                                {
+                                    // Supplementary char: scan for the surrogate pair.
+                                    let hi = ((*target - 0x10000) >> 10) as u16 + 0xD800;
+                                    let lo = ((*target - 0x10000) & 0x3FF) as u16 + 0xDC00;
+                                    let mut scan_pos =
+                                        if current_pos > 1 { current_pos - 2 } else { 0 };
+                                    loop {
+                                        if scan_pos < min_pos {
+                                            return self.backtrack();
+                                        }
+                                        if scan_pos + 1 < self.input_len()
+                                            && self.input_code_unit(scan_pos) == hi
+                                            && self.input_code_unit(scan_pos + 1) == lo
+                                        {
+                                            break scan_pos;
+                                        }
+                                        if scan_pos == 0 {
+                                            return self.backtrack();
+                                        }
+                                        scan_pos -= 1;
+                                    }
+                                }
+                                _ => {
+                                    // Default: retreat one character.
+                                    let retreated = self.retreat_one_char(current_pos);
+                                    if retreated < min_pos {
                                         return self.backtrack();
                                     }
-                                    if scan_pos + 1 < self.input_len()
-                                        && self.input_code_unit(scan_pos) == hi
-                                        && self.input_code_unit(scan_pos + 1) == lo
-                                    {
-                                        break scan_pos;
-                                    }
-                                    if scan_pos == 0 {
-                                        return self.backtrack();
-                                    }
-                                    scan_pos -= 1;
+                                    retreated
                                 }
-                            }
-                            _ => {
-                                // Default: retreat one character.
-                                let retreated = self.retreat_one_char(current_pos);
-                                if retreated < min_pos {
-                                    return self.backtrack();
-                                }
-                                retreated
                             }
                         };
 
