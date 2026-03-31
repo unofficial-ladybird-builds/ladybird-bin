@@ -18,6 +18,8 @@ namespace Audio {
         if (__temporary_result.is_error()) [[unlikely]] {                                                               \
             warnln("Failure in PulseAudio control thread: {}", __temporary_result.error().string_literal());            \
             auto event_loop = main_thread_event_loop->take();                                                           \
+            if (!event_loop)                                                                                            \
+                return 1;                                                                                               \
             event_loop->deferred_invoke([promise = move(promise), error = __temporary_result.release_error()] mutable { \
                 promise->reject(move(error));                                                                           \
             });                                                                                                         \
@@ -57,8 +59,8 @@ NonnullRefPtr<PlaybackStream::CreatePromise> PlaybackStreamPulseAudio::create(Ou
             auto event_loop = main_thread_event_loop->take();
             if (!event_loop)
                 return 1;
-            event_loop->deferred_invoke([promise = move(promise), playback_stream] {
-                promise->resolve(playback_stream);
+            event_loop->deferred_invoke([promise = move(promise), playback_stream = move(playback_stream)] mutable {
+                promise->resolve(move(playback_stream));
             });
         }
 
@@ -163,10 +165,10 @@ ErrorOr<void> PlaybackStreamPulseAudio::InternalState::check_is_running()
 
 void PlaybackStreamPulseAudio::InternalState::set_stream(NonnullRefPtr<PulseAudioStream>&& stream)
 {
-    m_stream = stream;
+    m_stream = move(stream);
 }
 
-RefPtr<PulseAudioStream> PlaybackStreamPulseAudio::InternalState::stream()
+RefPtr<PulseAudioStream> const& PlaybackStreamPulseAudio::InternalState::stream()
 {
     return m_stream;
 }
