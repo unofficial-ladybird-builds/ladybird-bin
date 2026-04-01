@@ -649,6 +649,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
         visitor.visit(form_associated_element->form_associated_element_to_html_element());
 
     visitor.visit(m_potentially_named_elements);
+    m_anchor_name_map.visit_edges(visitor);
 
     for (auto& event : m_pending_animation_event_queue) {
         visitor.visit(event.event);
@@ -5098,33 +5099,34 @@ void Document::make_active()
         page().client().page_did_change_active_document_in_top_level_browsing_context(*this);
     }
 
-    // 3. Set document's visibility state to document's node navigable's traversable navigable's system visibility state.
-    auto navigable = this->navigable();
-    if (navigable) {
-        m_visibility_state = navigable->traversable_navigable()->system_visibility_state();
-
-        // AD-HOC: Record the initial viewport and visual viewport state so that if the viewport changes before the
-        //         first rendering update (e.g. in our fullscreen tests), change events are still fired.
-        if (!m_last_viewport_size.has_value()) {
-            m_last_viewport_size = viewport_rect().size().to_type<int>();
-            auto& current_visual_viewport = *visual_viewport();
-            m_last_visual_viewport_state = VisualViewportState { current_visual_viewport.scale(), { current_visual_viewport.width(), current_visual_viewport.height() } };
-        }
-    }
-
-    // TODO: 4. Queue a new VisibilityStateEntry whose visibility state is document's visibility state and whose timestamp is zero.
-
-    // 5. Set window's relevant settings object's execution ready flag.
+    // 3. Set window's relevant settings object's execution ready flag.
     HTML::relevant_settings_object(window).execution_ready = true;
 
     if (m_needs_to_call_page_did_load) {
-        navigable->traversable_navigable()->page().client().page_did_finish_loading(url());
+        navigable()->traversable_navigable()->page().client().page_did_finish_loading(url());
         m_needs_to_call_page_did_load = false;
     }
 
     notify_each_document_observer([&](auto const& document_observer) {
         return document_observer.document_became_active();
     });
+}
+
+// https://html.spec.whatwg.org/multipage/interaction.html#set-the-initial-visibility-state
+void Document::set_initial_visibility_state(HTML::VisibilityState visibility_state)
+{
+    // 1. Set document's visibility state to visibility state.
+    m_visibility_state = visibility_state;
+
+    // TODO: 2. Queue a new VisibilityStateEntry whose visibility state is document's visibility state and whose timestamp is 0.
+
+    // AD-HOC: Record the initial viewport and visual viewport state so that if the viewport changes before the
+    //         first rendering update (e.g. in our fullscreen tests), change events are still fired.
+    if (!m_last_viewport_size.has_value()) {
+        m_last_viewport_size = viewport_rect().size().to_type<int>();
+        auto& current_visual_viewport = *visual_viewport();
+        m_last_visual_viewport_state = VisualViewportState { current_visual_viewport.scale(), { current_visual_viewport.width(), current_visual_viewport.height() } };
+    }
 }
 
 HTML::ListOfAvailableImages& Document::list_of_available_images()
@@ -6163,6 +6165,24 @@ void Document::element_with_name_was_removed(Badge<DOM::Element>, GC::Ref<DOM::E
             return;
         (void)m_potentially_named_elements.remove_first_matching([element](auto& e) { return e == element; });
     }
+}
+
+GC::Ptr<Element> Document::element_by_anchor_name(FlyString const& name, Node const& querying_node) const
+{
+    // https://drafts.csswg.org/css-shadow-1/#tree-scoped-name
+    // If a tree-scoped name is global (such as @font-face names), then when a tree-scoped reference is dereferenced to
+    // find it, first search only the tree-scoped names associated with the same root as the tree-scoped reference. If
+    // no relevant tree-scoped name is found, and the root is a shadow root, then repeat this search in the root's
+    // host's node tree (recursively).
+    auto const* node = &querying_node;
+    while (auto const* shadow_root = as_if<ShadowRoot>(node->root())) {
+        if (auto element = shadow_root->anchor_name_map().element_by_name(name))
+            return element;
+        node = shadow_root->host();
+        if (!node)
+            return {};
+    }
+    return m_anchor_name_map.element_by_name(name);
 }
 
 void Document::add_form_associated_element_with_form_attribute(HTML::FormAssociatedElement& form_associated_element)
