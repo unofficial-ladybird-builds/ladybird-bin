@@ -21,6 +21,13 @@ namespace Media::Matroska {
 class SampleIterator;
 class Streamer;
 
+enum class ElementIterationDecision : u8 {
+    Continue,
+    BreakHere,
+    BreakAtEnd,
+    EndOfElement,
+};
+
 struct TrackCuePoint {
     AK::Duration timestamp;
     CueTrackPosition position;
@@ -39,7 +46,15 @@ public:
 
     static bool is_matroska_or_webm(NonnullRefPtr<MediaStreamCursor> const&);
 
-    Optional<AK::Duration> duration() { return m_segment_information.duration(); }
+    static DecoderErrorOr<size_t> parse_master_element(Streamer&, StringView element_name, Function<DecoderErrorOr<ElementIterationDecision>(u64)> element_consumer);
+    static DecoderErrorOr<EBMLHeader> parse_ebml_header(Streamer&, ElementIterationDecision complete_decision = ElementIterationDecision::BreakAtEnd);
+    static DecoderErrorOr<SegmentInformation> parse_segment_information_element(Streamer&);
+    static DecoderErrorOr<NonnullRefPtr<TrackEntry>> parse_track_entry(Streamer&);
+    static DecoderErrorOr<Cluster> parse_cluster_element(Streamer&, u64 timestamp_scale);
+    static DecoderErrorOr<Block> parse_simple_block(Streamer&, AK::Duration cluster_timestamp, u64 segment_timestamp_scale, TrackBlockContexts const&);
+    static DecoderErrorOr<Block> parse_block_group(Streamer&, AK::Duration cluster_timestamp, u64 segment_timestamp_scale, TrackBlockContexts const&);
+
+    Optional<AK::Duration> duration() const { return m_segment_information.duration(); }
 
     DecoderErrorOr<void> for_each_track(TrackEntryCallback);
     DecoderErrorOr<void> for_each_track_of_type(TrackEntry::TrackType, TrackEntryCallback);
@@ -71,7 +86,7 @@ private:
     Optional<EBMLHeader> m_header;
 
     size_t m_segment_contents_position { 0 };
-    size_t m_segment_contents_size { 0 };
+    Optional<size_t> m_segment_contents_size { 0 };
 
     HashMap<u32, size_t> m_seek_entries;
     size_t m_last_top_level_element_position { 0 };
@@ -97,18 +112,18 @@ public:
     DecoderErrorOr<Vector<ByteBuffer>> get_frames(Block);
     Cluster const& current_cluster() const { return *m_current_cluster; }
     Optional<AK::Duration> const& last_timestamp() const { return m_last_timestamp; }
-    TrackEntry const& track() const { return *m_track; }
     MediaStreamCursor& cursor() { return m_stream_cursor; }
 
 private:
     friend class Reader;
 
-    SampleIterator(NonnullRefPtr<MediaStreamCursor> const& stream_cursor, TrackEntry& track, u64 timestamp_scale, size_t segment_contents_position, size_t position);
+    SampleIterator(NonnullRefPtr<MediaStreamCursor> const& stream_cursor, u64 track_number, TrackBlockContexts&&, u64 timestamp_scale, size_t segment_contents_position, size_t position);
 
     DecoderErrorOr<void> seek_to_cue_point(TrackCuePoint const& cue_point, CuePointTarget);
 
     NonnullRefPtr<MediaStreamCursor> m_stream_cursor;
-    NonnullRefPtr<TrackEntry> m_track;
+    u64 m_track_number;
+    TrackBlockContexts m_track_block_contexts;
     u64 m_segment_timestamp_scale { 0 };
     size_t m_segment_contents_position { 0 };
 
@@ -120,7 +135,7 @@ private:
     Optional<Cluster> m_current_cluster;
 };
 
-class Streamer {
+class MEDIA_API Streamer {
 public:
     Streamer(NonnullRefPtr<MediaStreamCursor> const& stream_cursor);
     ~Streamer();
@@ -129,10 +144,13 @@ public:
 
     DecoderErrorOr<i16> read_i16();
 
-    DecoderErrorOr<u64> read_variable_size_integer(bool mask_length = true);
+    DecoderErrorOr<u32> read_element_id();
+    DecoderErrorOr<Optional<size_t>> read_element_size();
+    DecoderErrorOr<u64> read_variable_size_integer();
     DecoderErrorOr<i64> read_variable_size_signed_integer();
 
     DecoderErrorOr<u64> read_u64();
+    DecoderErrorOr<i64> read_i64();
     DecoderErrorOr<double> read_float();
 
     DecoderErrorOr<String> read_string();

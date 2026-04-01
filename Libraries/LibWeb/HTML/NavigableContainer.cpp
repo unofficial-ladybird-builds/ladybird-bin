@@ -90,7 +90,6 @@ void NavigableContainer::create_new_child_navigable()
     //  - navigable target name: targetName
     //  - about base URL: document's about base URL
     GC::Ref<DocumentState> document_state = *heap().allocate<HTML::DocumentState>();
-    document_state->set_document(document);
     document_state->set_initiator_origin(document->origin());
     document_state->set_origin(document->origin());
     if (target_name.has_value())
@@ -101,7 +100,7 @@ void NavigableContainer::create_new_child_navigable()
     GC::Ref<Navigable> navigable = *heap().allocate<Navigable>(page, false);
 
     // 8. Initialize the navigable navigable given documentState and parentNavigable.
-    navigable->initialize_navigable(document_state, parent_navigable);
+    navigable->initialize_navigable(document_state, parent_navigable, *document);
 
     // 9. Set element's content navigable to navigable.
     m_content_navigable = navigable;
@@ -338,7 +337,7 @@ void NavigableContainer::destroy_the_child_navigable()
         document().schedule_html_parser_end_check();
 
         // Not in the spec:
-        HTML::all_navigables().remove(*navigable);
+        navigable->remove_from_all_navigables();
 
         // 6. Let parentDocState be container's node navigable's active session history entry's document state.
         auto parent_doc_state = this->navigable()->active_session_history_entry()->document_state();

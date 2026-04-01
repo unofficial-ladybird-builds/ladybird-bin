@@ -10,11 +10,13 @@
 #include <AK/ByteBuffer.h>
 #include <AK/ByteString.h>
 #include <AK/FixedArray.h>
+#include <AK/GenericShorthands.h>
 #include <AK/HashMap.h>
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/Time.h>
 #include <LibMedia/Color/CodingIndependentCodePoints.h>
+#include <LibMedia/Track.h>
 
 namespace Media::Matroska {
 
@@ -143,6 +145,8 @@ public:
     void set_default_duration(u64 default_duration) { m_default_duration = default_duration; }
     Optional<VideoTrack> video_track() const { return m_video_track; }
     void set_video_track(VideoTrack video_track) { m_video_track = video_track; }
+    bool flag_default() const { return m_flag_default; }
+    void set_flag_default(bool flag_default) { m_flag_default = flag_default; }
     Optional<AudioTrack> audio_track() const { return m_audio_track; }
     void set_audio_track(AudioTrack audio_track) { m_audio_track = audio_track; }
 
@@ -160,9 +164,112 @@ private:
     u64 m_seek_pre_roll { 0 };
     u64 m_timestamp_offset { 0 };
     u64 m_default_duration { 0 };
+    bool m_flag_default { true };
     Optional<VideoTrack> m_video_track;
     Optional<AudioTrack> m_audio_track;
 };
+
+struct TrackBlockContext {
+    String codec_id;
+    double timestamp_scale { 1 };
+    u64 codec_delay { 0 };
+    u64 seek_pre_roll { 0 };
+    u64 timestamp_offset { 0 };
+    u64 default_duration { 0 };
+
+    static TrackBlockContext from_track_entry(TrackEntry const& entry)
+    {
+        return {
+            .codec_id = entry.codec_id(),
+            .timestamp_scale = entry.timestamp_scale(),
+            .codec_delay = entry.codec_delay(),
+            .seek_pre_roll = entry.seek_pre_roll(),
+            .timestamp_offset = entry.timestamp_offset(),
+            .default_duration = entry.default_duration(),
+        };
+    }
+};
+
+using TrackBlockContexts = HashMap<u64, TrackBlockContext>;
+
+inline TrackType track_type_from_matroska_track_type(TrackEntry::TrackType type)
+{
+    switch (type) {
+    case TrackEntry::TrackType::Video:
+        return TrackType::Video;
+    case TrackEntry::TrackType::Audio:
+        return TrackType::Audio;
+    case TrackEntry::TrackType::Subtitle:
+        return TrackType::Subtitles;
+    case TrackEntry::TrackType::Invalid:
+        return TrackType::Unknown;
+    case TrackEntry::TrackType::Complex:
+    case TrackEntry::TrackType::Logo:
+    case TrackEntry::TrackType::Buttons:
+    case TrackEntry::TrackType::Control:
+    case TrackEntry::TrackType::Metadata:
+        break;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+inline Track track_from_track_entry(TrackEntry const& track_entry, bool is_first_of_type)
+{
+    // https://dev.w3.org/html5/html-sourcing-inband-tracks/#webm
+    auto kind = [&] {
+        if (first_is_one_of(track_entry.track_type(), TrackEntry::TrackType::Subtitle, TrackEntry::TrackType::Metadata)) {
+            auto codec_id = track_entry.codec_id();
+            // "captions": TrackType is "0x11" and CodecId is "D_WEBVTT/captions"
+            if (codec_id == "D_WEBVTT/captions"sv)
+                return Track::Kind::Captions;
+            // "subtitles": TrackType is "0x11" and CodecId is "D_WEBVTT/subtitles"
+            if (codec_id == "D_WEBVTT/subtitles"sv)
+                return Track::Kind::Subtitles;
+            // "descriptions": TrackType is "0x11" and CodecId is "D_WEBVTT/descriptions"
+            if (codec_id == "D_WEBVTT/descriptions"sv)
+                return Track::Kind::Descriptions;
+            // "metadata": otherwise
+            if (codec_id.starts_with_bytes("D_WEBVTT/"sv))
+                return Track::Kind::Metadata;
+
+            // The Matroska container format, which is the basis for WebM, has specifications for other text tracks, in
+            // particular SRT, SSA/ASS, and VOBSUB. The described attribute mappings can be applied to these, too,
+            // except that the kind field will always be "subtitles".
+            return Track::Kind::Subtitles;
+        }
+        // "main": the FlagDefault element is set on the track
+        if (track_entry.flag_default())
+            return Track::Kind::Main;
+        // "translation": not first audio (video) track
+        if (!is_first_of_type)
+            return Track::Kind::Translation;
+        // "": otherwise
+        return Track::Kind::None;
+    }();
+
+    auto name = Utf16String::from_utf8(track_entry.name());
+    auto language = [&] {
+        // LanguageBCP47 - The language of the track, in the BCP47 form; see basics on language codes. If this Element is used,
+        // then any Language Elements used in the same TrackEntry MUST be ignored.
+        if (track_entry.language_bcp_47().has_value())
+            return Utf16String::from_utf8(track_entry.language_bcp_47().value());
+        return Utf16String::from_utf8(track_entry.language());
+    }();
+    Track track(track_type_from_matroska_track_type(track_entry.track_type()), track_entry.track_number(), kind, name, language);
+
+    if (track.type() == TrackType::Video) {
+        auto video_track = track_entry.video_track();
+        if (video_track.has_value()) {
+            track.set_video_data({
+                .pixel_width = video_track->pixel_width,
+                .pixel_height = video_track->pixel_height,
+                .cicp = video_track->color_format.to_cicp(),
+            });
+        }
+    }
+
+    return track;
+}
 
 class Block {
 public:
@@ -175,7 +282,7 @@ public:
 
     u64 track_number() const { return m_track_number; }
     void set_track_number(u64 track_number) { m_track_number = track_number; }
-    AK::Duration timestamp() const { return m_timestamp; }
+    Optional<AK::Duration> timestamp() const { return m_timestamp; }
     void set_timestamp(AK::Duration timestamp) { m_timestamp = timestamp; }
     Optional<AK::Duration> duration() const { return m_duration; }
     void set_duration(AK::Duration duration) { m_duration = duration; }
@@ -197,7 +304,7 @@ public:
 
 private:
     u64 m_track_number { 0 };
-    AK::Duration m_timestamp { AK::Duration::zero() };
+    Optional<AK::Duration> m_timestamp;
     Optional<AK::Duration> m_duration;
     bool m_only_keyframes { false };
     bool m_invisible { false };

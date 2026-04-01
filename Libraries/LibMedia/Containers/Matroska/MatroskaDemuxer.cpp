@@ -45,53 +45,6 @@ static TrackEntry::TrackType matroska_track_type_from_track_type(TrackType type)
     VERIFY_NOT_REACHED();
 }
 
-static TrackType track_type_from_matroska_track_type(TrackEntry::TrackType type)
-{
-    switch (type) {
-    case TrackEntry::TrackType::Video:
-        return TrackType::Video;
-    case TrackEntry::TrackType::Audio:
-        return TrackType::Audio;
-    case TrackEntry::TrackType::Subtitle:
-        return TrackType::Subtitles;
-    case TrackEntry::TrackType::Invalid:
-        return TrackType::Unknown;
-    case TrackEntry::TrackType::Complex:
-    case TrackEntry::TrackType::Logo:
-    case TrackEntry::TrackType::Buttons:
-    case TrackEntry::TrackType::Control:
-    case TrackEntry::TrackType::Metadata:
-        break;
-    }
-    VERIFY_NOT_REACHED();
-}
-
-static Track track_from_track_entry(TrackEntry const& track_entry)
-{
-    auto name = Utf16String::from_utf8(track_entry.name());
-    auto language = [&] {
-        // LanguageBCP47 - The language of the track, in the BCP47 form; see basics on language codes. If this Element is used,
-        // then any Language Elements used in the same TrackEntry MUST be ignored.
-        if (track_entry.language_bcp_47().has_value())
-            return Utf16String::from_utf8(track_entry.language_bcp_47().value());
-        return Utf16String::from_utf8(track_entry.language());
-    }();
-    Track track(track_type_from_matroska_track_type(track_entry.track_type()), track_entry.track_number(), name, language);
-
-    if (track.type() == TrackType::Video) {
-        auto video_track = track_entry.video_track();
-        if (video_track.has_value()) {
-            track.set_video_data({
-                .pixel_width = video_track->pixel_width,
-                .pixel_height = video_track->pixel_height,
-                .cicp = video_track->color_format.to_cicp(),
-            });
-        }
-    }
-
-    return track;
-}
-
 DecoderErrorOr<void> MatroskaDemuxer::create_context_for_track(Track const& track)
 {
     auto iterator = TRY(m_reader.create_sample_iterator(m_stream->create_cursor(), track.identifier()));
@@ -104,9 +57,11 @@ DecoderErrorOr<Vector<Track>> MatroskaDemuxer::get_tracks_for_type(TrackType typ
 {
     auto matroska_track_type = matroska_track_type_from_track_type(type);
     Vector<Track> tracks;
+    bool is_first = true;
     TRY(m_reader.for_each_track_of_type(matroska_track_type, [&](TrackEntry const& track_entry) -> DecoderErrorOr<IterationDecision> {
         VERIFY(track_entry.track_type() == matroska_track_type);
-        DECODER_TRY_ALLOC(tracks.try_append(track_from_track_entry(track_entry)));
+        DECODER_TRY_ALLOC(tracks.try_append(track_from_track_entry(track_entry, is_first)));
+        is_first = false;
         return IterationDecision::Continue;
     }));
     return tracks;
@@ -118,7 +73,7 @@ DecoderErrorOr<Optional<Track>> MatroskaDemuxer::get_preferred_track_for_type(Tr
     Optional<Track> result;
     TRY(m_reader.for_each_track_of_type(matroska_track_type, [&](TrackEntry const& track_entry) -> DecoderErrorOr<IterationDecision> {
         VERIFY(track_entry.track_type() == matroska_track_type);
-        result = track_from_track_entry(track_entry);
+        result = track_from_track_entry(track_entry, true);
         return IterationDecision::Break;
     }));
     return result;
@@ -179,7 +134,7 @@ DecoderErrorOr<CodedFrame> MatroskaDemuxer::get_next_sample_for_track(Track cons
 
     VERIFY(status.block.has_value());
 
-    auto timestamp = status.block->timestamp();
+    auto timestamp = status.block->timestamp().value();
     auto duration = status.block->duration().value_or(AK::Duration::zero());
     auto flags = status.block->only_keyframes() ? FrameFlags::Keyframe : FrameFlags::None;
     auto aux_data = [&] -> CodedFrame::AuxiliaryData {
@@ -198,6 +153,16 @@ DecoderErrorOr<AK::Duration> MatroskaDemuxer::total_duration()
 {
     auto duration = m_reader.duration();
     return duration.value_or(AK::Duration::zero());
+}
+
+TimeRanges MatroskaDemuxer::buffered_time_ranges() const
+{
+    // FIXME: Scan the stream for buffered ranges.
+    TimeRanges ranges;
+    auto duration = m_reader.duration();
+    if (duration.has_value())
+        ranges.add_range(AK::Duration::zero(), duration.value());
+    return ranges;
 }
 
 DecoderErrorOr<AK::Duration> MatroskaDemuxer::duration_of_track(Track const&)

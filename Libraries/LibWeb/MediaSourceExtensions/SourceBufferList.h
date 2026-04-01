@@ -16,11 +16,18 @@ class SourceBufferList : public DOM::EventTarget {
     GC_DECLARE_ALLOCATOR(SourceBufferList);
 
 public:
+    void append(GC::Ref<SourceBuffer>);
+
+    size_t length() const;
+    GC::Ref<SourceBuffer> const& item(u32 index) const;
+
     void set_onaddsourcebuffer(GC::Ptr<WebIDL::CallbackType>);
     GC::Ptr<WebIDL::CallbackType> onaddsourcebuffer();
 
     void set_onremovesourcebuffer(GC::Ptr<WebIDL::CallbackType>);
     GC::Ptr<WebIDL::CallbackType> onremovesourcebuffer();
+
+    bool contains(SourceBuffer const&) const;
 
 private:
     SourceBufferList(JS::Realm&);
@@ -28,6 +35,9 @@ private:
     virtual ~SourceBufferList() override;
 
     virtual void initialize(JS::Realm&) override;
+    virtual void visit_edges(Cell::Visitor&) override;
+
+    Vector<GC::Ref<SourceBuffer>> m_buffers;
 };
 
 }

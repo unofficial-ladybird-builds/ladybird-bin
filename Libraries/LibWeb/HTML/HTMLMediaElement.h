@@ -16,6 +16,7 @@
 #include <LibGfx/Rect.h>
 #include <LibMedia/Forward.h>
 #include <LibWeb/DOM/DocumentLoadEventDelayer.h>
+#include <LibWeb/FileAPI/Blob.h>
 #include <LibWeb/HTML/CORSSettingAttribute.h>
 #include <LibWeb/HTML/EventLoop/Task.h>
 #include <LibWeb/HTML/HTMLElement.h>
@@ -32,6 +33,8 @@ enum class MediaSeekMode : u8 {
 };
 
 class SourceElementSelector;
+
+using OptionalMediaProvider = Variant<Empty, GC::Root<MediaSourceExtensions::MediaSource>, GC::Root<FileAPI::Blob>>;
 
 class HTMLMediaElement : public HTMLElement {
     WEB_PLATFORM_OBJECT(HTMLMediaElement, HTMLElement);
@@ -55,6 +58,9 @@ public:
 
     String const& current_src() const { return m_current_src; }
     void select_resource();
+
+    OptionalMediaProvider src_object() const;
+    WebIDL::ExceptionOr<void> set_src_object(OptionalMediaProvider);
 
     enum class NetworkState : u8 {
         Empty,
@@ -146,6 +152,16 @@ public:
 
     GC::Ref<TextTrack> add_text_track(Bindings::TextTrackKind kind, String const& label, String const& language);
 
+    void update_ready_state();
+
+    void set_duration(Badge<MediaSourceExtensions::MediaSource>, double duration) { set_duration(duration); }
+
+    Media::PlaybackManager& playback_manager()
+    {
+        VERIFY(m_playback_manager);
+        return *m_playback_manager;
+    }
+
     void create_controls();
     void destroy_controls();
 
@@ -169,7 +185,7 @@ protected:
 private:
     friend SourceElementSelector;
 
-    struct FetchData;
+    struct RemoteFetchData;
 
     virtual bool is_html_media_element() const final { return true; }
 
@@ -181,16 +197,23 @@ private:
 
     Task::Source media_element_event_task_source() const { return m_media_element_event_task_source.source; }
 
+    using MediaProviderObject = Variant<Empty, GC::Ref<MediaSourceExtensions::MediaSource>, GC::Ref<FileAPI::Blob>>;
+    MediaProviderObject const& assigned_media_provider_object() const;
+    MediaProviderObject& assigned_media_provider_object();
+    void set_assigned_media_provider_object(MediaProviderObject const&);
+
     WebIDL::ExceptionOr<void> load_element();
 
-    void fetch_resource(URL::URL const&, ESCAPING Function<void(String)> failure_callback);
-    void fetch_resource(ByteRange const&);
+    void load_url_resource(URL::URL const&, ESCAPING Function<void(String)> failure_callback);
+    void load_remote_resource(ByteRange const&);
+    void load_local_resource(MediaProviderObject const&, ESCAPING Function<void(String)> failure_callback);
 
     Optional<String> verify_response_or_get_failure_reason(GC::Ref<Fetch::Infrastructure::Response>, ByteRange const&);
 
     void restart_fetch_at_offset(u64 offset);
 
-    void set_up_playback_manager();
+    void set_up_playback_manager_for_remote();
+    void set_up_playback_manager_for_local();
     enum class FetchingStatus : u8 {
         Ongoing,
         Complete,
@@ -261,6 +284,9 @@ private:
 
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-crossorigin
     CORSSettingAttribute m_crossorigin { CORSSettingAttribute::NoCORS };
+
+    // https://html.spec.whatwg.org/multipage/media.html#assigned-media-provider-object
+    MediaProviderObject m_assigned_media_provider_object;
 
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-currentsrc
     String m_current_src;
@@ -333,7 +359,7 @@ private:
 
     GC::Ptr<SourceElementSelector> m_source_element_selector;
 
-    OwnPtr<FetchData> m_fetch_data;
+    OwnPtr<RemoteFetchData> m_remote_fetch_data;
     u32 m_current_fetch_generation { 0 };
 
     OwnPtr<Media::PlaybackManager> m_playback_manager;

@@ -812,6 +812,10 @@ set(SOURCES
     MediaSourceExtensions/MediaSourceHandle.cpp
     MediaSourceExtensions/SourceBuffer.cpp
     MediaSourceExtensions/SourceBufferList.cpp
+    MediaSourceExtensions/SourceBufferProcessor.cpp
+    MediaSourceExtensions/WebMByteStreamParser.cpp
+    MediaSourceExtensions/TrackBuffer.cpp
+    MediaSourceExtensions/TrackBufferDemuxer.cpp
     MimeSniff/MimeType.cpp
     MimeSniff/Resource.cpp
     MixedContent/AbstractOperations.cpp

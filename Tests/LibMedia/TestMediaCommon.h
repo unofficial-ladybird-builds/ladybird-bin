@@ -26,30 +26,31 @@ static inline void decode_video(StringView path, size_t expected_frame_count, T 
     auto file = MUST(Core::File::open(path, Core::File::OpenMode::Read));
     auto stream = Media::IncrementallyPopulatedStream::create_from_buffer(MUST(file->read_until_eof()));
     auto matroska_reader = MUST(Media::Matroska::Reader::from_stream(stream->create_cursor()));
-    u64 video_track = 0;
+    RefPtr<Media::Matroska::TrackEntry const> video_track_entry;
     MUST(matroska_reader.for_each_track_of_type(Media::Matroska::TrackEntry::TrackType::Video, [&](Media::Matroska::TrackEntry const& track_entry) -> Media::DecoderErrorOr<IterationDecision> {
-        video_track = track_entry.track_number();
+        video_track_entry = track_entry;
         return IterationDecision::Break;
     }));
-    VERIFY(video_track != 0);
+    EXPECT(video_track_entry);
 
-    auto iterator = MUST(matroska_reader.create_sample_iterator(stream->create_cursor(), video_track));
+    auto iterator = MUST(matroska_reader.create_sample_iterator(stream->create_cursor(), video_track_entry->track_number()));
     size_t frame_count = 0;
-    NonnullOwnPtr<Media::VideoDecoder> decoder = create_decoder(iterator);
+    NonnullOwnPtr<Media::VideoDecoder> decoder = create_decoder(*video_track_entry);
 
     auto last_timestamp = AK::Duration::min();
 
     while (frame_count <= expected_frame_count) {
         auto block_result = iterator.next_block();
         if (block_result.is_error() && block_result.error().category() == Media::DecoderErrorCategory::EndOfStream) {
-            VERIFY(frame_count == expected_frame_count);
+            EXPECT_EQ(frame_count, expected_frame_count);
             return;
         }
 
         auto block = block_result.release_value();
+        EXPECT(block.timestamp().has_value());
         auto frames = MUST(iterator.get_frames(block));
         for (auto const& frame : frames) {
-            MUST(decoder->receive_coded_data(block.timestamp(), block.duration().value_or(AK::Duration::zero()), frame));
+            MUST(decoder->receive_coded_data(block.timestamp().value(), block.duration().value_or(AK::Duration::zero()), frame));
             while (true) {
                 auto frame_result = decoder->get_decoded_frame({});
                 if (frame_result.is_error()) {
@@ -79,9 +80,9 @@ static inline void decode_audio(StringView path, u32 sample_rate, u8 channel_cou
             return matroska_result.release_value();
         return Media::FFmpeg::FFmpegDemuxer::from_stream(stream);
     }());
-    auto track = TRY_OR_FAIL(demuxer->get_preferred_track_for_type(Media::TrackType::Audio));
-    VERIFY(track.has_value());
-    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current_weak(), demuxer, track.release_value()));
+    auto tracks = TRY_OR_FAIL(demuxer->get_tracks_for_type(Media::TrackType::Audio));
+    VERIFY(!tracks.is_empty());
+    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current_weak(), demuxer, tracks[0]));
 
     auto reached_end = false;
     provider->set_error_handler([&](Media::DecoderError&& error) {

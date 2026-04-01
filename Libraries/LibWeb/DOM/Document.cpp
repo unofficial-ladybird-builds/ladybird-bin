@@ -4608,12 +4608,12 @@ void Document::destroy()
     // Not in the spec:
     for (auto& navigable_container : HTML::NavigableContainer::all_instances()) {
         if (&navigable_container->document() == this && navigable_container->content_navigable())
-            HTML::all_navigables().remove(*navigable_container->content_navigable());
+            navigable_container->content_navigable()->remove_from_all_navigables();
     }
 
     // 9. Set document's node navigable's active session history entry's document state's document to null.
     if (auto navigable = this->navigable()) {
-        navigable->active_session_history_entry()->document_state()->set_document(nullptr);
+        navigable->set_active_document(nullptr);
 
         // AD-HOC: We set the page's focused navigable during mouse-down events. If that navigable is this document's
         //         navigable, we must be sure to reset the page's focused navigable.
@@ -7323,14 +7323,14 @@ GC::Ptr<DOM::Document> Document::container_document() const
     return node_navigable->container_document();
 }
 
-GC::Ptr<HTML::Navigable> Document::cached_navigable()
+GC::Ptr<HTML::Navigable> Document::navigable() const
 {
-    return m_cached_navigable.ptr();
+    return m_navigable.ptr();
 }
 
-void Document::set_cached_navigable(GC::Ptr<HTML::Navigable> navigable)
+void Document::set_navigable(GC::Ptr<HTML::Navigable> navigable)
 {
-    m_cached_navigable = navigable.ptr();
+    m_navigable = navigable.ptr();
 }
 
 void Document::notify_css_background_image_loaded()

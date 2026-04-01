@@ -16,19 +16,21 @@
 #include <LibMedia/Sinks/DisplayingVideoSink.h>
 #include <LibMedia/Track.h>
 #include <LibThreading/Thread.h>
+#include <LibThreading/ThreadPool.h>
 
 #include "PlaybackManager.h"
 
 namespace Media {
 
-DecoderErrorOr<void> PlaybackManager::prepare_playback_from_media_data(WeakPlaybackManager const& self, NonnullRefPtr<IncrementallyPopulatedStream> stream, NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop_reference)
+DecoderErrorOr<NonnullRefPtr<Demuxer>> PlaybackManager::create_demuxer_for_stream(NonnullRefPtr<MediaStream> const& stream)
 {
-    auto demuxer = TRY([&] -> DecoderErrorOr<NonnullRefPtr<Demuxer>> {
-        if (Matroska::Reader::is_matroska_or_webm(stream->create_cursor()))
-            return Matroska::MatroskaDemuxer::from_stream(stream);
-        return FFmpeg::FFmpegDemuxer::from_stream(stream);
-    }());
+    if (Matroska::Reader::is_matroska_or_webm(stream->create_cursor()))
+        return Matroska::MatroskaDemuxer::from_stream(stream);
+    return FFmpeg::FFmpegDemuxer::from_stream(stream);
+}
 
+DecoderErrorOr<void> PlaybackManager::prepare_playback_from_demuxer(WeakPlaybackManager const& self, NonnullRefPtr<Demuxer> const& demuxer, NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop_reference)
+{
     // Create the video tracks and their data providers.
     auto all_video_tracks = TRY(demuxer->get_tracks_for_type(TrackType::Video));
 
@@ -81,18 +83,37 @@ DecoderErrorOr<void> PlaybackManager::prepare_playback_from_media_data(WeakPlayb
         if (!self)
             return;
 
+        for (auto const& existing_track : self->m_video_tracks) {
+            if (video_tracks.contains_slow(existing_track)) {
+                self->on_unsupported_format_error(DecoderError::with_description(DecoderErrorCategory::Invalid, "Duplicate video track found"sv));
+                return;
+            }
+        }
+        for (auto const& existing_track : self->m_audio_tracks) {
+            if (audio_tracks.contains_slow(existing_track)) {
+                self->on_unsupported_format_error(DecoderError::with_description(DecoderErrorCategory::Invalid, "Duplicate audio track found"sv));
+                return;
+            }
+        }
+
+        auto first_new_video_index = self->m_video_tracks.size();
+        auto first_new_audio_index = self->m_audio_tracks.size();
+
         self->m_video_tracks.extend(move(video_tracks));
         self->m_video_track_datas.extend(move(video_track_datas));
         self->m_audio_tracks.extend(move(audio_tracks));
         self->m_audio_track_datas.extend(move(audio_track_datas));
-        self->m_preferred_video_track = preferred_video_track;
-        self->m_preferred_audio_track = preferred_audio_track;
+
+        if (!self->m_preferred_video_track.has_value())
+            self->m_preferred_video_track = preferred_video_track;
+        if (!self->m_preferred_audio_track.has_value())
+            self->m_preferred_audio_track = preferred_audio_track;
 
         self->check_for_duration_change(duration);
 
         self->set_up_data_providers();
 
-        if (!self->m_audio_tracks.is_empty()) {
+        if (!self->m_audio_output_disabled && !self->m_audio_sink && !self->m_audio_tracks.is_empty()) {
             self->m_audio_sink = MUST(AudioMixingSink::try_create());
             self->set_time_provider(make_ref_counted<WrapperTimeProvider<AudioMixingSink>>(*self->m_audio_sink));
             self->m_audio_sink->on_audio_output_error = [self](Error&& error) {
@@ -109,10 +130,10 @@ DecoderErrorOr<void> PlaybackManager::prepare_playback_from_media_data(WeakPlayb
         }
 
         if (self->on_track_added) {
-            for (auto const& audio_track : self->m_audio_tracks)
-                self->on_track_added(TrackType::Audio, audio_track);
-            for (auto const& video_track : self->m_video_tracks)
-                self->on_track_added(TrackType::Video, video_track);
+            for (size_t i = first_new_audio_index; i < self->m_audio_tracks.size(); i++)
+                self->on_track_added(self->m_audio_tracks[i]);
+            for (size_t i = first_new_video_index; i < self->m_video_tracks.size(); i++)
+                self->on_track_added(self->m_video_tracks[i]);
         }
 
         if (self->on_metadata_parsed)
@@ -141,25 +162,47 @@ PlaybackManager::~PlaybackManager()
     m_weak_link->revoke({});
 }
 
-void PlaybackManager::add_media_source(NonnullRefPtr<IncrementallyPopulatedStream> const& stream)
+static void handle_media_init_error(WeakPlaybackManager self, NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop_reference, DecoderError error)
 {
-    auto thread = Threading::Thread::construct("Media Init"sv, [self = weak(), stream = stream, main_thread_event_loop_reference = Core::EventLoop::current_weak()] mutable -> int {
-        auto maybe_error = prepare_playback_from_media_data(self, stream, main_thread_event_loop_reference);
-        if (maybe_error.is_error()) {
-            auto main_thread_event_loop = main_thread_event_loop_reference->take();
-            main_thread_event_loop->deferred_invoke([self = move(self), error = maybe_error.release_error()] mutable {
-                if (!self)
-                    return;
-                if (self->on_unsupported_format_error)
-                    self->on_unsupported_format_error(move(error));
-            });
-            return 0;
-        }
-        return 0;
+    auto main_thread_event_loop = main_thread_event_loop_reference->take();
+    if (!main_thread_event_loop)
+        return;
+    main_thread_event_loop->deferred_invoke([self = move(self), error = move(error)] mutable {
+        if (!self)
+            return;
+        if (self->on_unsupported_format_error)
+            self->on_unsupported_format_error(move(error));
     });
+}
 
-    thread->start();
-    thread->detach();
+void PlaybackManager::add_media_source(NonnullRefPtr<MediaStream> const& stream)
+{
+    auto self = weak();
+    auto main_thread_event_loop_reference = Core::EventLoop::current_weak();
+
+    Threading::ThreadPool::the().submit([self = move(self), stream, main_thread_event_loop_reference = move(main_thread_event_loop_reference)] mutable {
+        auto demuxer_or_error = create_demuxer_for_stream(stream);
+        if (demuxer_or_error.is_error()) {
+            handle_media_init_error(move(self), move(main_thread_event_loop_reference), demuxer_or_error.release_error());
+            return;
+        }
+
+        auto maybe_error = prepare_playback_from_demuxer(self, demuxer_or_error.release_value(), main_thread_event_loop_reference);
+        if (maybe_error.is_error())
+            handle_media_init_error(move(self), move(main_thread_event_loop_reference), maybe_error.release_error());
+    });
+}
+
+void PlaybackManager::add_media_source(NonnullRefPtr<Demuxer> const& demuxer)
+{
+    auto self = weak();
+    auto main_thread_event_loop_reference = Core::EventLoop::current_weak();
+
+    Threading::ThreadPool::the().submit([self = move(self), demuxer, main_thread_event_loop_reference = move(main_thread_event_loop_reference)] mutable {
+        auto maybe_error = prepare_playback_from_demuxer(self, demuxer, main_thread_event_loop_reference);
+        if (maybe_error.is_error())
+            handle_media_init_error(move(self), move(main_thread_event_loop_reference), maybe_error.release_error());
+    });
 }
 
 WeakPlaybackManager PlaybackManager::weak()
@@ -255,7 +298,6 @@ void PlaybackManager::dispatch_error(DecoderError&& error)
 void PlaybackManager::set_time_provider(NonnullRefPtr<MediaTimeProvider> const& provider)
 {
     auto time = current_time();
-    dbgln("set time to {}, playing? {}", time, is_playing());
     provider->set_time(time);
     m_time_provider = provider;
     for (auto& track_data : m_video_track_datas) {
@@ -274,16 +316,6 @@ void PlaybackManager::disable_audio()
 
     for (auto const& track : m_audio_tracks)
         track_stopped_buffering(track);
-}
-
-PlaybackManager::VideoTrackData& PlaybackManager::get_video_data_for_track(Track const& track)
-{
-    for (auto& track_data : m_video_track_datas) {
-        if (track_data.track == track)
-            return track_data;
-    }
-
-    VERIFY_NOT_REACHED();
 }
 
 NonnullRefPtr<DisplayingVideoSink> PlaybackManager::get_or_create_the_displaying_video_sink_for_track(Track const& track)
@@ -311,16 +343,6 @@ void PlaybackManager::remove_the_displaying_video_sink_for_track(Track const& tr
     track_stopped_buffering(track);
 }
 
-PlaybackManager::AudioTrackData& PlaybackManager::get_audio_data_for_track(Track const& track)
-{
-    for (auto& track_data : m_audio_track_datas) {
-        if (track_data.track == track)
-            return track_data;
-    }
-
-    VERIFY_NOT_REACHED();
-}
-
 void PlaybackManager::enable_an_audio_track(Track const& track)
 {
     if (!m_audio_sink)
@@ -342,6 +364,25 @@ void PlaybackManager::disable_an_audio_track(Track const& track)
     VERIFY(track_data.provider == m_audio_sink->provider(track));
     m_audio_sink->set_provider(track, nullptr);
     track_stopped_buffering(track);
+}
+
+bool PlaybackManager::track_is_enabled(Track const& track) const
+{
+    if (track.type() == TrackType::Video) {
+        auto const& track_data = get_video_data_for_track(track);
+        return track_data.display != nullptr;
+    }
+
+    VERIFY(track.type() == TrackType::Audio);
+    if (!m_audio_sink)
+        return false;
+
+    auto const& track_data = get_audio_data_for_track(track);
+    auto const& assigned_provider = m_audio_sink->provider(track);
+    if (assigned_provider == nullptr)
+        return false;
+    VERIFY(track_data.provider == assigned_provider);
+    return true;
 }
 
 void PlaybackManager::play()
@@ -368,6 +409,34 @@ bool PlaybackManager::is_playing()
 PlaybackState PlaybackManager::state()
 {
     return m_handler->state();
+}
+
+bool PlaybackManager::has_future_data()
+{
+    return m_handler->has_future_data();
+}
+
+TimeRanges PlaybackManager::buffered_time_ranges() const
+{
+    TimeRanges intersection;
+
+    auto intersect_ranges = [&](auto const& track_datas) {
+        for (auto const& track_data : track_datas) {
+            if (!track_is_enabled(track_data.track))
+                continue;
+
+            auto range = track_data.provider->buffered_time_ranges();
+            if (intersection.is_empty()) {
+                intersection = range;
+                continue;
+            }
+            intersection = intersection.intersection(range);
+        }
+    };
+    intersect_ranges(m_video_track_datas);
+    intersect_ranges(m_audio_track_datas);
+
+    return intersection;
 }
 
 void PlaybackManager::set_volume(double volume)
