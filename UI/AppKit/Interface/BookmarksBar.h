@@ -8,10 +8,20 @@
 
 #import <Cocoa/Cocoa.h>
 
+@class BookmarkFolderPopover;
+
 @interface BookmarksBar : NSView
 
 - (instancetype)init;
 
 - (void)rebuild;
+
+- (void)closeBookmarkFolders;
+- (void)bookmarkFolderDidClose:(BookmarkFolderPopover*)folder;
+
+- (void)showContextMenu:(id)control event:(NSEvent*)event;
+
+@property (nonatomic, strong, readonly) NSString* bookmark_context_menu_item_id;
+@property (nonatomic, strong, readonly) NSString* bookmark_context_menu_target_folder_id;
 
 @end

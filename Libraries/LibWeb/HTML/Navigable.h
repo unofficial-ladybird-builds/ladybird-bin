@@ -64,7 +64,7 @@ public:
     using NullOrError = Optional<String>;
     using NavigationParamsVariant = Variant<NullOrError, GC::Ref<NavigationParams>, GC::Ref<NonFetchSchemeNavigationParams>>;
 
-    ErrorOr<void> initialize_navigable(GC::Ref<DocumentState> document_state, GC::Ptr<Navigable> parent);
+    void initialize_navigable(GC::Ref<DocumentState> document_state, GC::Ptr<Navigable> parent);
 
     void register_navigation_observer(Badge<NavigationObserver>, NavigationObserver&);
     void unregister_navigation_observer(Badge<NavigationObserver>, NavigationObserver&);
@@ -150,7 +150,6 @@ public:
         GC::Ref<SourceSnapshotParams> source_snapshot_params,
         TargetSnapshotParams const& target_snapshot_params,
         UserNavigationInvolvement user_involvement,
-        NonnullRefPtr<Core::Promise<Empty>> signal_to_continue_session_history_processing,
         Optional<String> navigation_id,
         NavigationParamsVariant navigation_params,
         ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type,
