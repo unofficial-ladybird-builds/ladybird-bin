@@ -901,9 +901,11 @@ set(SOURCES
     ResourceTiming/PerformanceResourceTiming.cpp
     SecureContexts/AbstractOperations.cpp
     Selection/Selection.cpp
+    ServiceWorker/Cache.cpp
     ServiceWorker/CacheStorage.cpp
     ServiceWorker/EventNames.cpp
     ServiceWorker/Job.cpp
+    ServiceWorker/NameToCacheMap.cpp
     ServiceWorker/Registration.cpp
     ServiceWorker/ServiceWorker.cpp
     ServiceWorker/ServiceWorkerContainer.cpp
@@ -1158,9 +1160,12 @@ set(SOURCES
     WebSockets/WebSocket.cpp
     WebVTT/VTTCue.cpp
     WebVTT/VTTRegion.cpp
+    WebXR/XRLayer.cpp
+    WebXR/XRRenderState.cpp
     WebXR/XRSession.cpp
     WebXR/XRSessionEvent.cpp
     WebXR/XRSystem.cpp
+    WebXR/XRWebGLLayer.cpp
     Worker/WebWorkerClient.cpp
     XHR/EventNames.cpp
     XHR/FormData.cpp

@@ -124,6 +124,7 @@ static bool is_platform_object(Type const& type)
         "Range"sv,
         "ReadableStream"sv,
         "Request"sv,
+        "Response"sv,
         "Selection"sv,
         "ServiceWorkerContainer"sv,
         "ServiceWorkerRegistration"sv,
@@ -181,6 +182,7 @@ static bool is_platform_object(Type const& type)
         "WritableStream"sv,
         "XPathResult"sv,
         "XRSession"sv,
+        "XRWebGLLayer"sv,
     };
     if (type.name().ends_with("Element"sv))
         return true;

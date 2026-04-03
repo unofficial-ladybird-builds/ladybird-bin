@@ -1744,6 +1744,9 @@ void GridFormattingContext::resolve_grid_item_sizes(GridDimension dimension)
             // OPTIMIZATION: For auto-sized items with stretch/normal alignment and no auto margins, the item stretches
             //               to fill the containing block. We can compute this directly without the expensive
             //               calculate_fit_content_width/height calls that trigger intrinsic sizing.
+            // NB: Final grid item alignment works with the resolved grid area size. Percentage preferred sizes
+            //     must resolve against that definite area instead of being reclassified as auto from the outer
+            //     grid container's own definiteness.
             bool can_stretch_directly = preferred_size.is_auto()
                 && (alignment == Alignment::Stretch || alignment == Alignment::Normal)
                 && !item.margin_start(dimension).is_auto()

@@ -1,0 +1,13 @@
+Harness status: OK
+
+Found 8 tests
+
+8 Pass
+Pass	Cache.delete with no arguments
+Pass	Cache.delete called with a string URL
+Pass	Cache.delete called with a Request object
+Pass	Cache.delete called with a HEAD request
+Pass	Cache.delete supports ignoreVary
+Pass	Cache.delete with a non-existent entry
+Pass	Cache.delete with ignoreSearch option (request with search parameters)
+Pass	Cache.delete with ignoreSearch option (when it is specified as false)

@@ -1127,6 +1127,8 @@ struct SerialPortInfo;
 
 namespace Web::ServiceWorker {
 
+class Cache;
+class CacheStorage;
 class ServiceWorker;
 class ServiceWorkerContainer;
 class ServiceWorkerRegistration;
@@ -1411,9 +1413,12 @@ class VTTRegion;
 
 namespace Web::WebXR {
 
+class XRLayer;
+class XRRenderState;
 class XRSession;
 class XRSessionEvent;
 class XRSystem;
+class XRWebGLLayer;
 
 }
 
