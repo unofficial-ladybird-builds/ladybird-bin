@@ -53,8 +53,8 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
 @property (nonatomic, strong) NSMenu* bookmark_context_menu;
 @property (nonatomic, strong) NSMenu* bookmark_folder_context_menu;
 
-@property (nonatomic, strong, readwrite) NSString* bookmark_context_menu_item_id;
-@property (nonatomic, strong, readwrite) NSString* bookmark_context_menu_target_folder_id;
+@property (nonatomic, strong, readwrite) NSString* selected_bookmark_menu_item_id;
+@property (nonatomic, strong, readwrite) NSString* selected_bookmark_menu_target_folder_id;
 
 @end
 
@@ -278,8 +278,8 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
 
 - (void)showContextMenu:(id)control event:(NSEvent*)event
 {
-    self.bookmark_context_menu_item_id = Ladybird::get_control_property(control, @"id");
-    self.bookmark_context_menu_target_folder_id = Ladybird::get_control_property(control, @"target_folder_id");
+    self.selected_bookmark_menu_item_id = Ladybird::get_control_property(control, @"id");
+    self.selected_bookmark_menu_target_folder_id = Ladybird::get_control_property(control, @"target_folder_id");
 
     if (auto* type = Ladybird::get_control_property(control, @"type"); [type isEqualToString:@"bookmark"])
         [NSMenu popUpContextMenu:self.bookmark_context_menu withEvent:event forView:control];
@@ -288,6 +288,19 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
 }
 
 - (void)showContextMenuForEvent:(NSEvent*)event
+{
+    if (auto* button = [self bookmarkButtonForEvent:event]) {
+        [self showContextMenu:button event:event];
+        return;
+    }
+
+    self.selected_bookmark_menu_item_id = @"";
+    self.selected_bookmark_menu_target_folder_id = nil;
+
+    [NSMenu popUpContextMenu:self.bookmarks_bar_context_menu withEvent:event forView:self];
+}
+
+- (NSView*)bookmarkButtonForEvent:(NSEvent*)event
 {
     auto location = [event locationInWindow];
 
@@ -299,14 +312,10 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
         if (!NSPointInRect(point, [button bounds]))
             continue;
 
-        [self showContextMenu:button event:event];
-        return;
+        return button;
     }
 
-    self.bookmark_context_menu_item_id = @"";
-    self.bookmark_context_menu_target_folder_id = nil;
-
-    [NSMenu popUpContextMenu:self.bookmarks_bar_context_menu withEvent:event forView:self];
+    return nil;
 }
 
 - (void)rightMouseDown:(NSEvent*)event
@@ -321,6 +330,19 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
         return;
     }
 
+    if ([event modifierFlags] & NSEventModifierFlagCommand) {
+        if (auto* button = [self bookmarkButtonForEvent:event]) {
+            if (auto* type = Ladybird::get_control_property(button, @"type"); [type isEqualToString:@"bookmark"]) {
+                auto bookmark_id = Ladybird::ns_string_to_string(Ladybird::get_control_property(button, @"id"));
+                auto activate_tab = ([event modifierFlags] & NSEventModifierFlagShift) ? Web::HTML::ActivateTab::No : Web::HTML::ActivateTab::Yes;
+
+                WebView::Application::the().open_bookmark_in_new_tab(bookmark_id, activate_tab);
+            }
+        }
+
+        return;
+    }
+
     [super mouseDown:event];
 }
 
@@ -330,10 +352,10 @@ static Optional<WebView::Menu&> find_bookmark_folder_by_id(WebView::Menu& menu, 
     if (!hit)
         return nil;
 
-    // Route ctrl+left-clicks to the BookmarksBar so we can show the appropriate context menu, rather than letting
+    // Route cmd and ctrl+left clicks to the BookmarksBar so we can handle the action appropriately, rather than letting
     // NSButton swallow the event for its own click tracking.
     auto* event = [NSApp currentEvent];
-    if ([event type] == NSEventTypeLeftMouseDown && ([event modifierFlags] & NSEventModifierFlagControl))
+    if ([event type] == NSEventTypeLeftMouseDown && ([event modifierFlags] & (NSEventModifierFlagControl | NSEventModifierFlagCommand)))
         return self;
 
     return hit;
