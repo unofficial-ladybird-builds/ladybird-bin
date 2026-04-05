@@ -18,6 +18,7 @@
         background-image: url("support/colors-16x8.png");
         background-size: cover;
         background-repeat: no-repeat;
+        image-rendering: pixelated; /* for UAs that don't support crisp-edges */
         image-rendering: crisp-edges;
       }
       .bigWide {
@@ -73,7 +74,5 @@
     <div class="objectOuter"><div class="small cr"></div></div>
     <div class="objectOuter"><div class="small default"></div></div>
     <br>
-    <!-- FIXME: Workaround to ensure CSS background-image is loaded before taking screenshot: https://github.com/LadybirdBrowser/ladybird/issues/3448 -->
-    <img style="display: none;" src="support/colors-16x8.png" />
   </body>
 </html>

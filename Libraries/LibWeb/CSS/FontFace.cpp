@@ -22,8 +22,14 @@
 #include <LibWeb/CSS/FontFace.h>
 #include <LibWeb/CSS/FontFaceSet.h>
 #include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/CSS/StyleValues/ComputationContext.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
+#include <LibWeb/CSS/StyleValues/FontStyleStyleValue.h>
+#include <LibWeb/CSS/StyleValues/NumberStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
+#include <LibWeb/CSS/StyleValues/StyleValueList.h>
+#include <LibWeb/CSS/StyleValues/UnicodeRangeStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/Window.h>
@@ -44,6 +50,32 @@ static bool is_unsupported_source(ParsedFontFace::Source const& source)
     if (source.format.has_value())
         return !font_format_is_supported(source.format.value());
     return source.local_or_url.get<URL>().url().ends_with_bytes(".eot"sv);
+}
+
+static FontWeightRange compute_weight_range(StyleValue const& value)
+{
+    if (value.to_keyword() == Keyword::Auto || value.to_keyword() == Keyword::Normal)
+        return { 400, 400 };
+
+    auto& weight_values = value.as_value_list().values();
+    if (weight_values.size() == 1) {
+        auto one_weight = static_cast<int>(StyleComputer::compute_font_weight(weight_values[0], {})->as_number().number());
+        return { one_weight, one_weight };
+    }
+    if (weight_values.size() == 2) {
+        auto first = static_cast<int>(StyleComputer::compute_font_weight(weight_values[0], {})->as_number().number());
+        auto second = static_cast<int>(StyleComputer::compute_font_weight(weight_values[1], {})->as_number().number());
+        return { min(first, second), max(first, second) };
+    }
+    return { 400, 400 };
+}
+
+static int compute_slope(StyleValue const& value)
+{
+    if (value.to_keyword() == Keyword::Auto || value.to_keyword() == Keyword::Normal)
+        return 0;
+
+    return StyleComputer::compute_font_style(value)->as_font_style().to_font_slope();
 }
 
 static NonnullRefPtr<Core::Promise<NonnullRefPtr<Gfx::Typeface const>>> load_vector_font(JS::Realm& realm, ByteBuffer const& data)
@@ -95,29 +127,25 @@ GC::Ref<FontFace> FontFace::construct_impl(JS::Realm& realm, String family, Font
     //    Otherwise, set font face’s corresponding attributes to the serialization of the parsed values.
 
     Parser::ParsingParams parsing_params { realm };
-    auto try_parse_descriptor = [&parsing_params, &font_face, &realm](DescriptorID descriptor_id, String const& string) -> String {
+    auto try_set_descriptor = [&](DescriptorID descriptor_id, String const& string, auto setter_impl) {
         auto result = parse_css_descriptor(parsing_params, AtRuleID::FontFace, DescriptorNameAndID::from_id(descriptor_id), string);
         if (!result) {
             font_face->reject_status_promise(WebIDL::SyntaxError::create(realm, Utf16String::formatted("FontFace constructor: Invalid {}", to_string(descriptor_id))));
-            return {};
+            return;
         }
-
-        if (result->is_custom_ident())
-            return result->as_custom_ident().custom_ident().to_string();
-
-        return result->to_string(SerializationMode::Normal);
+        (font_face.ptr()->*setter_impl)(result.release_nonnull());
     };
-    font_face->m_family = try_parse_descriptor(DescriptorID::FontFamily, family);
-    font_face->m_style = try_parse_descriptor(DescriptorID::FontStyle, descriptors.style);
-    font_face->m_weight = try_parse_descriptor(DescriptorID::FontWeight, descriptors.weight);
-    font_face->m_stretch = try_parse_descriptor(DescriptorID::FontWidth, descriptors.stretch);
-    font_face->m_unicode_range = try_parse_descriptor(DescriptorID::UnicodeRange, descriptors.unicode_range);
-    font_face->m_feature_settings = try_parse_descriptor(DescriptorID::FontFeatureSettings, descriptors.feature_settings);
-    font_face->m_variation_settings = try_parse_descriptor(DescriptorID::FontVariationSettings, descriptors.variation_settings);
-    font_face->m_display = try_parse_descriptor(DescriptorID::FontDisplay, descriptors.display);
-    font_face->m_ascent_override = try_parse_descriptor(DescriptorID::AscentOverride, descriptors.ascent_override);
-    font_face->m_descent_override = try_parse_descriptor(DescriptorID::DescentOverride, descriptors.descent_override);
-    font_face->m_line_gap_override = try_parse_descriptor(DescriptorID::LineGapOverride, descriptors.line_gap_override);
+    try_set_descriptor(DescriptorID::FontFamily, family, &FontFace::set_family_impl);
+    try_set_descriptor(DescriptorID::FontStyle, descriptors.style, &FontFace::set_style_impl);
+    try_set_descriptor(DescriptorID::FontWeight, descriptors.weight, &FontFace::set_weight_impl);
+    try_set_descriptor(DescriptorID::FontWidth, descriptors.stretch, &FontFace::set_stretch_impl);
+    try_set_descriptor(DescriptorID::UnicodeRange, descriptors.unicode_range, &FontFace::set_unicode_range_impl);
+    try_set_descriptor(DescriptorID::FontFeatureSettings, descriptors.feature_settings, &FontFace::set_feature_settings_impl);
+    try_set_descriptor(DescriptorID::FontVariationSettings, descriptors.variation_settings, &FontFace::set_variation_settings_impl);
+    try_set_descriptor(DescriptorID::FontDisplay, descriptors.display, &FontFace::set_display_impl);
+    try_set_descriptor(DescriptorID::AscentOverride, descriptors.ascent_override, &FontFace::set_ascent_override_impl);
+    try_set_descriptor(DescriptorID::DescentOverride, descriptors.descent_override, &FontFace::set_descent_override_impl);
+    try_set_descriptor(DescriptorID::LineGapOverride, descriptors.line_gap_override, &FontFace::set_line_gap_override_impl);
     RefPtr<StyleValue const> parsed_source;
     if (auto* source_string = source.get_pointer<String>()) {
         parsed_source = parse_css_descriptor(parsing_params, AtRuleID::FontFace, DescriptorNameAndID::from_id(DescriptorID::Src), *source_string);
@@ -184,6 +212,9 @@ GC::Ref<FontFace> FontFace::construct_impl(JS::Realm& realm, String family, Font
                 font->m_parsed_font = vector_font;
                 font->m_status = Bindings::FontFaceLoadStatus::Loaded;
                 WebIDL::resolve_promise(font->realm(), font->m_font_status_promise, font);
+
+                if (auto font_computer = font->font_computer(); font_computer.has_value())
+                    font_computer->register_font_face(*font);
 
                 // For each FontFaceSet font face is in:
                 for (auto& font_face_set : font->m_containing_sets) {
@@ -252,9 +283,13 @@ void FontFace::reparse_connected_css_font_face_rule_descriptors()
 {
     auto const& descriptors = m_css_font_face_rule->descriptors();
 
+    ComputationContext computation_context {
+        .length_resolution_context = Length::ResolutionContext::for_document(*descriptors->parent_rule()->parent_style_sheet()->owning_document())
+    };
+
     set_family_impl(*descriptors->descriptor(DescriptorNameAndID::from_id(DescriptorID::FontFamily)));
-    set_style_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontStyle)));
-    set_weight_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontWeight)));
+    set_style_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontStyle))->absolutized(computation_context));
+    set_weight_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontWeight))->absolutized(computation_context));
     set_stretch_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontWidth)));
     set_unicode_range_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::UnicodeRange)));
     set_feature_settings_impl(*descriptors->descriptor_or_initial_value(DescriptorNameAndID::from_id(DescriptorID::FontFeatureSettings)));
@@ -275,9 +310,8 @@ ParsedFontFace FontFace::parsed_font_face() const
         // Create a dummy CSSFontFaceRule so that we load relative to the document's base URL
         CSSFontFaceRule::create(realm(), CSSFontFaceDescriptors::create(realm(), {})),
         m_family,
-        // FIXME: Actually parse this as we're supposed to.
-        m_weight.to_number<int>().map([](auto weight) { return FontWeightRange { weight, weight }; }),
-        0,                      // FIXME: slope
+        m_cached_weight_range,
+        m_cached_slope,
         Gfx::FontWidth::Normal, // FIXME: width
         m_urls,
         m_unicode_ranges,
@@ -312,6 +346,7 @@ void FontFace::visit_edges(JS::Cell::Visitor& visitor)
 
     visitor.visit(m_font_status_promise);
     visitor.visit(m_css_font_face_rule);
+    visitor.visit(m_font_loader);
     for (auto const& font_face_set : m_containing_sets)
         visitor.visit(font_face_set);
 }
@@ -330,9 +365,33 @@ void FontFace::reject_status_promise(JS::Value reason)
     }
 }
 
+Optional<FontComputer&> FontFace::font_computer() const
+{
+    for (auto& font_face_set : m_containing_sets) {
+        auto& global = HTML::relevant_global_object(font_face_set);
+        if (auto* window = as_if<HTML::Window>(global))
+            return window->associated_document().font_computer();
+    }
+    return {};
+}
+
 void FontFace::disconnect_from_css_rule()
 {
     m_css_font_face_rule = nullptr;
+}
+
+RefPtr<Gfx::FontCascadeList const> FontFace::font_with_point_size(float point_size, Gfx::FontVariationSettings const& variations, Gfx::ShapeFeatures const& shape_features) const
+{
+    auto font_list = Gfx::FontCascadeList::create();
+    if (m_font_loader) {
+        if (auto font = m_font_loader->font_with_point_size(point_size, variations, shape_features))
+            font_list->add(*font, m_font_loader->unicode_ranges());
+    } else if (m_parsed_font) {
+        font_list->add(m_parsed_font->font(point_size, variations, shape_features), m_unicode_ranges);
+    }
+    if (font_list->is_empty())
+        return {};
+    return font_list;
 }
 
 // https://drafts.csswg.org/css-font-loading/#dom-fontface-family
@@ -349,7 +408,17 @@ WebIDL::ExceptionOr<void> FontFace::set_family(String const& string)
     if (m_css_font_face_rule)
         TRY(m_css_font_face_rule->descriptors()->set_font_family(string));
 
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->unregister_font_face(*this);
+    }
+
     set_family_impl(property.release_nonnull());
+
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->register_font_face(*this);
+    }
 
     return {};
 }
@@ -373,7 +442,17 @@ WebIDL::ExceptionOr<void> FontFace::set_style(String const& string)
     if (m_css_font_face_rule)
         TRY(m_css_font_face_rule->descriptors()->set_font_style(string));
 
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->unregister_font_face(*this);
+    }
+
     set_style_impl(property.release_nonnull());
+
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->register_font_face(*this);
+    }
 
     return {};
 }
@@ -381,6 +460,7 @@ WebIDL::ExceptionOr<void> FontFace::set_style(String const& string)
 void FontFace::set_style_impl(NonnullRefPtr<StyleValue const> const& value)
 {
     m_style = value->to_string(SerializationMode::Normal);
+    m_cached_slope = compute_slope(*value);
 }
 
 // https://drafts.csswg.org/css-font-loading/#dom-fontface-weight
@@ -397,7 +477,17 @@ WebIDL::ExceptionOr<void> FontFace::set_weight(String const& string)
     if (m_css_font_face_rule)
         TRY(m_css_font_face_rule->descriptors()->set_font_weight(string));
 
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->unregister_font_face(*this);
+    }
+
     set_weight_impl(property.release_nonnull());
+
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->register_font_face(*this);
+    }
 
     return {};
 }
@@ -405,6 +495,7 @@ WebIDL::ExceptionOr<void> FontFace::set_weight(String const& string)
 void FontFace::set_weight_impl(NonnullRefPtr<StyleValue const> const& value)
 {
     m_weight = value->to_string(SerializationMode::Normal);
+    m_cached_weight_range = compute_weight_range(*value);
 }
 
 // https://drafts.csswg.org/css-font-loading/#dom-fontface-stretch
@@ -423,6 +514,11 @@ WebIDL::ExceptionOr<void> FontFace::set_stretch(String const& string)
         TRY(m_css_font_face_rule->descriptors()->set_font_width(string));
 
     set_stretch_impl(property.release_nonnull());
+
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->did_load_font(FlyString(m_family));
+    }
 
     return {};
 }
@@ -448,12 +544,22 @@ WebIDL::ExceptionOr<void> FontFace::set_unicode_range(String const& string)
 
     set_unicode_range_impl(property.release_nonnull());
 
+    if (should_be_registered_with_font_computer()) {
+        if (auto font_computer = this->font_computer(); font_computer.has_value())
+            font_computer->did_load_font(FlyString(m_family));
+    }
+
     return {};
 }
 
 void FontFace::set_unicode_range_impl(NonnullRefPtr<StyleValue const> const& value)
 {
     m_unicode_range = value->to_string(SerializationMode::Normal);
+    auto const& ranges = value->as_value_list().values();
+    m_unicode_ranges.clear_with_capacity();
+    m_unicode_ranges.ensure_capacity(ranges.size());
+    for (auto const& range : ranges)
+        m_unicode_ranges.unchecked_append(range->as_unicode_range().unicode_range());
 }
 
 // https://drafts.csswg.org/css-font-loading/#dom-fontface-featuresettings
@@ -655,6 +761,9 @@ GC::Ref<WebIDL::Promise> FontFace::load()
                     if (m_css_font_face_rule)
                         m_css_font_face_rule->set_loading_state(CSSStyleSheet::LoadingState::Loaded);
 
+                    if (auto font_computer = this->font_computer(); font_computer.has_value())
+                        font_computer->register_font_face(*this);
+
                     // For each FontFaceSet font face is in:
                     for (auto& font_face_set : m_containing_sets) {
                         // 1. Add font face to the FontFaceSet’s [[LoadedFonts]] list.
@@ -667,6 +776,8 @@ GC::Ref<WebIDL::Promise> FontFace::load()
                             font_face_set->switch_to_loaded();
                     }
                 }
+
+                m_font_loader = nullptr;
             }));
         });
 
@@ -675,8 +786,10 @@ GC::Ref<WebIDL::Promise> FontFace::load()
         if (auto* window = as_if<HTML::Window>(global)) {
             auto& font_computer = const_cast<FontComputer&>(window->document()->font_computer());
 
-            if (auto loader = font_computer.load_font_face(parsed_font_face(), move(on_load)))
+            if (auto loader = font_computer.load_font_face(parsed_font_face(), move(on_load))) {
+                m_font_loader = loader;
                 loader->start_loading_next_url();
+            }
         } else {
             // FIXME: Don't know how to load fonts in workers! They don't have a StyleComputer
             dbgln("FIXME: Worker font loading not implemented");
