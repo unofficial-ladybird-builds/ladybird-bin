@@ -485,7 +485,7 @@ GC::Ref<Document> Document::construct_impl(JS::Realm& realm)
 {
     // The new Document() constructor steps are to set this’s origin to the origin of current global object’s associated Document. [HTML]
     auto document = Document::create(realm);
-    document->set_origin(as<HTML::Window>(HTML::current_principal_global_object()).associated_document().origin());
+    document->set_origin(as<HTML::Window>(HTML::current_global_object()).associated_document().origin());
     return document;
 }
 
@@ -1799,9 +1799,6 @@ void Document::update_style()
     style_computer().reset_ancestor_filter();
 
     build_registered_properties_cache();
-
-    // FIXME: We don't need to rebuild this cache on every style update, just if a @counter-style rule has changed.
-    build_counter_style_cache();
 
     auto invalidation = update_style_recursively(*this, style_computer(), false, false, false);
     if (!invalidation.is_none())
@@ -6659,6 +6656,14 @@ void Document::for_each_active_css_style_sheet(Function<void(CSS::CSSStyleSheet&
     }
 }
 
+HashMap<FlyString, NonnullRefPtr<CSS::CounterStyle const>> const& Document::registered_counter_styles() const
+{
+    if (m_needs_counter_style_cache_update)
+        const_cast<Document&>(*this).build_counter_style_cache();
+
+    return m_registered_counter_styles;
+}
+
 double Document::ensure_element_shared_css_random_base_value(CSS::RandomCachingKey const& random_caching_key)
 {
     return m_element_shared_css_random_base_value_cache.ensure(random_caching_key, []() {
@@ -7261,7 +7266,7 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> Document::parse_html_unsafe(JS::VM&
     //    TrustedHTML, this's relevant global object, html, "Document parseHTMLUnsafe", and "script".
     auto const compliant_html = TRY(TrustedTypes::get_trusted_type_compliant_string(
         TrustedTypes::TrustedTypeName::TrustedHTML,
-        HTML::current_principal_global_object(),
+        HTML::current_global_object(),
         html,
         TrustedTypes::InjectionSink::Document_parseHTMLUnsafe,
         TrustedTypes::Script.to_string()));
@@ -8296,6 +8301,8 @@ void Document::build_counter_style_cache()
             --i;
         }
     }
+
+    m_needs_counter_style_cache_update = false;
 }
 
 StringView to_string(SetNeedsLayoutReason reason)
