@@ -7360,7 +7360,10 @@ GC::Ptr<HTML::Navigable> Document::navigable() const
 
 void Document::set_navigable(GC::Ptr<HTML::Navigable> navigable)
 {
+    if (m_navigable == navigable)
+        return;
     m_navigable = navigable.ptr();
+    HTML::main_thread_event_loop().document_navigable_did_change({});
 }
 
 void Document::notify_css_background_image_loaded()
@@ -7390,33 +7393,21 @@ void Document::set_needs_repaint(InvalidateDisplayList should_invalidate_display
     if (!navigable)
         return;
 
+    navigable->set_needs_repaint();
+
     if (navigable->is_traversable()) {
-        navigable->traversable_navigable()->set_needs_repaint();
         Web::HTML::main_thread_event_loop().schedule();
         return;
     }
 
     if (auto container = navigable->container()) {
-        container->document().set_needs_repaint(should_invalidate_display_list);
+        container->document().set_needs_repaint(InvalidateDisplayList::No);
     }
 }
 
 void Document::invalidate_display_list()
 {
     m_cached_display_list.clear();
-
-    auto navigable = this->navigable();
-    if (!navigable)
-        return;
-
-    if (auto container = navigable->container()) {
-        // The container's paintable may have cached paint commands that include a PaintNestedDisplayList
-        // holding a stale reference to this document's old display list. Clear the cache so the container
-        // re-executes paint() and picks up the freshly recorded display list.
-        if (auto* paintable_box = container->unsafe_paintable_box())
-            paintable_box->invalidate_paint_cache();
-        container->document().invalidate_display_list();
-    }
 }
 
 RefPtr<Painting::DisplayList> Document::cached_display_list() const
