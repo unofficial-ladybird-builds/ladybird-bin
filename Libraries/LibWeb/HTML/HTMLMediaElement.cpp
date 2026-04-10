@@ -2375,9 +2375,9 @@ void HTMLMediaElement::seek_element(double playback_position, MediaSeekMode seek
     //    playback position, then the adjusted new playback position must also be after the current playback position.
     auto manager_seek_mode = Media::SeekMode::Accurate;
     if (seek_mode == MediaSeekMode::ApproximateForSpeed) {
-        if (playback_position <= current_playback_position())
+        if (playback_position < current_playback_position())
             manager_seek_mode = Media::SeekMode::FastBefore;
-        else
+        else if (playback_position > current_playback_position())
             manager_seek_mode = Media::SeekMode::FastAfter;
     }
 
