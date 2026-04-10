@@ -6,6 +6,7 @@
  */
 
 #include <AK/Bitmap.h>
+#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/GridFormattingContext.h>
@@ -182,8 +183,8 @@ GridFormattingContext::GridTrack GridFormattingContext::GridTrack::create_auto()
 GridFormattingContext::GridTrack GridFormattingContext::GridTrack::create_gap(CSSPixels size)
 {
     return GridTrack {
-        .min_track_sizing_function = CSS::GridSize(CSS::Size::make_px(size)),
-        .max_track_sizing_function = CSS::GridSize(CSS::Size::make_px(size)),
+        .min_track_sizing_function = CSS::GridSize(CSS::LengthStyleValue::create(CSS::Length::make_px(size))),
+        .max_track_sizing_function = CSS::GridSize(CSS::LengthStyleValue::create(CSS::Length::make_px(size))),
         .base_size = size,
         .is_gap = true,
     };
@@ -687,7 +688,7 @@ void GridFormattingContext::initialize_track_sizes(GridDimension dimension)
         if (!available_size.is_definite()
             && track.max_track_sizing_function.is_fit_content()
             && track.max_track_sizing_function.css_size().contains_percentage()) {
-            track.max_track_sizing_function = CSS::GridSize(CSS::Size::make_max_content());
+            track.max_track_sizing_function = CSS::GridSize(CSS::KeywordStyleValue::create(CSS::Keyword::MaxContent));
         }
 
         if (track.min_track_sizing_function.is_fixed(available_size)) {
@@ -1930,8 +1931,8 @@ void GridFormattingContext::collapse_auto_fit_tracks_if_needed(GridDimension dim
             continue;
 
         // NOTE: A collapsed track is treated as having a fixed track sizing function of 0px
-        tracks[track_index].min_track_sizing_function = CSS::GridSize(CSS::Size::make_px(0));
-        tracks[track_index].max_track_sizing_function = CSS::GridSize(CSS::Size::make_px(0));
+        tracks[track_index].min_track_sizing_function = CSS::GridSize(CSS::LengthStyleValue::create(CSS::Length::make_px(0)));
+        tracks[track_index].max_track_sizing_function = CSS::GridSize(CSS::LengthStyleValue::create(CSS::Length::make_px(0)));
     }
 }
 
@@ -2168,7 +2169,7 @@ void GridFormattingContext::run(AvailableSpace const& available_space)
 
             if (i < tracks.size()) {
                 auto const& track = tracks[i];
-                result.append(CSS::ExplicitGridTrack { CSS::GridSize { CSS::Size::make_px(track.base_size) } });
+                result.append(CSS::ExplicitGridTrack { CSS::GridSize { CSS::LengthStyleValue::create(CSS::Length::make_px(track.base_size)) } });
             }
         }
         return result;
