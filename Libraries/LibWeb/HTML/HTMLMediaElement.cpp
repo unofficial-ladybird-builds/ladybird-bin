@@ -1540,17 +1540,19 @@ void HTMLMediaElement::set_selected_video_track(Badge<VideoTrack>, GC::Ptr<HTML:
     if (video_track && !m_playback_manager->video_tracks().contains_slow(video_track->track_in_playback_manager()))
         return;
 
-    if (m_selected_video_track) {
-        VERIFY(m_selected_video_track_sink);
-        m_playback_manager->remove_the_displaying_video_sink_for_track(m_selected_video_track->track_in_playback_manager());
-        m_selected_video_track_sink = nullptr;
-        if (m_external_content_source)
-            m_external_content_source->clear();
-    }
+    if (m_external_content_source)
+        m_external_content_source->clear();
+
+    auto previous_track = m_selected_video_track;
 
     m_selected_video_track = video_track;
     if (video_track)
         m_selected_video_track_sink = m_playback_manager->get_or_create_the_displaying_video_sink_for_track(video_track->track_in_playback_manager());
+    else
+        m_selected_video_track_sink = nullptr;
+
+    if (previous_track)
+        m_playback_manager->remove_the_displaying_video_sink_for_track(previous_track->track_in_playback_manager());
 }
 
 void HTMLMediaElement::update_video_frame_and_timeline()
@@ -1705,9 +1707,6 @@ void HTMLMediaElement::on_metadata_parsed()
     // 6. Set the readyState attribute to HAVE_METADATA.
     set_ready_state(ReadyState::HaveMetadata);
 
-    // AD-HOC: If we've already got buffered data, we need to upgrade the readyState further than HAVE_METADATA.
-    update_ready_state();
-
     // 7. Let jumped be false.
     [[maybe_unused]] auto jumped = false;
 
@@ -1739,6 +1738,9 @@ void HTMLMediaElement::on_metadata_parsed()
             return IterationDecision::Break;
         });
     }
+
+    // AD-HOC: If we've already got buffered data, we need to upgrade the readyState further than HAVE_METADATA.
+    update_ready_state();
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
@@ -1975,8 +1977,10 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
     if (m_ready_state == ready_state)
         return;
 
+    auto old_ready_state = m_ready_state;
+    m_ready_state = ready_state;
+
     ScopeGuard guard { [&] {
-        m_ready_state = ready_state;
         upon_has_ended_playback_possibly_changed();
         set_needs_style_update(true);
     } };
@@ -1988,7 +1992,7 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
 
     // 1. Apply the first applicable set of substeps from the following list:
     // -> If the previous ready state was HAVE_NOTHING, and the new ready state is HAVE_METADATA
-    if (m_ready_state == ReadyState::HaveNothing && ready_state == ReadyState::HaveMetadata) {
+    if (old_ready_state == ReadyState::HaveNothing && ready_state == ReadyState::HaveMetadata) {
         // Queue a media element task given the media element to fire an event named loadedmetadata at the element.
         queue_a_media_element_task([this] {
             dispatch_event(DOM::Event::create(this->realm(), HTML::EventNames::loadedmetadata));
@@ -1998,7 +2002,7 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
     }
 
     // -> If the previous ready state was HAVE_METADATA and the new ready state is HAVE_CURRENT_DATA or greater
-    if (m_ready_state == ReadyState::HaveMetadata && ready_state >= ReadyState::HaveCurrentData) {
+    if (old_ready_state == ReadyState::HaveMetadata && ready_state >= ReadyState::HaveCurrentData) {
         // If this is the first time this occurs for this media element since the load() algorithm was last invoked, the user agent must queue a media
         // element task given the media element to fire an event named loadeddata at the element.
         if (m_first_data_load_event_since_load_start) {
@@ -2020,7 +2024,7 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
     }
 
     // -> If the previous ready state was HAVE_FUTURE_DATA or more, and the new ready state is HAVE_CURRENT_DATA or less
-    if (m_ready_state >= ReadyState::HaveFutureData && ready_state <= ReadyState::HaveCurrentData) {
+    if (old_ready_state >= ReadyState::HaveFutureData && ready_state <= ReadyState::HaveCurrentData) {
         // FIXME: If the media element was potentially playing before its readyState attribute changed to a value lower than HAVE_FUTURE_DATA, and the element
         //        has not ended playback, and playback has not stopped due to errors, paused for user interaction, or paused for in-band content, the user agent
         //        must queue a media element task given the media element to fire an event named timeupdate at the element, and queue a media element task given
@@ -2029,7 +2033,7 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
     }
 
     // -> If the previous ready state was HAVE_CURRENT_DATA or less, and the new ready state is HAVE_FUTURE_DATA
-    if (m_ready_state <= ReadyState::HaveCurrentData && ready_state == ReadyState::HaveFutureData) {
+    if (old_ready_state <= ReadyState::HaveCurrentData && ready_state == ReadyState::HaveFutureData) {
         // The user agent must queue a media element task given the media element to fire an event named canplay at the element.
         queue_a_media_element_task([this] {
             dispatch_event(DOM::Event::create(this->realm(), HTML::EventNames::canplay));
@@ -2046,7 +2050,7 @@ void HTMLMediaElement::set_ready_state(ReadyState ready_state)
     if (ready_state == ReadyState::HaveEnoughData) {
         // If the previous ready state was HAVE_CURRENT_DATA or less, the user agent must queue a media element task given the media element to fire an event
         // named canplay at the element, and, if the element's paused attribute is false, notify about playing for the element.
-        if (m_ready_state <= ReadyState::HaveCurrentData) {
+        if (old_ready_state <= ReadyState::HaveCurrentData) {
             queue_a_media_element_task([this] {
                 dispatch_event(DOM::Event::create(this->realm(), HTML::EventNames::canplay));
             });
@@ -2733,12 +2737,12 @@ void HTMLMediaElement::time_marches_on(TimeMarchesOnReason reason)
             queue_a_media_element_task([this]() {
                 dispatch_time_update_event();
             });
-        }
 
-        // AD-HOC: Run the SourceBuffer monitoring algorithm to update readyState based on buffered data relative to
-        //         the current playback position. This satisfies the periodic buffer monitoring in MSE:
-        //         https://w3c.github.io/media-source/#buffer-monitoring
-        update_ready_state();
+            // AD-HOC: Run the SourceBuffer monitoring algorithm to update readyState based on buffered data relative to
+            //         the current playback position. This satisfies the periodic buffer monitoring in MSE:
+            //         https://w3c.github.io/media-source/#buffer-monitoring
+            update_ready_state();
+        }
     }
 
     // FIXME: 7. If all of the cues in current cues have their text track cue active flag set, none of the cues in other cues have
