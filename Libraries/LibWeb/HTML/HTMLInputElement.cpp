@@ -2567,6 +2567,10 @@ static Utf16String convert_number_to_week_string(double input)
     // that represents the week that, in UTC, is current input milliseconds after midnight UTC on the morning of
     // 1970-01-01 (the time represented by the value "1970-01-01T00:00:00.0Z").
 
+    // AD-HOC: Values outside the valid ECMSScript time value range cannot produce valid date strings.
+    if (!isfinite(input) || fabs(input) > JS::max_time_value)
+        return {};
+
     auto year = JS::year_from_time(input);
     auto month = JS::month_from_time(input) + 1; // Adjust for zero-based month
     auto day = JS::date_from_time(input);
@@ -2599,13 +2603,23 @@ static Utf16String convert_number_to_time_string(double input)
 {
     // The algorithm to convert a number to a string, given a number input, is as follows: Return a valid time
     // string that represents the time that is input milliseconds after midnight on a day with no time changes.
-    auto seconds = JS::sec_from_time(input);
-    auto milliseconds = JS::ms_from_time(input);
+
+    // NB: We don't use JS::*_from_time helpers here because they lose sub-day precision when |input| is much larger
+    //     than 2^53.
+    auto time_of_day = fmod(input, JS::ms_per_day);
+    if (time_of_day < 0)
+        time_of_day += JS::ms_per_day;
+
+    auto hours = static_cast<u32>(time_of_day / JS::ms_per_hour);
+    auto minutes = static_cast<u32>(fmod(time_of_day, JS::ms_per_hour) / JS::ms_per_minute);
+    auto seconds = static_cast<u32>(fmod(time_of_day, JS::ms_per_minute) / JS::ms_per_second);
+    auto milliseconds = static_cast<u32>(fmod(time_of_day, JS::ms_per_second));
+
     if (milliseconds > 0)
-        return Utf16String::formatted("{:02d}:{:02d}:{:02d}.{:03d}", JS::hour_from_time(input), JS::min_from_time(input), seconds, milliseconds);
+        return Utf16String::formatted("{:02d}:{:02d}:{:02d}.{:03d}", hours, minutes, seconds, milliseconds);
     if (seconds > 0)
-        return Utf16String::formatted("{:02d}:{:02d}:{:02d}", JS::hour_from_time(input), JS::min_from_time(input), seconds);
-    return Utf16String::formatted("{:02d}:{:02d}", JS::hour_from_time(input), JS::min_from_time(input));
+        return Utf16String::formatted("{:02d}:{:02d}:{:02d}", hours, minutes, seconds);
+    return Utf16String::formatted("{:02d}:{:02d}", hours, minutes);
 }
 
 // https://html.spec.whatwg.org/multipage/input.html#local-date-and-time-state-(type=datetime-local):concept-input-value-number-string
@@ -2614,6 +2628,11 @@ static Utf16String convert_number_to_local_date_and_time_string(double input)
     // The algorithm to convert a number to a string, given a number input, is as follows: Return a valid
     // normalized local date and time string that represents the date and time that is input milliseconds
     // after midnight on the morning of 1970-01-01 (the time represented by the value "1970-01-01T00:00:00.0").
+
+    // AD-HOC: Values outside the valid ECMSScript time value range cannot produce valid date strings.
+    if (!isfinite(input) || fabs(input) > JS::max_time_value)
+        return {};
+
     auto year = JS::year_from_time(input);
     auto month = JS::month_from_time(input) + 1; // Adjust for zero-based month
     auto day = JS::date_from_time(input);
