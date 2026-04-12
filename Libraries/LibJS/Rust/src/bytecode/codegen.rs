@@ -3391,17 +3391,17 @@ fn generate_call_expression(
                 expression_string,
                 arguments,
             });
-        } else if let Some(b) = builtin {
-            if builtin_argument_count(b) == arguments.len() {
-                generator.emit(Instruction::CallBuiltin {
-                    dst: dst.operand(),
-                    callee: callee.operand(),
-                    this_value: this_value.operand(),
-                    argument_count: u32_from_usize(arguments.len()),
-                    builtin: b,
+        } else if let Some(builtin) = builtin {
+            if builtin_argument_count(builtin) == arguments.len() {
+                emit_builtin_call(
+                    generator,
+                    builtin,
+                    dst.operand(),
+                    callee.operand(),
+                    this_value.operand(),
                     expression_string,
                     arguments,
-                });
+                );
             } else {
                 generator.emit(Instruction::Call {
                     dst: dst.operand(),
@@ -8623,6 +8623,9 @@ const BUILTIN_ARRAY_ITERATOR_PROTOTYPE_NEXT: u8 = 17;
 const BUILTIN_MAP_ITERATOR_PROTOTYPE_NEXT: u8 = 18;
 const BUILTIN_SET_ITERATOR_PROTOTYPE_NEXT: u8 = 19;
 const BUILTIN_STRING_ITERATOR_PROTOTYPE_NEXT: u8 = 20;
+const BUILTIN_STRING_FROM_CHAR_CODE: u8 = 21;
+const BUILTIN_STRING_PROTOTYPE_CHAR_CODE_AT: u8 = 22;
+const BUILTIN_STRING_PROTOTYPE_CHAR_AT: u8 = 23;
 
 /// Detect known builtin methods from a callee expression (e.g. Math.abs).
 /// Returns the Builtin enum value as u8, matching Builtins.h ordering.
@@ -8633,10 +8636,16 @@ fn get_builtin(callee: &Expression) -> Option<u8> {
     if member_data.computed {
         return None;
     }
-    let ExpressionKind::Identifier(base_ident) = &member_data.object.inner else {
+    let ExpressionKind::Identifier(property_ident) = &member_data.property.inner else {
         return None;
     };
-    let ExpressionKind::Identifier(property_ident) = &member_data.property.inner else {
+    if property_ident.name == utf16!("charAt") {
+        return Some(BUILTIN_STRING_PROTOTYPE_CHAR_AT);
+    }
+    if property_ident.name == utf16!("charCodeAt") {
+        return Some(BUILTIN_STRING_PROTOTYPE_CHAR_CODE_AT);
+    }
+    let ExpressionKind::Identifier(base_ident) = &member_data.object.inner else {
         return None;
     };
     // Must match JS_ENUMERATE_BUILTINS order in Builtins.h.
@@ -8694,6 +8703,11 @@ fn get_builtin(callee: &Expression) -> Option<u8> {
             utf16!("next"),
             BUILTIN_STRING_ITERATOR_PROTOTYPE_NEXT,
         ),
+        (
+            utf16!("String"),
+            utf16!("fromCharCode"),
+            BUILTIN_STRING_FROM_CHAR_CODE,
+        ),
     ];
     for &(base, property, id) in BUILTINS {
         if base_ident.name == base && property_ident.name == property {
@@ -8727,7 +8741,106 @@ fn builtin_argument_count(builtin: u8) -> usize {
         BUILTIN_MAP_ITERATOR_PROTOTYPE_NEXT => 0,
         BUILTIN_SET_ITERATOR_PROTOTYPE_NEXT => 0,
         BUILTIN_STRING_ITERATOR_PROTOTYPE_NEXT => 0,
+        BUILTIN_STRING_FROM_CHAR_CODE => 1,
+        BUILTIN_STRING_PROTOTYPE_CHAR_CODE_AT => 1,
+        BUILTIN_STRING_PROTOTYPE_CHAR_AT => 1,
         _ => usize::MAX,
+    }
+}
+
+fn emit_builtin_call(
+    generator: &mut Generator,
+    builtin: u8,
+    dst: Operand,
+    callee: Operand,
+    this_value: Operand,
+    expression_string: Option<StringTableIndex>,
+    arguments: Vec<Operand>,
+) {
+    macro_rules! emit_nullary_builtin_instruction {
+        ($instruction:ident) => {
+            generator.emit(Instruction::$instruction {
+                dst,
+                callee,
+                this_value,
+                expression_string,
+            })
+        };
+    }
+
+    macro_rules! emit_unary_builtin_instruction {
+        ($instruction:ident) => {
+            generator.emit(Instruction::$instruction {
+                dst,
+                callee,
+                this_value,
+                argument: arguments[0],
+                expression_string,
+            })
+        };
+    }
+
+    macro_rules! emit_binary_builtin_instruction {
+        ($instruction:ident) => {
+            generator.emit(Instruction::$instruction {
+                dst,
+                callee,
+                this_value,
+                argument0: arguments[0],
+                argument1: arguments[1],
+                expression_string,
+            })
+        };
+    }
+
+    match builtin {
+        BUILTIN_MATH_ABS => emit_unary_builtin_instruction!(CallBuiltinMathAbs),
+        BUILTIN_MATH_LOG => emit_unary_builtin_instruction!(CallBuiltinMathLog),
+        BUILTIN_MATH_POW => emit_binary_builtin_instruction!(CallBuiltinMathPow),
+        BUILTIN_MATH_EXP => emit_unary_builtin_instruction!(CallBuiltinMathExp),
+        BUILTIN_MATH_CEIL => emit_unary_builtin_instruction!(CallBuiltinMathCeil),
+        BUILTIN_MATH_FLOOR => emit_unary_builtin_instruction!(CallBuiltinMathFloor),
+        BUILTIN_MATH_IMUL => emit_binary_builtin_instruction!(CallBuiltinMathImul),
+        BUILTIN_MATH_RANDOM => emit_nullary_builtin_instruction!(CallBuiltinMathRandom),
+        BUILTIN_MATH_ROUND => emit_unary_builtin_instruction!(CallBuiltinMathRound),
+        BUILTIN_MATH_SQRT => emit_unary_builtin_instruction!(CallBuiltinMathSqrt),
+        BUILTIN_MATH_SIN => emit_unary_builtin_instruction!(CallBuiltinMathSin),
+        BUILTIN_MATH_COS => emit_unary_builtin_instruction!(CallBuiltinMathCos),
+        BUILTIN_MATH_TAN => emit_unary_builtin_instruction!(CallBuiltinMathTan),
+        BUILTIN_REGEXP_PROTOTYPE_EXEC => {
+            emit_unary_builtin_instruction!(CallBuiltinRegExpPrototypeExec);
+        }
+        BUILTIN_REGEXP_PROTOTYPE_REPLACE => {
+            emit_binary_builtin_instruction!(CallBuiltinRegExpPrototypeReplace);
+        }
+        BUILTIN_REGEXP_PROTOTYPE_SPLIT => {
+            emit_binary_builtin_instruction!(CallBuiltinRegExpPrototypeSplit);
+        }
+        BUILTIN_ORDINARY_HAS_INSTANCE => {
+            emit_unary_builtin_instruction!(CallBuiltinOrdinaryHasInstance);
+        }
+        BUILTIN_ARRAY_ITERATOR_PROTOTYPE_NEXT => {
+            emit_nullary_builtin_instruction!(CallBuiltinArrayIteratorPrototypeNext);
+        }
+        BUILTIN_MAP_ITERATOR_PROTOTYPE_NEXT => {
+            emit_nullary_builtin_instruction!(CallBuiltinMapIteratorPrototypeNext);
+        }
+        BUILTIN_SET_ITERATOR_PROTOTYPE_NEXT => {
+            emit_nullary_builtin_instruction!(CallBuiltinSetIteratorPrototypeNext);
+        }
+        BUILTIN_STRING_ITERATOR_PROTOTYPE_NEXT => {
+            emit_nullary_builtin_instruction!(CallBuiltinStringIteratorPrototypeNext);
+        }
+        BUILTIN_STRING_FROM_CHAR_CODE => {
+            emit_unary_builtin_instruction!(CallBuiltinStringFromCharCode);
+        }
+        BUILTIN_STRING_PROTOTYPE_CHAR_CODE_AT => {
+            emit_unary_builtin_instruction!(CallBuiltinStringPrototypeCharCodeAt);
+        }
+        BUILTIN_STRING_PROTOTYPE_CHAR_AT => {
+            emit_unary_builtin_instruction!(CallBuiltinStringPrototypeCharAt);
+        }
+        _ => unreachable!(),
     }
 }
 
@@ -8904,6 +9017,52 @@ fn try_constant_loosely_equals(lhs: &ConstantValue, rhs: &ConstantValue) -> Opti
     }
 }
 
+#[derive(Clone, Copy)]
+enum NonDecimalRadix {
+    Binary,
+    Octal,
+    Hexadecimal,
+}
+
+impl NonDecimalRadix {
+    fn as_u32(self) -> u32 {
+        match self {
+            Self::Binary => 2,
+            Self::Octal => 8,
+            Self::Hexadecimal => 16,
+        }
+    }
+}
+
+fn strip_non_decimal_prefix(text: &str) -> Option<(NonDecimalRadix, &str)> {
+    // Detect an ASCII non-decimal prefix without slicing at a UTF-8-invalid boundary.
+    // Empty suffixes ("0x", "0o", "0b") remain invalid and are rejected here.
+    // Callers validate suffix digits before delegating conversion to numeric parsers.
+    if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+        return (!rest.is_empty()).then_some((NonDecimalRadix::Binary, rest));
+    }
+    if let Some(rest) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+        return (!rest.is_empty()).then_some((NonDecimalRadix::Octal, rest));
+    }
+    if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        return (!rest.is_empty()).then_some((NonDecimalRadix::Hexadecimal, rest));
+    }
+    None
+}
+
+fn is_valid_non_decimal_digits(text: &str, radix: NonDecimalRadix) -> bool {
+    // Keep this JS-specific precheck even though parse_bytes() also validates:
+    // num-bigint accepts forms that are invalid in JS StringToNumber/StringToBigInt
+    // non-decimal parsing (for example a leading '+' and '_' separators).
+    // strip_non_decimal_prefix() guarantees that this suffix is non-empty.
+    debug_assert!(!text.is_empty());
+    match radix {
+        NonDecimalRadix::Binary => text.bytes().all(|b| matches!(b, b'0' | b'1')),
+        NonDecimalRadix::Octal => text.bytes().all(|b| matches!(b, b'0'..=b'7')),
+        NonDecimalRadix::Hexadecimal => text.bytes().all(|b| b.is_ascii_hexdigit()),
+    }
+}
+
 /// Implements StringToBigInt per https://tc39.es/ecma262/#sec-stringtobigint.
 /// Trims whitespace, handles optional sign (decimal only), and handles
 /// 0b/0o/0x prefixes. Returns None if the string is not a valid
@@ -8918,14 +9077,12 @@ fn string_to_bigint(s: &Utf16String) -> Option<BigInt> {
         return Some(BigInt::from(0));
     }
     // Check for non-decimal prefixes (no sign allowed).
-    if s_trimmed.len() > 2 {
-        let (prefix, rest) = s_trimmed.split_at(2);
-        match prefix {
-            "0b" | "0B" => return BigInt::parse_bytes(rest.as_bytes(), 2),
-            "0o" | "0O" => return BigInt::parse_bytes(rest.as_bytes(), 8),
-            "0x" | "0X" => return BigInt::parse_bytes(rest.as_bytes(), 16),
-            _ => {}
+    if let Some((radix, rest)) = strip_non_decimal_prefix(s_trimmed) {
+        if !is_valid_non_decimal_digits(rest, radix) {
+            return None;
         }
+        // Convert validated suffix digits using the parser.
+        return BigInt::parse_bytes(rest.as_bytes(), radix.as_u32());
     }
     // Decimal with optional sign. Only allow digits (no dots, no exponents).
     let (is_negative, digits) = if let Some(rest) = s_trimmed.strip_prefix('-') {
@@ -9068,32 +9225,12 @@ fn string_to_number(s: &Utf16String) -> f64 {
     if trimmed == "-Infinity" {
         return f64::NEG_INFINITY;
     }
-    if trimmed.len() > 2 {
-        let (prefix, rest) = trimmed.split_at(2);
-        match prefix {
-            "0b" | "0B" => {
-                return if rest.bytes().all(|b| b == b'0' || b == b'1') {
-                    bigint_string_to_f64(rest, 2)
-                } else {
-                    f64::NAN
-                };
-            }
-            "0o" | "0O" => {
-                return if rest.bytes().all(|b| b.is_ascii_digit() && b < b'8') {
-                    bigint_string_to_f64(rest, 8)
-                } else {
-                    f64::NAN
-                };
-            }
-            "0x" | "0X" => {
-                return if rest.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    bigint_string_to_f64(rest, 16)
-                } else {
-                    f64::NAN
-                };
-            }
-            _ => {}
+    if let Some((radix, rest)) = strip_non_decimal_prefix(trimmed) {
+        if !is_valid_non_decimal_digits(rest, radix) {
+            return f64::NAN;
         }
+        // Convert validated suffix digits using the parser.
+        return bigint_string_to_f64(rest, radix.as_u32());
     }
     if !trimmed.bytes().all(|b| {
         b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-'

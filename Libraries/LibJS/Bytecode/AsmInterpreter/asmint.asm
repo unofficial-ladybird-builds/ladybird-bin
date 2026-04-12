@@ -351,10 +351,69 @@ macro bitwise_op(op_insn, slow_path_func)
     call_slow_path slow_path_func
 end
 
-# Dispatch using the instruction's m_length field (for variable-length instructions).
-macro dispatch_callbuiltin_size()
-    load32 t0, [pb, pc, m_length]
-    dispatch_variable t0
+# Validate that the callee still points at the expected builtin function.
+# Jumps to fail if the call target has been replaced or is not a function.
+macro validate_callee_builtin(expected_builtin, fail)
+    load_operand t2, m_callee
+    extract_tag t3, t2
+    branch_ne t3, OBJECT_TAG, fail
+    unbox_object t2, t2
+    load8 t3, [t2, OBJECT_FLAGS]
+    and t3, OBJECT_FLAG_IS_FUNCTION
+    branch_zero t3, fail
+    load8 t3, [t2, FUNCTION_OBJECT_BUILTIN_HAS_VALUE]
+    branch_zero t3, fail
+    load8 t3, [t2, FUNCTION_OBJECT_BUILTIN_VALUE]
+    branch_ne t3, expected_builtin, fail
+end
+
+# Load a UTF-16 code unit from a primitive string with resident UTF-16 data.
+# Input:
+#   t2 = PrimitiveString*
+#   t4 = non-negative code-unit index
+# Output:
+#   t0 = zero-extended code unit
+# Clobbers:
+#   t3, t5
+# Jumps to out_of_bounds if index >= string length.
+# Jumps to fail if the string would require resolving deferred data.
+macro load_primitive_string_utf16_code_unit(out_of_bounds, fail)
+    load8 t3, [t2, PRIMITIVE_STRING_DEFERRED_KIND]
+    branch_ne t3, PRIMITIVE_STRING_DEFERRED_KIND_NONE, fail
+
+    load64 t5, [t2, PRIMITIVE_STRING_UTF16_STRING]
+    branch_zero t5, fail
+
+    load8 t3, [t2, PRIMITIVE_STRING_UTF16_SHORT_STRING_BYTE_COUNT_AND_FLAG]
+    and t3, UTF16_SHORT_STRING_FLAG
+    branch_zero t3, .long_storage
+
+    load8 t3, [t2, PRIMITIVE_STRING_UTF16_SHORT_STRING_BYTE_COUNT_AND_FLAG]
+    shr t3, UTF16_SHORT_STRING_BYTE_COUNT_SHIFT_COUNT
+    branch_ge_unsigned t4, t3, out_of_bounds
+    mov t0, t2
+    add t0, PRIMITIVE_STRING_UTF16_SHORT_STRING_STORAGE
+    load8 t0, [t0, t4]
+    jmp .done
+
+.long_storage:
+    load64 t3, [t5, UTF16_STRING_DATA_LENGTH_IN_CODE_UNITS]
+    branch_negative t3, .utf16_storage
+    branch_ge_unsigned t4, t3, out_of_bounds
+    add t5, UTF16_STRING_DATA_STRING_STORAGE
+    load8 t0, [t5, t4]
+    jmp .done
+
+.utf16_storage:
+    shl t3, 1
+    shr t3, 1
+    branch_ge_unsigned t4, t3, out_of_bounds
+    mov t0, t4
+    add t0, t4
+    add t5, UTF16_STRING_DATA_STRING_STORAGE
+    load16 t0, [t5, t0]
+
+.done:
 end
 
 # Dispatch the instruction at current pc (without advancing).
@@ -1926,39 +1985,14 @@ end
 # Fast paths for common Math builtins with a single double argument.
 # Before using the fast path, we validate that the callee is still the
 # original builtin function (user code may have reassigned e.g. Math.abs).
-handler CallBuiltin
-    # Validate the callee: must be an object with IsFunction flag,
-    # must have m_builtin set, and the builtin must match the instruction's.
-    load_operand t2, m_callee
-    extract_tag t3, t2
-    branch_ne t3, OBJECT_TAG, .slow
-    # Extract raw Object*
-    unbox_object t2, t2
-    # Check IsFunction flag
-    load8 t3, [t2, OBJECT_FLAGS]
-    and t3, OBJECT_FLAG_IS_FUNCTION
-    branch_zero t3, .slow
-    # Check FunctionObject::m_builtin.has_value()
-    load8 t3, [t2, FUNCTION_OBJECT_BUILTIN_HAS_VALUE]
-    branch_zero t3, .slow
-    # Compare FunctionObject::m_builtin value with instruction's m_builtin
-    load8 t3, [t2, FUNCTION_OBJECT_BUILTIN_VALUE]
-    load8 t4, [pb, pc, m_builtin]
-    branch_ne t3, t4, .slow
-    # Callee validated. Now dispatch on the builtin enum (already in t4).
-    branch_eq t4, BUILTIN_MATH_ABS, .math_abs
-    branch_eq t4, BUILTIN_MATH_FLOOR, .math_floor
-    branch_eq t4, BUILTIN_MATH_CEIL, .math_ceil
-    branch_eq t4, BUILTIN_MATH_SQRT, .math_sqrt
-    branch_eq t4, BUILTIN_MATH_EXP, .math_exp
-    jmp .slow
-.math_abs:
-    load_operand t1, m_arguments
+handler CallBuiltinMathAbs
+    validate_callee_builtin BUILTIN_MATH_ABS, .slow
+    load_operand t1, m_argument
     check_is_double t1, .try_abs_int32
     # abs(double) = clear sign bit (bit 63)
     clear_bit t1, 63
     store_operand m_dst, t1
-    dispatch_callbuiltin_size
+    dispatch_next
 .try_abs_int32:
     extract_tag t3, t1
     branch_ne t3, INT32_TAG, .slow
@@ -1969,7 +2003,7 @@ handler CallBuiltin
 .abs_positive:
     box_int32_clean t4, t3
     store_operand m_dst, t4
-    dispatch_callbuiltin_size
+    dispatch_next
 .abs_overflow:
     # INT32_MIN: abs(-2147483648) = 2147483648.0
     unbox_int32 t3, t1
@@ -1977,40 +2011,209 @@ handler CallBuiltin
     int_to_double ft0, t3
     fp_mov t4, ft0
     store_operand m_dst, t4
-    dispatch_callbuiltin_size
-.math_floor:
-    load_operand t1, m_arguments
+    dispatch_next
+.slow:
+    call_slow_path asm_slow_path_call_builtin_math_abs
+end
+
+handler CallBuiltinMathFloor
+    validate_callee_builtin BUILTIN_MATH_FLOOR, .slow
+    load_operand t1, m_argument
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_floor ft0, ft0
     box_double_or_int32 t5, ft0
     store_operand m_dst, t5
-    dispatch_callbuiltin_size
-.math_ceil:
-    load_operand t1, m_arguments
+    dispatch_next
+.slow:
+    call_slow_path asm_slow_path_call_builtin_math_floor
+end
+
+handler CallBuiltinMathCeil
+    validate_callee_builtin BUILTIN_MATH_CEIL, .slow
+    load_operand t1, m_argument
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_ceil ft0, ft0
     box_double_or_int32 t5, ft0
     store_operand m_dst, t5
-    dispatch_callbuiltin_size
-.math_sqrt:
-    load_operand t1, m_arguments
+    dispatch_next
+.slow:
+    call_slow_path asm_slow_path_call_builtin_math_ceil
+end
+
+handler CallBuiltinMathSqrt
+    validate_callee_builtin BUILTIN_MATH_SQRT, .slow
+    load_operand t1, m_argument
     check_is_double t1, .slow
     fp_mov ft0, t1
     fp_sqrt ft0, ft0
     box_double_or_int32 t5, ft0
     store_operand m_dst, t5
-    dispatch_callbuiltin_size
-.math_exp:
-    load_operand t1, m_arguments
+    dispatch_next
+.slow:
+    call_slow_path asm_slow_path_call_builtin_math_sqrt
+end
+
+handler CallBuiltinMathExp
+    validate_callee_builtin BUILTIN_MATH_EXP, .slow
+    load_operand t1, m_argument
     check_is_double t1, .slow
     fp_mov ft0, t1
     call_helper asm_helper_math_exp
     store_operand m_dst, t0
-    dispatch_callbuiltin_size
+    dispatch_next
 .slow:
-    call_slow_path asm_slow_path_call_builtin
+    call_slow_path asm_slow_path_call_builtin_math_exp
+end
+
+handler CallBuiltinMathLog
+    call_slow_path asm_slow_path_call_builtin_math_log
+end
+
+handler CallBuiltinMathPow
+    call_slow_path asm_slow_path_call_builtin_math_pow
+end
+
+handler CallBuiltinMathImul
+    call_slow_path asm_slow_path_call_builtin_math_imul
+end
+
+handler CallBuiltinMathRandom
+    call_slow_path asm_slow_path_call_builtin_math_random
+end
+
+handler CallBuiltinMathRound
+    call_slow_path asm_slow_path_call_builtin_math_round
+end
+
+handler CallBuiltinMathSin
+    call_slow_path asm_slow_path_call_builtin_math_sin
+end
+
+handler CallBuiltinMathCos
+    call_slow_path asm_slow_path_call_builtin_math_cos
+end
+
+handler CallBuiltinMathTan
+    call_slow_path asm_slow_path_call_builtin_math_tan
+end
+
+handler CallBuiltinRegExpPrototypeExec
+    call_slow_path asm_slow_path_call_builtin_regexp_prototype_exec
+end
+
+handler CallBuiltinRegExpPrototypeReplace
+    call_slow_path asm_slow_path_call_builtin_regexp_prototype_replace
+end
+
+handler CallBuiltinRegExpPrototypeSplit
+    call_slow_path asm_slow_path_call_builtin_regexp_prototype_split
+end
+
+handler CallBuiltinOrdinaryHasInstance
+    call_slow_path asm_slow_path_call_builtin_ordinary_has_instance
+end
+
+handler CallBuiltinArrayIteratorPrototypeNext
+    call_slow_path asm_slow_path_call_builtin_array_iterator_prototype_next
+end
+
+handler CallBuiltinMapIteratorPrototypeNext
+    call_slow_path asm_slow_path_call_builtin_map_iterator_prototype_next
+end
+
+handler CallBuiltinSetIteratorPrototypeNext
+    call_slow_path asm_slow_path_call_builtin_set_iterator_prototype_next
+end
+
+handler CallBuiltinStringIteratorPrototypeNext
+    call_slow_path asm_slow_path_call_builtin_string_iterator_prototype_next
+end
+
+handler CallBuiltinStringFromCharCode
+    validate_callee_builtin BUILTIN_STRING_FROM_CHAR_CODE, .slow
+
+    load_operand t1, m_argument
+    extract_tag t3, t1
+    branch_ne t3, INT32_TAG, .slow
+    unbox_int32 t0, t1
+    and t0, 0xffff
+    branch_ge_unsigned t0, 0x80, .single_code_unit
+
+    mov t1, t0
+    call_helper asm_helper_single_ascii_character_string
+    store_operand m_dst, t0
+    dispatch_next
+
+.single_code_unit:
+    mov t1, t0
+    call_helper asm_helper_single_utf16_code_unit_string
+    store_operand m_dst, t0
+    dispatch_next
+
+.slow:
+    call_slow_path asm_slow_path_call_builtin_string_from_char_code
+end
+
+handler CallBuiltinStringPrototypeCharCodeAt
+    validate_callee_builtin BUILTIN_STRING_PROTOTYPE_CHAR_CODE_AT, .slow
+
+    load_operand t1, m_this_value
+    extract_tag t3, t1
+    branch_ne t3, STRING_TAG, .slow
+    unbox_object t2, t1
+
+    load_operand t1, m_argument
+    extract_tag t3, t1
+    branch_ne t3, INT32_TAG, .slow
+    unbox_int32 t4, t1
+    branch_negative t4, .out_of_bounds
+
+    load_primitive_string_utf16_code_unit .out_of_bounds, .slow
+    box_int32_clean t1, t0
+    store_operand m_dst, t1
+    dispatch_next
+
+.out_of_bounds:
+    mov t0, CANON_NAN_BITS
+    store_operand m_dst, t0
+    dispatch_next
+
+.slow:
+    call_slow_path asm_slow_path_call_builtin_string_prototype_char_code_at
+end
+
+handler CallBuiltinStringPrototypeCharAt
+    validate_callee_builtin BUILTIN_STRING_PROTOTYPE_CHAR_AT, .slow
+
+    load_operand t1, m_this_value
+    extract_tag t3, t1
+    branch_ne t3, STRING_TAG, .slow
+    unbox_object t2, t1
+
+    load_operand t1, m_argument
+    extract_tag t3, t1
+    branch_ne t3, INT32_TAG, .slow
+    unbox_int32 t4, t1
+    branch_negative t4, .empty
+
+    load_primitive_string_utf16_code_unit .empty, .slow
+    branch_ge_unsigned t0, 0x80, .slow
+
+    mov t1, t0
+    call_helper asm_helper_single_ascii_character_string
+    store_operand m_dst, t0
+    dispatch_next
+
+.empty:
+    mov t1, 0
+    call_helper asm_helper_empty_string
+    store_operand m_dst, t0
+    dispatch_next
+
+.slow:
+    call_slow_path asm_slow_path_call_builtin_string_prototype_char_at
 end
 
 # ============================================================================
