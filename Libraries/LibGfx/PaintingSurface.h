@@ -14,6 +14,14 @@
 #include <LibGfx/Size.h>
 #include <LibGfx/SkiaBackendContext.h>
 
+#ifdef USE_VULKAN_DMABUF_IMAGES
+namespace Gfx {
+
+struct VulkanImage;
+
+}
+#endif
+
 #ifdef AK_OS_MACOS
 #    include <LibGfx/MetalContext.h>
 #endif
@@ -39,7 +47,7 @@ public:
     static NonnullRefPtr<PaintingSurface> create_from_shared_image_buffer(SharedImageBuffer&, NonnullRefPtr<SkiaBackendContext>, Origin = Origin::TopLeft);
 #endif
 
-#ifdef USE_VULKAN_IMAGES
+#ifdef USE_VULKAN_DMABUF_IMAGES
     static NonnullRefPtr<PaintingSurface> create_from_vkimage(NonnullRefPtr<SkiaBackendContext> context, NonnullRefPtr<VulkanImage> vulkan_image, Origin origin);
 #endif
 

@@ -68,7 +68,7 @@ if (APPLE)
 endif()
 
 if (HAS_VULKAN)
-    list(APPEND SOURCES VulkanContext.cpp)
+    list(APPEND SOURCES VulkanContext.cpp VulkanImage.cpp)
 endif()
 
 if (HAS_FONTCONFIG)
@@ -159,7 +159,7 @@ endif()
 if (HAS_VULKAN)
     target_link_libraries(LibCore PUBLIC Vulkan::Vulkan Vulkan::Headers)
 
-    if (USE_VULKAN_IMAGES)
+    if (USE_VULKAN_DMABUF_IMAGES)
         pkg_check_modules(LibDRM REQUIRED libdrm)
         target_include_directories(LibGfx PUBLIC ${LibDRM_INCLUDE_DIRS})
     endif()
