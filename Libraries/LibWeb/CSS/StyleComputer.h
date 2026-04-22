@@ -123,7 +123,7 @@ public:
     [[nodiscard]] GC::Ref<ComputedProperties> compute_properties(DOM::AbstractElement, CascadedProperties&) const;
 
     void compute_property_values(ComputedProperties&, Optional<DOM::AbstractElement>) const;
-    void process_animation_definitions(ComputedProperties const& computed_properties, DOM::AbstractElement& abstract_element) const;
+    void process_animation_definitions(ComputedProperties const& computed_properties, CascadedProperties const&, DOM::AbstractElement& abstract_element) const;
 
     [[nodiscard]] inline bool should_reject_with_ancestor_filter(Selector const&) const;
 
@@ -140,7 +140,6 @@ public:
     static NonnullRefPtr<StyleValue const> compute_font_weight(NonnullRefPtr<StyleValue const> const& absolutized_value, Optional<DOM::AbstractElement> const& inheritance_parent);
     static NonnullRefPtr<StyleValue const> compute_font_width(NonnullRefPtr<StyleValue const> const& absolutized_value);
     static NonnullRefPtr<StyleValue const> compute_line_height(NonnullRefPtr<StyleValue const> const& absolutized_value, CSSPixels computed_font_size);
-    static NonnullRefPtr<StyleValue const> compute_opacity(NonnullRefPtr<StyleValue const> const& absolutized_value);
     static NonnullRefPtr<StyleValue const> compute_position_area(NonnullRefPtr<StyleValue const> const& absolutized_value);
 
 private:

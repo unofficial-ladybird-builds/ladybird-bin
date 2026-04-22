@@ -515,7 +515,9 @@ GC::Ptr<CSSKeyframesRule> Parser::convert_to_keyframes_rule(AtRule const& rule)
         return {};
     }
 
-    auto name = name_token.to_string();
+    // Store the logical keyframes name instead of the serialized token text so @keyframes "foo" and
+    // animation-name: "foo" compare on the same value.
+    auto name = name_token.is(Token::Type::String) ? name_token.string() : name_token.ident();
 
     GC::RootVector<GC::Ref<CSSRule>> keyframes(realm().heap());
     rule.for_each_as_qualified_rule_list([&](auto& qualified_rule) {
@@ -1176,7 +1178,7 @@ GC::Ptr<CSSFontFeatureValuesRule> Parser::convert_to_font_feature_values_rule(At
                     auto token = value_stream.consume_a_token();
 
                     // FIXME: Support calc()
-                    if (!token.is(Token::Type::Number) || !token.token().number().is_integer() || token.token().number().value() < 0) {
+                    if (!token.is(Token::Type::Number) || !token.token().is_integer() || token.token().to_integer() < 0) {
                         ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
                             .rule_name = MUST(String::formatted("@{}", at_rule.name)),
                             .prelude = value_stream.dump_string(),
@@ -1186,7 +1188,7 @@ GC::Ptr<CSSFontFeatureValuesRule> Parser::convert_to_font_feature_values_rule(At
                         return;
                     }
 
-                    values.append(token.token().number().integer_value());
+                    values.append(token.token().to_integer());
 
                     value_stream.discard_whitespace();
                 }
