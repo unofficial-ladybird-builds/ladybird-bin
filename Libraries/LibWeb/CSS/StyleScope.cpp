@@ -22,6 +22,7 @@
 #include <LibWeb/CSS/StyleScope.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/Namespace.h>
 #include <LibWeb/Page/Page.h>
 
 namespace Web::CSS {
@@ -34,25 +35,48 @@ void RuleCaches::visit_edges(GC::Cell::Visitor& visitor)
     }
 }
 
+NonnullRefPtr<StyleCache> StyleCache::create()
+{
+    auto style_cache = adopt_ref(*new StyleCache);
+    style_cache->qualified_layer_names_in_order.append({});
+    return style_cache;
+}
+
+NonnullRefPtr<StyleCache> StyleCache::create_for_style_scope(StyleScope& style_scope)
+{
+    auto style_cache = StyleCache::create();
+    style_scope.populate_rule_cache(*style_cache);
+    return style_cache;
+}
+
+void StyleCache::visit_edges(GC::Cell::Visitor& visitor)
+{
+    for (auto& cache : pseudo_class_rule_cache) {
+        if (cache)
+            cache->visit_edges(visitor);
+    }
+    author_rule_cache.visit_edges(visitor);
+    user_rule_cache.visit_edges(visitor);
+    user_agent_rule_cache.visit_edges(visitor);
+}
+
+void PendingHasInvalidation::visit_edges(GC::Cell::Visitor& visitor)
+{
+    visitor.visit(node);
+}
+
 void StyleScope::visit_edges(GC::Cell::Visitor& visitor)
 {
     visitor.visit(m_node);
     visitor.visit(m_user_style_sheet);
-    for (auto& cache : m_pseudo_class_rule_cache) {
-        if (cache)
-            cache->visit_edges(visitor);
-    }
-    if (m_author_rule_cache)
-        m_author_rule_cache->visit_edges(visitor);
-    if (m_user_rule_cache)
-        m_user_rule_cache->visit_edges(visitor);
-    if (m_user_agent_rule_cache)
-        m_user_agent_rule_cache->visit_edges(visitor);
+    if (m_rule_cache)
+        m_rule_cache->visit_edges(visitor);
+    for (auto& pending_has_invalidation : m_pending_has_invalidations)
+        pending_has_invalidation.visit_edges(visitor);
 }
 
 void MatchingRule::visit_edges(GC::Cell::Visitor& visitor)
 {
-    visitor.visit(shadow_root);
     visitor.visit(rule);
     visitor.visit(sheet);
 }
@@ -85,51 +109,59 @@ void RuleCache::visit_edges(GC::Cell::Visitor& visitor)
 StyleScope::StyleScope(GC::Ref<DOM::Node> node)
     : m_node(node)
 {
-    m_qualified_layer_names_in_order.append({});
 }
 
 void StyleScope::build_rule_cache()
 {
-    m_author_rule_cache = make<RuleCaches>();
-    m_user_rule_cache = make<RuleCaches>();
-    m_user_agent_rule_cache = make<RuleCaches>();
+    if (auto* shadow_root = as_if<DOM::ShadowRoot>(*m_node)) {
+        GC::Ptr<CSSStyleSheet> constructed_style_sheet;
+        bool saw_more_than_one_style_sheet = false;
+        shadow_root->for_each_active_css_style_sheet([&](CSSStyleSheet& style_sheet) {
+            if (constructed_style_sheet) {
+                saw_more_than_one_style_sheet = true;
+                return;
+            }
+            constructed_style_sheet = style_sheet;
+        });
 
-    m_selector_insights = make<SelectorInsights>();
-    m_style_invalidation_data = make<StyleInvalidationData>();
+        if (constructed_style_sheet && !saw_more_than_one_style_sheet && constructed_style_sheet->constructed() && !document().page().user_style().has_value()) {
+            m_rule_cache = constructed_style_sheet->shared_single_constructed_sheet_style_cache(*this);
+            return;
+        }
+    }
 
+    m_rule_cache = StyleCache::create();
+    populate_rule_cache(*m_rule_cache);
+}
+
+void StyleScope::populate_rule_cache(StyleCache& style_cache)
+{
     build_user_style_sheet_if_needed();
 
-    build_qualified_layer_names_cache();
+    build_qualified_layer_names_cache(style_cache);
 
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::Hover)] = make<RuleCache>();
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::Active)] = make<RuleCache>();
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::Focus)] = make<RuleCache>();
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::FocusWithin)] = make<RuleCache>();
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::FocusVisible)] = make<RuleCache>();
-    m_pseudo_class_rule_cache[to_underlying(PseudoClass::Target)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::Hover)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::Active)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::Focus)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::FocusWithin)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::FocusVisible)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::Has)] = make<RuleCache>();
+    style_cache.pseudo_class_rule_cache[to_underlying(PseudoClass::Target)] = make<RuleCache>();
 
-    make_rule_cache_for_cascade_origin(CascadeOrigin::Author, *m_selector_insights);
-    make_rule_cache_for_cascade_origin(CascadeOrigin::User, *m_selector_insights);
-    make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent, *m_selector_insights);
+    make_rule_cache_for_cascade_origin(CascadeOrigin::Author, style_cache);
+    make_rule_cache_for_cascade_origin(CascadeOrigin::User, style_cache);
+    make_rule_cache_for_cascade_origin(CascadeOrigin::UserAgent, style_cache);
 }
 
 void StyleScope::invalidate_rule_cache()
 {
     invalidate_counter_style_cache();
-    m_author_rule_cache = nullptr;
+    m_rule_cache = nullptr;
 
     // NOTE: We could be smarter about keeping the user rule cache, and style sheet.
     //       Currently we are re-parsing the user style sheet every time we build the caches,
     //       as it may have changed.
-    m_user_rule_cache = nullptr;
     m_user_style_sheet = nullptr;
-
-    // NOTE: It might not be necessary to throw away the UA rule cache.
-    //       If we are sure that it's safe, we could keep it as an optimization.
-    m_user_agent_rule_cache = nullptr;
-
-    m_pseudo_class_rule_cache = {};
-    m_style_invalidation_data = nullptr;
 }
 
 void StyleScope::build_user_style_sheet_if_needed()
@@ -208,23 +240,19 @@ void StyleScope::for_each_stylesheet(CascadeOrigin cascade_origin, Function<void
     }
 }
 
-void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, SelectorInsights& insights)
+void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, StyleCache& style_cache)
 {
-    GC::Ptr<DOM::ShadowRoot const> scope_shadow_root;
-    if (m_node->is_shadow_root())
-        scope_shadow_root = as<DOM::ShadowRoot>(*m_node);
-
     Vector<MatchingRule> matching_rules;
     size_t style_sheet_index = 0;
     for_each_stylesheet(cascade_origin, [&](auto& sheet) {
         auto& rule_caches = [&] -> RuleCaches& {
             switch (cascade_origin) {
             case CascadeOrigin::Author:
-                return *m_author_rule_cache;
+                return style_cache.author_rule_cache;
             case CascadeOrigin::User:
-                return *m_user_rule_cache;
+                return style_cache.user_rule_cache;
             case CascadeOrigin::UserAgent:
-                return *m_user_agent_rule_cache;
+                return style_cache.user_agent_rule_cache;
             default:
                 VERIFY_NOT_REACHED();
             }
@@ -241,12 +269,11 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
             }();
 
             for (auto const& selector : absolutized_selectors) {
-                m_style_invalidation_data->build_invalidation_sets_for_selector(selector);
+                style_cache.style_invalidation_data.build_invalidation_sets_for_selector(selector);
             }
 
             for (CSS::Selector const& selector : absolutized_selectors) {
                 MatchingRule matching_rule {
-                    .shadow_root = scope_shadow_root,
                     .rule = &rule,
                     .sheet = sheet,
                     .default_namespace = sheet.default_namespace(),
@@ -263,7 +290,7 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
                 auto const& qualified_layer_name = matching_rule.qualified_layer_name();
                 auto& rule_cache = qualified_layer_name.is_empty() ? rule_caches.main : *rule_caches.by_layer.ensure(qualified_layer_name, [] { return make<RuleCache>(); });
 
-                collect_selector_insights(selector, insights);
+                collect_selector_insights(selector, style_cache.selector_insights);
 
                 bool contains_root_pseudo_class = false;
                 for (auto const& simple_selector : selector.compound_selectors().last().simple_selectors) {
@@ -278,11 +305,11 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
                 for (size_t i = 0; i < to_underlying(PseudoClass::__Count); ++i) {
                     auto pseudo_class = static_cast<PseudoClass>(i);
                     // If we're not building a rule cache for this pseudo class, just ignore it.
-                    if (!m_pseudo_class_rule_cache[i])
+                    if (!style_cache.pseudo_class_rule_cache[i])
                         continue;
                     if (selector.contains_pseudo_class(pseudo_class)) {
                         // For pseudo class rule caches we intentionally pass no pseudo-element, because we don't want to bucket pseudo class rules by pseudo-element type.
-                        m_pseudo_class_rule_cache[i]->add_rule(matching_rule, {}, contains_root_pseudo_class);
+                        style_cache.pseudo_class_rule_cache[i]->add_rule(matching_rule, {}, contains_root_pseudo_class);
                     }
                 }
 
@@ -412,7 +439,7 @@ static void flatten_layer_names_tree(Vector<FlyString>& layer_names, StringView 
     layer_names.append(qualified_name);
 }
 
-void StyleScope::build_qualified_layer_names_cache()
+void StyleScope::build_qualified_layer_names_cache(StyleCache& style_cache)
 {
     LayerNode root;
 
@@ -478,8 +505,8 @@ void StyleScope::build_qualified_layer_names_cache()
     });
 
     // Now, produce a flat list of qualified names to use later
-    m_qualified_layer_names_in_order.clear();
-    flatten_layer_names_tree(m_qualified_layer_names_in_order, ""sv, {}, root);
+    style_cache.qualified_layer_names_in_order.clear();
+    flatten_layer_names_tree(style_cache.qualified_layer_names_in_order, ""sv, {}, root);
 }
 
 void StyleScope::invalidate_counter_style_cache()
@@ -779,13 +806,13 @@ bool StyleScope::may_have_has_selectors() const
         return true;
 
     build_rule_cache_if_needed();
-    return m_selector_insights->has_has_selectors;
+    return m_rule_cache->selector_insights.has_has_selectors;
 }
 
 bool StyleScope::have_has_selectors() const
 {
     build_rule_cache_if_needed();
-    return m_selector_insights->has_has_selectors;
+    return m_rule_cache->selector_insights.has_has_selectors;
 }
 
 bool StyleScope::may_have_has_selectors_with_relative_selector_that_has_sibling_combinator() const
@@ -794,13 +821,13 @@ bool StyleScope::may_have_has_selectors_with_relative_selector_that_has_sibling_
         return true;
 
     build_rule_cache_if_needed();
-    return m_selector_insights->has_has_selectors_with_relative_selector_that_has_sibling_combinator;
+    return m_rule_cache->selector_insights.has_has_selectors_with_relative_selector_that_has_sibling_combinator;
 }
 
 bool StyleScope::have_has_selectors_with_relative_selector_that_has_sibling_combinator() const
 {
     build_rule_cache_if_needed();
-    return m_selector_insights->has_has_selectors_with_relative_selector_that_has_sibling_combinator;
+    return m_rule_cache->selector_insights.has_has_selectors_with_relative_selector_that_has_sibling_combinator;
 }
 
 DOM::Document& StyleScope::document() const
@@ -811,7 +838,7 @@ DOM::Document& StyleScope::document() const
 RuleCache const& StyleScope::get_pseudo_class_rule_cache(PseudoClass pseudo_class) const
 {
     build_rule_cache_if_needed();
-    return *m_pseudo_class_rule_cache[to_underlying(pseudo_class)];
+    return *m_rule_cache->pseudo_class_rule_cache[to_underlying(pseudo_class)];
 }
 
 void StyleScope::for_each_active_css_style_sheet(Function<void(CSS::CSSStyleSheet&)> const& callback) const
@@ -823,20 +850,132 @@ void StyleScope::for_each_active_css_style_sheet(Function<void(CSS::CSSStyleShee
     }
 }
 
-void StyleScope::schedule_ancestors_style_invalidation_due_to_presence_of_has(DOM::Node& node)
+void StyleScope::schedule_ancestors_style_invalidation_due_to_presence_of_has(GC::Ref<DOM::Node> node)
 {
-    m_pending_nodes_for_style_invalidation_due_to_presence_of_has.set(node);
+    for (auto& pending_has_invalidation : m_pending_has_invalidations) {
+        if (pending_has_invalidation.node == node)
+            return;
+    }
+    PendingHasInvalidationMutationFeatures mutation_features;
+    mutation_features.is_conservative = true;
+    m_pending_has_invalidations.append({ node, move(mutation_features) });
+    document().set_needs_invalidation_of_elements_affected_by_has();
+}
+
+static void merge_pending_has_invalidation_mutation_features(PendingHasInvalidationMutationFeatures& target, PendingHasInvalidationMutationFeatures const& source)
+{
+    target.is_conservative |= source.is_conservative;
+    for (auto const& tag_name : source.tag_names)
+        target.tag_names.set(tag_name);
+    for (auto const& id : source.ids)
+        target.ids.set(id);
+    for (auto const& class_name : source.class_names)
+        target.class_names.set(class_name);
+    for (auto const& attribute_name : source.attribute_names)
+        target.attribute_names.set(attribute_name);
+}
+
+static void collect_pending_has_invalidation_features_from_element(PendingHasInvalidationMutationFeatures& features, DOM::Element const& element)
+{
+    features.tag_names.set(element.local_name());
+    if (element.namespace_uri() != Namespace::HTML)
+        features.tag_names.set(element.lowercased_local_name());
+
+    if (auto id = element.id(); id.has_value())
+        features.ids.set(*id);
+
+    for (auto const& class_name : element.class_names())
+        features.class_names.set(class_name);
+
+    element.for_each_attribute([&](FlyString const& name, String const&) {
+        features.attribute_names.set(name);
+        if (element.namespace_uri() != Namespace::HTML)
+            features.attribute_names.set(name.to_ascii_lowercase());
+    });
+}
+
+static PendingHasInvalidationMutationFeatures collect_pending_has_invalidation_mutation_features(DOM::Node& mutation_root, bool includes_descendants)
+{
+    PendingHasInvalidationMutationFeatures features;
+    auto collect_node = [&](DOM::Node& node) {
+        if (node.is_character_data())
+            return;
+        if (auto* element = as_if<DOM::Element>(node))
+            collect_pending_has_invalidation_features_from_element(features, *element);
+    };
+
+    if (!includes_descendants) {
+        collect_node(mutation_root);
+        return features;
+    }
+
+    mutation_root.for_each_in_inclusive_subtree([&](DOM::Node& node) {
+        collect_node(node);
+        return TraversalDecision::Continue;
+    });
+    return features;
+}
+
+static PendingHasInvalidationMutationFeatures collect_pending_has_invalidation_mutation_features(Vector<CSS::InvalidationSet::Property> const& properties)
+{
+    PendingHasInvalidationMutationFeatures features;
+    for (auto const& property : properties) {
+        switch (property.type) {
+        case InvalidationSet::Property::Type::Class:
+            features.class_names.set(property.name());
+            break;
+        case InvalidationSet::Property::Type::Id:
+            features.ids.set(property.name());
+            break;
+        case InvalidationSet::Property::Type::TagName:
+            features.tag_names.set(property.name());
+            break;
+        case InvalidationSet::Property::Type::Attribute:
+            features.attribute_names.set(property.name());
+            break;
+        case InvalidationSet::Property::Type::InvalidateSelf:
+        case InvalidationSet::Property::Type::InvalidateWholeSubtree:
+        case InvalidationSet::Property::Type::PseudoClass:
+            features.is_conservative = true;
+            break;
+        }
+    }
+    return features;
+}
+
+void StyleScope::record_pending_has_invalidation_mutation_features(GC::Ref<DOM::Node> scheduled_node, GC::Ref<DOM::Node> mutation_root, bool includes_descendants)
+{
+    auto features = collect_pending_has_invalidation_mutation_features(*mutation_root, includes_descendants);
+    for (auto& pending_has_invalidation : m_pending_has_invalidations) {
+        if (pending_has_invalidation.node == scheduled_node) {
+            merge_pending_has_invalidation_mutation_features(pending_has_invalidation.mutation_features, features);
+            return;
+        }
+    }
+    m_pending_has_invalidations.append({ scheduled_node, move(features) });
+    document().set_needs_invalidation_of_elements_affected_by_has();
+}
+
+void StyleScope::record_pending_has_invalidation_mutation_features(GC::Ref<DOM::Node> scheduled_node, Vector<CSS::InvalidationSet::Property> const& properties)
+{
+    auto features = collect_pending_has_invalidation_mutation_features(properties);
+    for (auto& pending_has_invalidation : m_pending_has_invalidations) {
+        if (pending_has_invalidation.node == scheduled_node) {
+            merge_pending_has_invalidation_mutation_features(pending_has_invalidation.mutation_features, features);
+            return;
+        }
+    }
+    m_pending_has_invalidations.append({ scheduled_node, move(features) });
     document().set_needs_invalidation_of_elements_affected_by_has();
 }
 
 void StyleScope::invalidate_style_of_elements_affected_by_has()
 {
-    if (m_pending_nodes_for_style_invalidation_due_to_presence_of_has.is_empty()) {
+    if (m_pending_has_invalidations.is_empty())
         return;
-    }
 
     ScopeGuard clear_pending_nodes_guard = [&] {
-        m_pending_nodes_for_style_invalidation_due_to_presence_of_has.clear();
+        m_pending_has_invalidations.clear();
     };
 
     // It's ok to call have_has_selectors() instead of may_have_has_selectors() here and force
@@ -860,37 +999,234 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
             || element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator();
     };
 
-    HashTable<DOM::Element*> elements_already_invalidated_for_has;
-    auto nodes = move(m_pending_nodes_for_style_invalidation_due_to_presence_of_has);
+    auto selector_may_match_mutation_features = [](Selector const& selector, PendingHasInvalidationMutationFeatures const& mutation_features) {
+        if (mutation_features.is_conservative)
+            return true;
+        Function<bool(Selector const&)> visit_selector = [&](Selector const& selector) {
+            bool saw_concrete_feature = false;
+            bool concrete_feature_found_in_mutation_subtree = false;
+            bool must_be_conservative = false;
+
+            auto visit_selector_list = [&](SelectorList const& selector_list) {
+                for (auto const& argument_selector : selector_list) {
+                    if (visit_selector(*argument_selector))
+                        return true;
+                }
+                return false;
+            };
+
+            for (auto const& compound_selector : selector.compound_selectors()) {
+                if (compound_selector.combinator == Selector::Combinator::NextSibling
+                    || compound_selector.combinator == Selector::Combinator::SubsequentSibling) {
+                    must_be_conservative = true;
+                    continue;
+                }
+                if (compound_selector.simple_selectors.is_empty()) {
+                    must_be_conservative = true;
+                    continue;
+                }
+                for (auto const& simple_selector : compound_selector.simple_selectors) {
+                    switch (simple_selector.type) {
+                    case Selector::SimpleSelector::Type::Universal:
+                    case Selector::SimpleSelector::Type::Nesting:
+                    case Selector::SimpleSelector::Type::Invalid:
+                    case Selector::SimpleSelector::Type::PseudoElement:
+                        must_be_conservative = true;
+                        break;
+                    case Selector::SimpleSelector::Type::TagName:
+                        saw_concrete_feature = true;
+                        concrete_feature_found_in_mutation_subtree |= mutation_features.tag_names.contains(simple_selector.qualified_name().name.lowercase_name);
+                        break;
+                    case Selector::SimpleSelector::Type::Id:
+                        saw_concrete_feature = true;
+                        concrete_feature_found_in_mutation_subtree |= mutation_features.ids.contains(simple_selector.name());
+                        break;
+                    case Selector::SimpleSelector::Type::Class:
+                        saw_concrete_feature = true;
+                        concrete_feature_found_in_mutation_subtree |= mutation_features.class_names.contains(simple_selector.name());
+                        break;
+                    case Selector::SimpleSelector::Type::Attribute:
+                        saw_concrete_feature = true;
+                        concrete_feature_found_in_mutation_subtree |= mutation_features.attribute_names.contains(simple_selector.attribute().qualified_name.name.lowercase_name);
+                        break;
+                    case Selector::SimpleSelector::Type::PseudoClass: {
+                        auto const& pseudo_class = simple_selector.pseudo_class();
+                        switch (pseudo_class.type) {
+                        case PseudoClass::Is:
+                        case PseudoClass::Where:
+                            saw_concrete_feature = true;
+                            concrete_feature_found_in_mutation_subtree |= visit_selector_list(pseudo_class.argument_selector_list);
+                            break;
+                        case PseudoClass::Hover:
+                        case PseudoClass::Focus:
+                        case PseudoClass::FocusVisible:
+                        case PseudoClass::FocusWithin:
+                        case PseudoClass::Active:
+                        case PseudoClass::Empty:
+                        case PseudoClass::Not:
+                        case PseudoClass::Has:
+                        default:
+                            must_be_conservative = true;
+                            break;
+                        }
+                        break;
+                    }
+                    }
+                }
+            }
+
+            if (must_be_conservative)
+                return true;
+            return !saw_concrete_feature || concrete_feature_found_in_mutation_subtree;
+        };
+
+        return visit_selector(selector);
+    };
+
+    auto compound_may_match_anchor_ignoring_has = [](Selector::CompoundSelector const& compound_selector, DOM::Element const& anchor) {
+        for (auto const& simple_selector : compound_selector.simple_selectors) {
+            switch (simple_selector.type) {
+            case Selector::SimpleSelector::Type::Universal:
+                break;
+            case Selector::SimpleSelector::Type::Nesting:
+            case Selector::SimpleSelector::Type::Invalid:
+            case Selector::SimpleSelector::Type::PseudoElement:
+                return true;
+            case Selector::SimpleSelector::Type::TagName:
+                if (anchor.local_name() != simple_selector.qualified_name().name.lowercase_name)
+                    return false;
+                break;
+            case Selector::SimpleSelector::Type::Id: {
+                auto id = anchor.id();
+                if (!id.has_value() || *id != simple_selector.name())
+                    return false;
+                break;
+            }
+            case Selector::SimpleSelector::Type::Class:
+                if (!anchor.class_names().contains_slow(simple_selector.name()))
+                    return false;
+                break;
+            case Selector::SimpleSelector::Type::Attribute: {
+                bool has_attribute = false;
+                anchor.for_each_attribute([&](FlyString const& name, String const&) {
+                    if (name == simple_selector.attribute().qualified_name.name.lowercase_name)
+                        has_attribute = true;
+                });
+                if (!has_attribute)
+                    return false;
+                break;
+            }
+            case Selector::SimpleSelector::Type::PseudoClass:
+                switch (simple_selector.pseudo_class().type) {
+                case PseudoClass::Has:
+                    break;
+                case PseudoClass::Root:
+                    if (&anchor != anchor.document().document_element())
+                        return false;
+                    break;
+                default:
+                    return true;
+                }
+                break;
+            }
+        }
+        return true;
+    };
+
+    auto has_rule_that_may_be_affected_by_mutation = [&](DOM::Element const& anchor, PendingHasInvalidationMutationFeatures const& mutation_features) {
+        bool found_has_rule = false;
+        bool may_be_affected = false;
+
+        auto check_selector = [&](Selector const& selector) {
+            Function<void(Selector const&)> visit_selector = [&](Selector const& selector) {
+                if (may_be_affected)
+                    return;
+                for (auto const& compound_selector : selector.compound_selectors()) {
+                    for (auto const& simple_selector : compound_selector.simple_selectors) {
+                        if (simple_selector.type != Selector::SimpleSelector::Type::PseudoClass)
+                            continue;
+                        auto const& pseudo_class = simple_selector.pseudo_class();
+                        if (pseudo_class.type == PseudoClass::Has) {
+                            if (!compound_may_match_anchor_ignoring_has(compound_selector, anchor))
+                                continue;
+                            found_has_rule = true;
+                            for (auto const& argument_selector : pseudo_class.argument_selector_list) {
+                                if (selector_may_match_mutation_features(*argument_selector, mutation_features)) {
+                                    may_be_affected = true;
+                                    return;
+                                }
+                            }
+                        }
+                        for (auto const& argument_selector : pseudo_class.argument_selector_list)
+                            visit_selector(*argument_selector);
+                    }
+                }
+            };
+            visit_selector(selector);
+        };
+
+        auto check_rule_vector = [&](Vector<MatchingRule> const& rules) {
+            for (auto const& rule : rules) {
+                check_selector(rule.selector);
+                if (may_be_affected)
+                    return;
+            }
+        };
+
+        auto const& has_rule_cache = get_pseudo_class_rule_cache(PseudoClass::Has);
+        for (auto const& entry : has_rule_cache.rules_by_id)
+            check_rule_vector(entry.value);
+        for (auto const& entry : has_rule_cache.rules_by_class)
+            check_rule_vector(entry.value);
+        for (auto const& entry : has_rule_cache.rules_by_tag_name)
+            check_rule_vector(entry.value);
+        for (auto const& entry : has_rule_cache.rules_by_attribute_name)
+            check_rule_vector(entry.value);
+        for (auto const& rules : has_rule_cache.rules_by_pseudo_element)
+            check_rule_vector(rules);
+        check_rule_vector(has_rule_cache.root_rules);
+        check_rule_vector(has_rule_cache.slotted_rules);
+        check_rule_vector(has_rule_cache.part_rules);
+        check_rule_vector(has_rule_cache.other_rules);
+
+        return !found_has_rule || may_be_affected;
+    };
+
+    HashTable<GC::Ref<DOM::Element>> elements_already_invalidated_for_has;
+    auto pending_has_invalidations = m_pending_has_invalidations;
     bool should_scan_ancestor_siblings = have_has_selectors_with_relative_selector_that_has_sibling_combinator();
-    for (auto& node : nodes) {
-        Vector<DOM::Element*, 16> has_scope_ancestors;
+    for (auto& pending_has_invalidation : pending_has_invalidations) {
+        GC::Ptr<DOM::Node> node = pending_has_invalidation.node;
+        if (!node)
+            continue;
+
+        Vector<GC::Ref<DOM::Element>, 16> has_scope_ancestors;
         bool should_delay_ancestor_sibling_scans = false;
-        for (auto* ancestor = &node; ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+        for (GC::Ptr<DOM::Node> ancestor = node; ancestor; ancestor = ancestor->parent_or_shadow_host()) {
             if (!ancestor->is_element())
                 continue;
-            auto& element = static_cast<DOM::Element&>(*ancestor);
+            GC::Ref<DOM::Element> element = static_cast<DOM::Element&>(*ancestor);
 
             // Terminate the upward walk once we reach an element that no :has()
             // anchor has ever observed. Its style cannot be affected by a mutation
             // further down the tree, so neither can anything above it.
-            if (!is_in_has_scope(element))
+            if (!is_in_has_scope(*element))
                 break;
 
-            has_scope_ancestors.append(&element);
-            should_delay_ancestor_sibling_scans |= is_in_subtree_of_has_relative_selector_with_sibling_combinator(element);
+            has_scope_ancestors.append(element);
+            should_delay_ancestor_sibling_scans |= is_in_subtree_of_has_relative_selector_with_sibling_combinator(*element);
         }
 
-        for (auto* element : has_scope_ancestors) {
-            VERIFY(element);
-
+        for (auto element : has_scope_ancestors) {
             if (elements_already_invalidated_for_has.set(element) != AK::HashSetResult::InsertedNewEntry)
                 continue;
 
             ++counters.has_ancestor_walk_visits;
-            element->invalidate_style_if_affected_by_has();
+            bool can_skip_unchanged_has_fanout = !element->root().is_shadow_root() && !element->assigned_slot_internal() && !element->is_shadow_host();
+            if (!element->affected_by_has_pseudo_class_in_non_subject_position() || !can_skip_unchanged_has_fanout || has_rule_that_may_be_affected_by_mutation(element, pending_has_invalidation.mutation_features))
+                element->invalidate_style_if_affected_by_has();
 
-            auto* parent = element->parent_or_shadow_host();
+            GC::Ptr<DOM::Node> parent = element->parent_or_shadow_host();
             if (!parent)
                 return;
 
@@ -898,16 +1234,17 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
             // its style might be affected by the change in descendant node.
             if (!should_scan_ancestor_siblings)
                 continue;
-            if (should_delay_ancestor_sibling_scans && !is_in_subtree_of_has_relative_selector_with_sibling_combinator(*element))
+            if (should_delay_ancestor_sibling_scans && !is_in_subtree_of_has_relative_selector_with_sibling_combinator(element))
                 continue;
             parent->for_each_child_of_type<DOM::Element>([&](auto& ancestor_sibling_element) {
                 ++counters.has_ancestor_sibling_element_checks;
                 if (ancestor_sibling_element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator()) {
-                    if (elements_already_invalidated_for_has.set(&ancestor_sibling_element) != AK::HashSetResult::InsertedNewEntry)
+                    GC::Ref<DOM::Element> ancestor_sibling = ancestor_sibling_element;
+                    if (elements_already_invalidated_for_has.set(ancestor_sibling) != AK::HashSetResult::InsertedNewEntry)
                         return IterationDecision::Continue;
 
                     ++counters.has_ancestor_walk_visits;
-                    ancestor_sibling_element.invalidate_style_if_affected_by_has();
+                    ancestor_sibling->invalidate_style_if_affected_by_has();
                 }
                 return IterationDecision::Continue;
             });
