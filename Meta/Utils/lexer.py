@@ -13,6 +13,9 @@ class Lexer:
         self.text = text
         self.position = 0
 
+    def tell(self) -> int:
+        return self.position
+
     def is_eof(self) -> bool:
         return self.position >= len(self.text)
 
@@ -29,17 +32,14 @@ class Lexer:
         self.position += 1
         return ch
 
-    def consume_specific_char(self, ch: str) -> bool:
-        if self.peek() == ch:
-            self.position += 1
-            return True
-        return False
-
-    def consume_specific_string(self, string: str) -> bool:
+    def consume_specific(self, string: str) -> bool:
         if self.text.startswith(string, self.position):
             self.position += len(string)
             return True
         return False
+
+    def next_is(self, string: str) -> bool:
+        return self.text.startswith(string, self.position)
 
     def consume_until(self, predicate: Callable[[str], bool]) -> str:
         start = self.position
@@ -52,6 +52,9 @@ class Lexer:
         while self.position < len(self.text) and predicate(self.text[self.position]):
             self.position += 1
         return self.text[start : self.position]
+
+    def ignore(self, count: int = 1) -> None:
+        self.position = min(self.position + count, len(self.text))
 
     def ignore_until(self, ch: str) -> None:
         while self.position < len(self.text) and self.text[self.position] != ch:

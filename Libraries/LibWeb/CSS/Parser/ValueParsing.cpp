@@ -1242,6 +1242,18 @@ RefPtr<StyleValue const> Parser::parse_keyword_value(TokenStream<ComponentValue>
     return nullptr;
 }
 
+RefPtr<StyleValue const> Parser::parse_specific_keyword_value(TokenStream<ComponentValue>& tokens, Keyword keyword)
+{
+    auto transaction = tokens.begin_transaction();
+
+    if (auto keyword_value = parse_keyword_value(tokens); keyword_value && keyword_value->to_keyword() == keyword) {
+        transaction.commit();
+        return keyword_value;
+    }
+
+    return nullptr;
+}
+
 // https://drafts.csswg.org/scroll-animations-1/#funcdef-scroll
 RefPtr<FunctionStyleValue const> Parser::parse_scroll_function_value(TokenStream<ComponentValue>& tokens)
 {
@@ -2569,29 +2581,6 @@ RefPtr<StyleValue const> Parser::parse_counter_style_value(TokenStream<Component
     return nullptr;
 }
 
-// https://drafts.csswg.org/css-counter-styles-3/#typedef-symbol
-RefPtr<StyleValue const> Parser::parse_symbol_value(TokenStream<ComponentValue>& tokens)
-{
-    // <symbol> = <string> | <image> | <custom-ident>
-    // Note: The <image> syntax in <symbol> is currently at-risk. No implementations have plans to implement it
-    //       currently, and it complicates some usages of counter() in ways that haven’t been fully handled.
-    // NB: Given the above we don't currently support <image> here - we may need to revisit this if other browsers implement it.
-    auto transaction = tokens.begin_transaction();
-    tokens.discard_whitespace();
-
-    if (auto string_value = parse_string_value(tokens)) {
-        transaction.commit();
-        return string_value;
-    }
-
-    if (auto custom_ident_value = parse_custom_ident_value(tokens, {})) {
-        transaction.commit();
-        return custom_ident_value;
-    }
-
-    return nullptr;
-}
-
 RefPtr<StyleValue const> Parser::parse_nonnegative_integer_symbol_pair_value(TokenStream<ComponentValue>& tokens)
 {
     auto transaction = tokens.begin_transaction();
@@ -3649,20 +3638,21 @@ RefPtr<StyleValue const> Parser::parse_font_variant_alternates_value(TokenStream
     RefPtr<StyleValue const> annotation;
 
     while (tokens.has_next_token()) {
-        auto transaction = tokens.begin_transaction();
+        tokens.discard_whitespace();
 
         // historical-forms
-        if (auto keyword_value = parse_keyword_value(tokens); keyword_value && keyword_value->to_keyword() == Keyword::HistoricalForms) {
+        if (auto maybe_historical_forms = parse_specific_keyword_value(tokens, Keyword::HistoricalForms)) {
             if (historical_forms)
                 return nullptr;
 
-            transaction.commit();
-            historical_forms = keyword_value;
+            historical_forms = maybe_historical_forms;
             continue;
         }
 
         if (!tokens.next_token().is_function())
             break;
+
+        auto transaction = tokens.begin_transaction();
 
         auto function = tokens.consume_a_token().function();
 

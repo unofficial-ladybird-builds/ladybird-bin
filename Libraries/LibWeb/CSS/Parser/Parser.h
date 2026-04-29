@@ -21,6 +21,7 @@
 #include <LibWeb/CSS/PageSelector.h>
 #include <LibWeb/CSS/ParsedFontFace.h>
 #include <LibWeb/CSS/Parser/ComponentValue.h>
+#include <LibWeb/CSS/Parser/GeneratedValueTypesParsing.h>
 #include <LibWeb/CSS/Parser/RuleContext.h>
 #include <LibWeb/CSS/Parser/TokenStream.h>
 #include <LibWeb/CSS/Parser/Tokenizer.h>
@@ -397,6 +398,7 @@ private:
     RefPtr<CalculationNode const> parse_math_function(Function const&, CalculationContext const&);
     RefPtr<CalculationNode const> parse_a_calc_function_node(Function const&, CalculationContext const&);
     RefPtr<StyleValue const> parse_keyword_value(TokenStream<ComponentValue>&);
+    RefPtr<StyleValue const> parse_specific_keyword_value(TokenStream<ComponentValue>&, Keyword);
     RefPtr<StyleValue const> parse_hue_none_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_solidus_and_alpha_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_rgb_color_value(TokenStream<ComponentValue>&);
@@ -417,7 +419,6 @@ private:
     RefPtr<StyleValue const> parse_counter_value(TokenStream<ComponentValue>&);
     Optional<FlyString> parse_counter_style_name(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_counter_style_value(TokenStream<ComponentValue>&);
-    RefPtr<StyleValue const> parse_symbol_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_nonnegative_integer_symbol_pair_value(TokenStream<ComponentValue>&);
     enum class AllowReversed {
         No,
@@ -564,6 +565,11 @@ private:
     RefPtr<StyleValue const> parse_white_space_shorthand(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_white_space_trim_value(TokenStream<ComponentValue>&);
     RefPtr<StyleValue const> parse_will_change_value(TokenStream<ComponentValue>&);
+
+#define __ENUMERATE_GENERATED_CSS_VALUE_TYPE(value_type_name) \
+    RefPtr<StyleValue const> parse_##value_type_name##_value(TokenStream<ComponentValue>& tokens);
+    ENUMERATE_GENERATED_CSS_VALUE_TYPES
+#undef __ENUMERATE_GENERATED_CSS_VALUE_TYPE
 
     RefPtr<CalculationNode const> convert_to_calculation_node(CalcParsing::Node const&, CalculationContext const&);
     RefPtr<CalculationNode const> parse_a_calculation(TokenStream<ComponentValue>&, CalculationContext const&);
