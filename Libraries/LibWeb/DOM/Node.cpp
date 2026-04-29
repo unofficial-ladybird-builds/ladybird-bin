@@ -19,7 +19,8 @@
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Bindings/Node.h>
 #include <LibWeb/CSS/ComputedProperties.h>
-#include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/CSS/Invalidation/NodeInvalidator.h>
+#include <LibWeb/CSS/Invalidation/StructuralMutationInvalidator.h>
 #include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/CDATASection.h>
@@ -39,7 +40,6 @@
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/DOM/StaticNodeList.h>
-#include <LibWeb/DOM/StyleInvalidator.h>
 #include <LibWeb/DOM/XMLDocument.h>
 #include <LibWeb/HTML/CustomElements/CustomElementReactionNames.h>
 #include <LibWeb/HTML/CustomElements/CustomElementRegistry.h>
@@ -63,6 +63,7 @@
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/XMLSerializer.h>
 #include <LibWeb/Infra/CharacterTypes.h>
+#include <LibWeb/InvalidateDisplayList.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/TextNode.h>
 #include <LibWeb/MathML/MathMLElement.h>
@@ -406,102 +407,6 @@ GC::Ptr<HTML::Navigable> Node::navigable() const
     return document().navigable();
 }
 
-[[maybe_unused]] static StringView to_string(StyleInvalidationReason reason)
-{
-#define __ENUMERATE_STYLE_INVALIDATION_REASON(reason) \
-    case StyleInvalidationReason::reason:             \
-        return #reason##sv;
-    switch (reason) {
-        ENUMERATE_STYLE_INVALIDATION_REASONS(__ENUMERATE_STYLE_INVALIDATION_REASON)
-    default:
-        VERIFY_NOT_REACHED();
-    }
-}
-
-static bool has_any_has_invalidation_metadata(CSS::StyleInvalidationData const& data)
-{
-    return !data.ids_used_in_has_selectors.is_empty()
-        || !data.class_names_used_in_has_selectors.is_empty()
-        || !data.attribute_names_used_in_has_selectors.is_empty()
-        || !data.tag_names_used_in_has_selectors.is_empty()
-        || !data.pseudo_classes_used_in_has_selectors.is_empty()
-        || data.has_selectors_sensitive_to_featureless_subtree_changes;
-}
-
-static bool element_has_feature_used_in_has_selector(Element const& element, CSS::StyleInvalidationData const& data)
-{
-    if (data.tag_names_used_in_has_selectors.contains(element.local_name()))
-        return true;
-    // Selector metadata stores tag and attribute names lowercased. For non-HTML elements this is only a conservative
-    // scheduling hint; the actual :has() match still uses selector matching with the element's namespace semantics.
-    if (element.namespace_uri() != Namespace::HTML
-        && data.tag_names_used_in_has_selectors.contains(element.lowercased_local_name()))
-        return true;
-    if (auto id = element.id(); id.has_value() && data.ids_used_in_has_selectors.contains(*id))
-        return true;
-    for (auto const& class_name : element.class_names()) {
-        if (data.class_names_used_in_has_selectors.contains(class_name))
-            return true;
-    }
-    bool attribute_used_in_has = false;
-    element.for_each_attribute([&](FlyString const& name, String const&) {
-        if (data.attribute_names_used_in_has_selectors.contains(name))
-            attribute_used_in_has = true;
-        if (element.namespace_uri() != Namespace::HTML
-            && data.attribute_names_used_in_has_selectors.contains(name.to_ascii_lowercase()))
-            attribute_used_in_has = true;
-    });
-    if (attribute_used_in_has)
-        return true;
-    for (auto const& pseudo_class_entry : data.pseudo_classes_used_in_has_selectors) {
-        CSS::InvalidationSet pseudo_class_set;
-        pseudo_class_set.set_needs_invalidate_pseudo_class(pseudo_class_entry.key);
-        if (element.includes_properties_from_invalidation_set(pseudo_class_set))
-            return true;
-    }
-    return false;
-}
-
-static bool subtree_has_feature_used_in_has_selector(Node& node, CSS::StyleScope const& style_scope)
-{
-    auto const* data = style_scope.m_rule_cache ? &style_scope.m_rule_cache->style_invalidation_data : nullptr;
-    if (!data || !has_any_has_invalidation_metadata(*data))
-        return true;
-
-    // Some :has() arguments can match because a node exists, stops existing, or changes position, even when that
-    // node has no tag/class/id/attribute/pseudo-class metadata we can compare against. Examples include :has(*),
-    // :has(:not(.x)), :has(:empty), and child-index pseudo-classes. Keep the old conservative walk for those.
-    if (data->has_selectors_sensitive_to_featureless_subtree_changes)
-        return true;
-
-    bool found = false;
-    node.for_each_in_inclusive_subtree([&](Node& node) {
-        if (node.is_character_data()) {
-            found = true;
-            return TraversalDecision::Break;
-        }
-        if (auto* element = as_if<Element>(node); element && element_has_feature_used_in_has_selector(*element, *data)) {
-            found = true;
-            return TraversalDecision::Break;
-        }
-        return TraversalDecision::Continue;
-    });
-    return found;
-}
-
-static bool reason_may_affect_has_selectors(StyleInvalidationReason reason)
-{
-    // :has() selectors match based on DOM state only (structure, attributes, pseudo-classes). Reasons that don't change
-    // any DOM state can't affect :has() matching, so we can skip scheduling :has() ancestor invalidation.
-    return !first_is_one_of(reason,
-        StyleInvalidationReason::BaseURLChanged,
-        StyleInvalidationReason::CSSFontLoaded,
-        StyleInvalidationReason::HTMLIFrameElementGeometryChange,
-        StyleInvalidationReason::HTMLObjectElementUpdateLayoutAndChildObjects,
-        StyleInvalidationReason::NavigableSetViewportSize,
-        StyleInvalidationReason::SettingsChange);
-}
-
 CSS::StyleScope& Node::style_scope()
 {
     auto& root = this->root();
@@ -538,279 +443,14 @@ void Node::for_each_style_scope_which_may_observe_the_node(Function<void(CSS::St
     }
 }
 
-static void invalidate_structurally_affected_siblings(Node& node, StyleInvalidationReason reason)
-{
-    auto previous_sibling_needs_structural_invalidation = [](Element const& element) {
-        return element.affected_by_backward_structural_changes();
-    };
-
-    auto next_sibling_needs_structural_invalidation = [](Element const& element, size_t current_sibling_distance) {
-        if (element.affected_by_indirect_sibling_combinator() || element.affected_by_first_child_pseudo_class() || element.affected_by_forward_positional_pseudo_class())
-            return true;
-        return element.affected_by_direct_sibling_combinator() && current_sibling_distance <= element.sibling_invalidation_distance();
-    };
-
-    // The structural change might flip whether `element` matches selectors like :nth-child or `~`/`+`, but those
-    // pseudo-classes and combinators only affect `element` itself unless some descendant selector also depends on
-    // `element`'s position. Mark just `element` when descendants don't observe its position; mark the entire
-    // subtree only when they do.
-    auto mark_sibling_for_style_update = [](Element& element) {
-        auto mark_descendant_shadow_roots_for_style_update = [](Element& element) {
-            element.for_each_shadow_including_inclusive_descendant([](Node& inclusive_descendant) {
-                auto* descendant_element = as_if<Element>(inclusive_descendant);
-                if (!descendant_element)
-                    return TraversalDecision::Continue;
-                auto shadow_root = descendant_element->shadow_root();
-                if (!shadow_root)
-                    return TraversalDecision::Continue;
-                shadow_root->set_entire_subtree_needs_style_update(true);
-                shadow_root->set_needs_style_update(true);
-                return TraversalDecision::Continue;
-            });
-        };
-
-        if (element.affected_by_structural_pseudo_class_in_non_subject_position() || element.affected_by_sibling_combinator_in_non_subject_position()) {
-            element.set_entire_subtree_needs_style_update(true);
-        } else {
-            element.set_needs_style_update(true);
-            mark_descendant_shadow_roots_for_style_update(element);
-        }
-    };
-
-    if (reason == StyleInvalidationReason::NodeInsertBefore || reason == StyleInvalidationReason::NodeRemove) {
-        // OPTIMIZATION: Only walk previous siblings if the parent has been observed to contain a child that matches a
-        //               pseudo-class whose match result can depend on siblings after that element. Otherwise, no
-        //               previous sibling can possibly need invalidation due to this insertion or removal.
-        if (auto* parent_node = as_if<ParentNode>(node.parent()); parent_node && parent_node->has_child_affected_by_backward_structural_changes()) {
-            auto& counters = node.document().style_invalidation_counters();
-            for (auto* sibling = node.previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
-                ++counters.previous_sibling_invalidation_walk_visits;
-                if (auto* element = as_if<Element>(sibling); element && previous_sibling_needs_structural_invalidation(*element))
-                    mark_sibling_for_style_update(*element);
-            }
-        }
-    }
-
-    size_t current_sibling_distance = 1;
-    for (auto* sibling = node.next_sibling(); sibling; sibling = sibling->next_sibling()) {
-        if (auto* element = as_if<Element>(sibling)) {
-            bool needs_to_invalidate = false;
-            if (reason == StyleInvalidationReason::NodeInsertBefore || reason == StyleInvalidationReason::NodeRemove) {
-                needs_to_invalidate = next_sibling_needs_structural_invalidation(*element, current_sibling_distance);
-            } else if (element->affected_by_indirect_sibling_combinator() || element->affected_by_forward_positional_pseudo_class()) {
-                needs_to_invalidate = true;
-            } else if (element->affected_by_direct_sibling_combinator() && current_sibling_distance <= element->sibling_invalidation_distance()) {
-                needs_to_invalidate = true;
-            }
-            if (needs_to_invalidate)
-                mark_sibling_for_style_update(*element);
-            current_sibling_distance++;
-        }
-    }
-}
-
-static void mark_ancestors_as_having_child_needing_style_update(Node& node)
-{
-    for (auto* ancestor = node.parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host())
-        ancestor->set_child_needs_style_update(true);
-}
-
-static bool element_is_affected_by_same_parent_move(Element const& element)
-{
-    return element.affected_by_forward_structural_changes()
-        || element.affected_by_backward_structural_changes()
-        || element.affected_by_has_pseudo_class_in_subject_position()
-        || element.affected_by_has_pseudo_class_in_non_subject_position()
-        || element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator();
-}
-
-static void invalidate_style_after_same_parent_move(Node& node, StyleInvalidationReason reason)
-{
-    if (node.document().needs_full_style_update())
-        return;
-
-    if (auto* parent = node.parent_or_shadow_host(); parent) {
-        parent->for_each_style_scope_which_may_observe_the_node([&](CSS::StyleScope& scope) {
-            if (!scope.may_have_has_selectors())
-                return;
-            bool has_sibling_combinator_has_selectors = scope.may_have_has_selectors_with_relative_selector_that_has_sibling_combinator();
-            if (!node.is_character_data() && !subtree_has_feature_used_in_has_selector(node, scope) && !has_sibling_combinator_has_selectors)
-                return;
-            scope.record_pending_has_invalidation_mutation_features(*parent, node, true);
-            scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(*parent);
-            if (!has_sibling_combinator_has_selectors)
-                return;
-            parent->for_each_child_of_type<Element>([&](auto& element) {
-                if (element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator())
-                    element.invalidate_style_if_affected_by_has();
-                return IterationDecision::Continue;
-            });
-        });
-    }
-
-    for (auto* ancestor = node.parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
-        if (ancestor->entire_subtree_needs_style_update())
-            return;
-    }
-
-    if (auto* element = as_if<Element>(node)) {
-        if (element->affected_by_structural_pseudo_class_in_non_subject_position() || element->affected_by_sibling_combinator_in_non_subject_position()) {
-            node.set_entire_subtree_needs_style_update(true);
-        } else if (element_is_affected_by_same_parent_move(*element)) {
-            node.set_needs_style_update(true);
-        }
-    } else if (!node.is_character_data()) {
-        node.set_needs_style_update(true);
-    }
-    invalidate_structurally_affected_siblings(node, reason);
-    mark_ancestors_as_having_child_needing_style_update(node);
-}
-
 void Node::invalidate_style(StyleInvalidationReason reason)
 {
-    auto& style_scope = this->style_scope();
-
-    auto schedule_has_walk_for_parent = [this, reason](CSS::StyleScope& scope, Node& parent) {
-        if (!scope.may_have_has_selectors())
-            return;
-        bool is_child_list_mutation = reason == StyleInvalidationReason::NodeRemove || reason == StyleInvalidationReason::NodeInsertBefore;
-        bool has_sibling_combinator_has_selectors = is_child_list_mutation && scope.may_have_has_selectors_with_relative_selector_that_has_sibling_combinator();
-
-        // Sibling-combinator :has() selectors are sensitive to featureless insertions/removals because a plain node can
-        // still change adjacency and following-sibling relationships.
-        bool may_affect_has_match = is_character_data() || subtree_has_feature_used_in_has_selector(*this, scope) || has_sibling_combinator_has_selectors;
-        if (!may_affect_has_match)
-            return;
-        scope.record_pending_has_invalidation_mutation_features(parent, *this, true);
-        scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(parent);
-
-        if (!has_sibling_combinator_has_selectors)
-            return;
-        parent.for_each_child_of_type<Element>([&](auto& element) {
-            if (element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator())
-                element.invalidate_style_if_affected_by_has();
-            return IterationDecision::Continue;
-        });
-    };
-
-    // On insertion and removal the mutated node itself is uninteresting to the
-    // :has() walker (a freshly inserted node has no :has() scope flags yet, and
-    // a removed node is about to leave the tree). Start the walk at the parent,
-    // which was in scope before and reliably carries the correct flags.
-    if (reason == StyleInvalidationReason::NodeRemove || reason == StyleInvalidationReason::NodeInsertBefore) {
-        if (auto* parent = parent_or_shadow_host(); parent) {
-            // Walk every scope that can observe the parent, including enclosing and hosted shadow roots, so :has() in
-            // :host(), ::slotted(), and ::part() selectors can react to the mutation.
-            parent->for_each_style_scope_which_may_observe_the_node([&](CSS::StyleScope& scope) {
-                schedule_has_walk_for_parent(scope, *parent);
-            });
-        }
-    } else if (style_scope.may_have_has_selectors() && reason_may_affect_has_selectors(reason)) {
-        style_scope.record_pending_has_invalidation_mutation_features(*this, *this, false);
-        style_scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(*this);
-    }
-
-    // Character data nodes have no style of their own, so once :has() ancestor invalidation has been scheduled there
-    // is nothing else to do.
-    if (is_character_data())
-        return;
-
-    if (!needs_style_update() && !document().needs_full_style_update()) {
-        dbgln_if(STYLE_INVALIDATION_DEBUG, "Invalidate style ({}): {}", to_string(reason), debug_description());
-    }
-
-    if (is_document()) {
-        auto& document = static_cast<DOM::Document&>(*this);
-        document.style_invalidation_counters().full_style_invalidations++;
-        document.set_needs_full_style_update(true);
-        return;
-    }
-
-    // If the document is already marked for a full style update, there's no need to do anything here.
-    if (document().needs_full_style_update()) {
-        return;
-    }
-
-    // If any ancestor is already marked for an entire subtree update, there's no need to do anything here.
-    for (auto* ancestor = this->parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
-        if (ancestor->entire_subtree_needs_style_update())
-            return;
-    }
-
-    // When invalidating style for a node, we actually invalidate:
-    // - the node itself
-    // - all of its descendants
-    // - preceding siblings that depend on following-sibling counts (only on DOM insert/remove)
-    // - subsequent siblings that depend on previous siblings or sibling combinators
-    // FIXME: This is a lot of invalidation and we should implement more sophisticated invalidation to do less work!
-
-    auto mark_entire_subtree_for_style_update = [](Node& node_to_mark) {
-        node_to_mark.set_entire_subtree_needs_style_update(true);
-    };
-
-    mark_entire_subtree_for_style_update(*this);
-
-    invalidate_structurally_affected_siblings(*this, reason);
-    mark_ancestors_as_having_child_needing_style_update(*this);
+    CSS::Invalidation::invalidate_node_style(*this, reason);
 }
 
 void Node::invalidate_style(StyleInvalidationReason reason, Vector<CSS::InvalidationSet::Property> const& properties, StyleInvalidationOptions options)
 {
-    if (is_character_data())
-        return;
-
-    auto& style_scope = this->style_scope();
-
-    // Collect every shadow scope this mutation can flip, in addition to the root scope. This includes:
-    //   - The element's own shadow root (if it's a shadow host).
-    //   - Every enclosing shadow host's shadow root, for :host(...:has(...)) and ::slotted(...) rules in those scopes
-    //     that observe property changes on this element or its light-DOM children.
-    //   - The document scope and any outer shadow root scopes when this element lives inside a shadow tree, for
-    //     ::part(...:has(...)) rules in the outer document or containing shadow root.
-    Vector<GC::Ref<CSS::StyleScope>, 4> additional_scopes;
-    for_each_style_scope_which_may_observe_the_node([&](CSS::StyleScope& scope) {
-        if (&scope == &style_scope)
-            return;
-        additional_scopes.append(scope);
-    });
-
-    bool properties_used_in_has_selectors = false;
-    auto& counters = document().style_invalidation_counters();
-    for (auto const& property : properties) {
-        if (auto const* metadata = document().style_computer().has_invalidation_metadata_for_property(property, style_scope)) {
-            properties_used_in_has_selectors = true;
-            counters.has_invalidation_metadata_candidates += metadata->size();
-        }
-        for (auto& scope : additional_scopes) {
-            if (auto const* metadata = document().style_computer().has_invalidation_metadata_for_property(property, scope)) {
-                properties_used_in_has_selectors = true;
-                counters.has_invalidation_metadata_candidates += metadata->size();
-            }
-        }
-    }
-    if (properties_used_in_has_selectors) {
-        style_scope.record_pending_has_invalidation_mutation_features(*this, properties);
-        style_scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(*this);
-        for (auto& scope : additional_scopes) {
-            scope->record_pending_has_invalidation_mutation_features(*this, properties);
-            scope->schedule_ancestors_style_invalidation_due_to_presence_of_has(*this);
-        }
-    }
-
-    if (options.invalidate_self)
-        set_needs_style_update(true);
-
-    auto invalidate_for_style_scope = [this, reason, &properties](CSS::StyleScope& style_scope) {
-        auto plan = document().style_computer().invalidation_plan_for_properties(properties, style_scope);
-        return document().style_invalidator().enqueue_invalidation_plan(*this, reason, *plan);
-    };
-
-    if (invalidate_for_style_scope(style_scope))
-        return;
-    for (auto& scope : additional_scopes) {
-        if (invalidate_for_style_scope(scope))
-            return;
-    }
+    CSS::Invalidation::invalidate_node_style_for_properties(*this, reason, properties, options);
 }
 
 Utf16String Node::child_text_content() const
@@ -1567,7 +1207,7 @@ WebIDL::ExceptionOr<void> Node::move_node(Node& new_parent, Node* child)
         // Since the tree structure is about to change, we need to invalidate both style and layout.
         // In the future, we should find a way to only invalidate the parts that actually need it.
         if (is_same_parent_move)
-            invalidate_style_after_same_parent_move(*this, StyleInvalidationReason::NodeRemove);
+            CSS::Invalidation::invalidate_style_after_same_parent_move(*this, StyleInvalidationReason::NodeRemove);
         else
             invalidate_style(StyleInvalidationReason::NodeRemove);
 
@@ -1643,7 +1283,7 @@ WebIDL::ExceptionOr<void> Node::move_node(Node& new_parent, Node* child)
     }
 
     if (is_same_parent_move)
-        invalidate_style_after_same_parent_move(*this, StyleInvalidationReason::NodeInsertBefore);
+        CSS::Invalidation::invalidate_style_after_same_parent_move(*this, StyleInvalidationReason::NodeInsertBefore);
     else
         invalidate_style(StyleInvalidationReason::NodeInsertBefore);
     if (is_connected()) {
@@ -2072,6 +1712,8 @@ void Node::set_needs_layout_tree_update(bool value, SetNeedsLayoutTreeUpdateReas
     }
 
     if (m_needs_layout_tree_update) {
+        document().set_needs_repaint(Badge<Node> {}, InvalidateDisplayList::No);
+
         for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
             if (ancestor->m_child_needs_layout_tree_update)
                 break;
@@ -2111,6 +1753,8 @@ void Node::set_needs_style_update(bool value)
     m_needs_style_update = value;
 
     if (m_needs_style_update) {
+        document().set_needs_repaint(Badge<Node> {}, InvalidateDisplayList::No);
+
         ++document().style_invalidation_counters().style_invalidations;
         for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
             if (ancestor->m_child_needs_style_update)
@@ -3022,8 +2666,10 @@ void Node::set_needs_repaint(InvalidateDisplayList should_invalidate_display_lis
 
 void Node::set_needs_layout_update(SetNeedsLayoutReason reason)
 {
-    if (auto* node = unsafe_layout_node())
+    if (auto* node = unsafe_layout_node()) {
         node->set_needs_layout_update(reason);
+        document().set_needs_repaint(Badge<Node> {}, InvalidateDisplayList::No);
+    }
 }
 
 Painting::Paintable const* Node::paintable() const

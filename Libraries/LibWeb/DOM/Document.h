@@ -301,8 +301,6 @@ public:
 
     virtual FlyString node_name() const override { return "#document"_fly_string; }
 
-    void invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass, auto& element_slot, Node& old_new_common_ancestor, auto node);
-
     void set_hovered_node(GC::Ptr<Node>);
     Node* hovered_node() { return m_hovered_node.ptr(); }
     Node const* hovered_node() const { return m_hovered_node.ptr(); }
@@ -859,7 +857,7 @@ public:
     GC::RootVector<GC::Ref<Element>> elements_from_point(double x, double y);
     GC::Ptr<Element const> scrolling_element() const;
 
-    void set_needs_animated_style_update() { m_needs_animated_style_update = true; }
+    void set_needs_animated_style_update();
 
     void set_needs_invalidation_of_elements_affected_by_has() { m_needs_invalidation_of_elements_affected_by_has = true; }
 
@@ -961,7 +959,7 @@ public:
     GC::Ptr<HTML::Navigable> navigable() const;
     void set_navigable(GC::Ptr<HTML::Navigable>);
 
-    template<OneOf<Painting::Paintable, HTML::Navigable, CSS::VisualViewport, Web::EventHandler> T>
+    template<OneOf<Node, Painting::Paintable, HTML::Navigable, CSS::VisualViewport, Web::EventHandler> T>
     void set_needs_repaint(Badge<T>, InvalidateDisplayList should_invalidate_display_list = InvalidateDisplayList::Yes)
     {
         set_needs_repaint(should_invalidate_display_list);
@@ -1006,7 +1004,7 @@ public:
     GC::Ptr<ViewTransition::ViewTransition> active_view_transition() const { return m_active_view_transition; }
     void set_active_view_transition(GC::Ptr<ViewTransition::ViewTransition> view_transition) { m_active_view_transition = view_transition; }
     bool rendering_suppression_for_view_transitions() const { return m_rendering_suppression_for_view_transitions; }
-    void set_rendering_suppression_for_view_transitions(bool value) { m_rendering_suppression_for_view_transitions = value; }
+    void set_rendering_suppression_for_view_transitions(bool);
     GC::Ptr<CSS::CSSStyleSheet> dynamic_view_transition_style_sheet() const { return m_dynamic_view_transition_style_sheet; }
     void set_show_view_transition_tree(bool value) { m_show_view_transition_tree = value; }
     Vector<GC::Ptr<ViewTransition::ViewTransition>>& update_callback_queue() { return m_update_callback_queue; }
@@ -1080,7 +1078,7 @@ public:
     String dump_display_list();
     String dump_stacking_context_tree();
 
-    StyleInvalidator& style_invalidator() { return m_style_invalidator; }
+    CSS::Invalidation::StyleInvalidator& style_invalidator() { return m_style_invalidator; }
 
     Optional<Vector<CSS::Parser::ComponentValue>> environment_variable_value(CSS::EnvironmentVariable, Span<i32> indices = {}) const;
 
@@ -1544,7 +1542,7 @@ private:
     // https://drafts.csswg.org/css-view-transitions-1/#document-update-callback-queue
     Vector<GC::Ptr<ViewTransition::ViewTransition>> m_update_callback_queue = {};
 
-    GC::Ref<StyleInvalidator> m_style_invalidator;
+    GC::Ref<CSS::Invalidation::StyleInvalidator> m_style_invalidator;
 
     // https://www.w3.org/TR/css-properties-values-api-1/#dom-window-registeredpropertyset-slot
     HashMap<FlyString, CSS::CustomPropertyRegistration> m_registered_property_set;

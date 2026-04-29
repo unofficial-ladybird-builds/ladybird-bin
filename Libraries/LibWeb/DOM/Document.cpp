@@ -18,7 +18,6 @@
 #include <AK/JsonObjectSerializer.h>
 #include <AK/Random.h>
 #include <AK/StringBuilder.h>
-#include <AK/TemporaryChange.h>
 #include <AK/Time.h>
 #include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
@@ -50,6 +49,11 @@
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/FontComputer.h>
 #include <LibWeb/CSS/FontFaceSet.h>
+#include <LibWeb/CSS/Invalidation/HasMutationInvalidator.h>
+#include <LibWeb/CSS/Invalidation/MediaQueryInvalidator.h>
+#include <LibWeb/CSS/Invalidation/PseudoClassInvalidator.h>
+#include <LibWeb/CSS/Invalidation/SlotInvalidator.h>
+#include <LibWeb/CSS/Invalidation/StyleInvalidator.h>
 #include <LibWeb/CSS/MediaQueryList.h>
 #include <LibWeb/CSS/MediaQueryListEvent.h>
 #include <LibWeb/CSS/Parser/Parser.h>
@@ -57,7 +61,6 @@
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
-#include <LibWeb/CSS/StyleSheetInvalidation.h>
 #include <LibWeb/CSS/StyleSheetList.h>
 #include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GuaranteedInvalidStyleValue.h>
@@ -94,7 +97,6 @@
 #include <LibWeb/DOM/ProcessingInstruction.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/DOM/ShadowRoot.h>
-#include <LibWeb/DOM/StyleInvalidator.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/DOM/TreeWalker.h>
 #include <LibWeb/DOM/Utils.h>
@@ -133,7 +135,6 @@
 #include <LibWeb/HTML/HTMLMetaElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
 #include <LibWeb/HTML/HTMLScriptElement.h>
-#include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
 #include <LibWeb/HTML/HTMLTitleElement.h>
@@ -508,7 +509,7 @@ Document::Document(JS::Realm& realm, URL::URL const& url, TemporaryDocumentForFr
     , m_temporary_document_for_fragment_parsing(temporary_document_for_fragment_parsing)
     , m_editing_host_manager(EditingHostManager::create(realm, *this))
     , m_dynamic_view_transition_style_sheet(parse_css_stylesheet(CSS::Parser::ParsingParams(realm), ""sv, {}))
-    , m_style_invalidator(realm.heap().allocate<StyleInvalidator>())
+    , m_style_invalidator(realm.heap().allocate<CSS::Invalidation::StyleInvalidator>())
     , m_style_scope(*this)
 {
     m_legacy_platform_object_flags = PlatformObject::LegacyPlatformObjectFlags {
@@ -1715,20 +1716,8 @@ bool Document::layout_is_up_to_date() const
         }
         is_display_none = static_cast<Element&>(node).computed_properties()->display().is_none();
 
-        // If this is a slot element and its style changed, mark its assigned
-        // (slotted) nodes as needing a style update. Slotted elements inherit
-        // from their slot in the flat tree, but they are DOM children of the
-        // shadow host, so the normal DOM tree walk won't propagate inherited
-        // style changes to them.
-        if (!node_invalidation.is_none()) {
-            if (auto* slot = as_if<HTML::HTMLSlotElement>(node)) {
-                for (auto const& slottable : slot->assigned_nodes_internal()) {
-                    slottable.visit([](auto const& assigned_node) {
-                        assigned_node->set_needs_style_update(true);
-                    });
-                }
-            }
-        }
+        if (!node_invalidation.is_none())
+            CSS::Invalidation::invalidate_assigned_slottables_after_slot_style_change(element);
     }
     if (node_invalidation.relayout)
         node.set_needs_layout_update(SetNeedsLayoutReason::StyleChange);
@@ -1799,10 +1788,7 @@ void Document::update_style()
 
     if (m_needs_invalidation_of_elements_affected_by_has) {
         m_needs_invalidation_of_elements_affected_by_has = false;
-        style_scope().invalidate_style_of_elements_affected_by_has();
-        for_each_shadow_root([&](auto& shadow_root) {
-            shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
-        });
+        CSS::Invalidation::invalidate_style_for_pending_has_mutations(*this);
     }
 
     if (!m_style_invalidator->has_pending_invalidations() && !needs_full_style_update() && !needs_style_update() && !child_needs_style_update())
@@ -1901,6 +1887,15 @@ void Document::update_animated_style_if_needed()
     }
 
     m_needs_animated_style_update = false;
+}
+
+void Document::set_needs_animated_style_update()
+{
+    if (m_needs_animated_style_update)
+        return;
+
+    m_needs_animated_style_update = true;
+    set_needs_repaint(InvalidateDisplayList::No);
 }
 
 void Document::update_paint_and_hit_testing_properties_if_needed()
@@ -2091,84 +2086,6 @@ static Node* find_common_ancestor(Node* a, Node* b)
     return nullptr;
 }
 
-void Document::invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass pseudo_class, auto& element_slot, Node& old_new_common_ancestor, auto node)
-{
-    auto& root = old_new_common_ancestor.root();
-    auto shadow_root = is<ShadowRoot>(root) ? static_cast<ShadowRoot const*>(&root) : nullptr;
-    auto& style_scope = shadow_root ? shadow_root->style_scope() : this->style_scope();
-
-    auto const& rules = style_scope.get_pseudo_class_rule_cache(pseudo_class);
-
-    auto& style_computer = this->style_computer();
-    auto does_rule_match_on_element = [&](Element const& element, CSS::MatchingRule const& rule) {
-        auto const& selector = rule.selector;
-        if (selector.can_use_ancestor_filter() && style_computer.should_reject_with_ancestor_filter(selector))
-            return false;
-
-        SelectorEngine::MatchContext context;
-        auto const& target_pseudo = selector.target_pseudo_element();
-        if (!target_pseudo.has_value())
-            return SelectorEngine::matches(selector, element, {}, context);
-        switch (target_pseudo->type()) {
-        case CSS::PseudoElement::Before:
-            return SelectorEngine::matches(selector, { element, CSS::PseudoElement::Before }, {}, context);
-        case CSS::PseudoElement::After:
-            return SelectorEngine::matches(selector, { element, CSS::PseudoElement::After }, {}, context);
-        default:
-            return false;
-        }
-    };
-
-    auto matches_different_set_of_rules_after_state_change = [&](Element& element) {
-        bool result = false;
-        rules.for_each_matching_rules({ element }, [&](auto& rules) {
-            for (auto& rule : rules) {
-                bool before = does_rule_match_on_element(element, rule);
-                TemporaryChange change { element_slot, node };
-                bool after = does_rule_match_on_element(element, rule);
-                if (before != after) {
-                    result = true;
-                    return IterationDecision::Break;
-                }
-            }
-            return IterationDecision::Continue;
-        });
-        return result;
-    };
-
-    Function<void(Node&)> invalidate_affected_elements_recursively = [&](Node& node) -> void {
-        if (node.is_element()) {
-            auto& element = static_cast<Element&>(node);
-            style_computer.push_ancestor(element);
-            if (element.affected_by_pseudo_class(pseudo_class) && matches_different_set_of_rules_after_state_change(element)) {
-                element.set_needs_style_update(true);
-            }
-        }
-
-        node.for_each_child([&](auto& child) {
-            invalidate_affected_elements_recursively(child);
-            return IterationDecision::Continue;
-        });
-
-        if (node.is_element())
-            style_computer.pop_ancestor(static_cast<Element&>(node));
-    };
-
-    // Seed the ancestor filter with ancestors above the starting node,
-    // so that ancestor-dependent selectors can still be correctly rejected.
-    for (auto* ancestor = old_new_common_ancestor.parent(); ancestor; ancestor = ancestor->parent()) {
-        if (ancestor->is_element())
-            style_computer.push_ancestor(static_cast<Element&>(*ancestor));
-    }
-
-    invalidate_affected_elements_recursively(old_new_common_ancestor);
-
-    for (auto* ancestor = old_new_common_ancestor.parent(); ancestor; ancestor = ancestor->parent()) {
-        if (ancestor->is_element())
-            style_computer.pop_ancestor(static_cast<Element&>(*ancestor));
-    }
-}
-
 void Document::set_hovered_node(GC::Ptr<Node> node)
 {
     if (m_hovered_node == node)
@@ -2185,11 +2102,11 @@ void Document::set_hovered_node(GC::Ptr<Node> node)
         new_hovered_node_root = node->root();
     if (old_hovered_node_root != new_hovered_node_root) {
         if (old_hovered_node_root)
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Hover, m_hovered_node, *old_hovered_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Hover, *this, m_hovered_node, *old_hovered_node_root, node);
         if (new_hovered_node_root)
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Hover, m_hovered_node, *new_hovered_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Hover, *this, m_hovered_node, *new_hovered_node_root, node);
     } else {
-        invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Hover, m_hovered_node, *common_ancestor, node);
+        CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Hover, *this, m_hovered_node, *common_ancestor, node);
     }
 
     m_hovered_node = node;
@@ -2867,19 +2784,19 @@ void Document::set_focused_area(GC::Ptr<Node> node)
         new_focused_node_root = node->root();
     if (old_focused_node_root != new_focused_node_root) {
         if (old_focused_node_root) {
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Focus, m_focused_area, *old_focused_node_root, node);
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusWithin, m_focused_area, *old_focused_node_root, node);
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusVisible, m_focused_area, *old_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Focus, *this, m_focused_area, *old_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusWithin, *this, m_focused_area, *old_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusVisible, *this, m_focused_area, *old_focused_node_root, node);
         }
         if (new_focused_node_root) {
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Focus, m_focused_area, *new_focused_node_root, node);
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusWithin, m_focused_area, *new_focused_node_root, node);
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusVisible, m_focused_area, *new_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Focus, *this, m_focused_area, *new_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusWithin, *this, m_focused_area, *new_focused_node_root, node);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusVisible, *this, m_focused_area, *new_focused_node_root, node);
         }
     } else {
-        invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Focus, m_focused_area, *common_ancestor, node);
-        invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusWithin, m_focused_area, *common_ancestor, node);
-        invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::FocusVisible, m_focused_area, *common_ancestor, node);
+        CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Focus, *this, m_focused_area, *common_ancestor, node);
+        CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusWithin, *this, m_focused_area, *common_ancestor, node);
+        CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::FocusVisible, *this, m_focused_area, *common_ancestor, node);
     }
 
     m_focused_area = node;
@@ -2939,13 +2856,13 @@ void Document::set_target_element(GC::Ptr<Element> element)
         new_target_node_root = element->root();
     if (old_target_node_root != new_target_node_root) {
         if (old_target_node_root) {
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Target, m_target_element, *old_target_node_root, element);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Target, *this, m_target_element, *old_target_node_root, element);
         }
         if (new_target_node_root) {
-            invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Target, m_target_element, *new_target_node_root, element);
+            CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Target, *this, m_target_element, *new_target_node_root, element);
         }
     } else {
-        invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass::Target, m_target_element, *common_ancestor, element);
+        CSS::Invalidation::invalidate_style_after_pseudo_class_state_change(CSS::PseudoClass::Target, *this, m_target_element, *common_ancestor, element);
     }
 
     m_target_element = element;
@@ -3476,6 +3393,9 @@ void Document::update_readiness(HTML::DocumentReadyState readiness_value)
 
     // 2. Set document's current document readiness to readinessValue.
     m_readiness = readiness_value;
+
+    if (readiness_value != HTML::DocumentReadyState::Loading)
+        page().client().request_frame();
 
     // 3. If document is associated with an HTML parser, then:
     if (m_parser) {
@@ -4017,34 +3937,7 @@ void Document::evaluate_media_queries_and_report_changes()
 
 void Document::evaluate_media_rules()
 {
-    bool document_media_queries_changed_match_state = false;
-    style_scope().for_each_active_css_style_sheet([&](CSS::CSSStyleSheet& style_sheet) {
-        if (style_sheet.evaluate_media_queries(*this))
-            document_media_queries_changed_match_state = true;
-    });
-
-    for_each_shadow_root([&](auto& shadow_root) {
-        bool shadow_root_media_queries_changed_match_state = false;
-        shadow_root.style_scope().for_each_active_css_style_sheet([&](CSS::CSSStyleSheet& style_sheet) {
-            if (style_sheet.evaluate_media_queries(*this))
-                shadow_root_media_queries_changed_match_state = true;
-        });
-
-        if (!shadow_root_media_queries_changed_match_state)
-            return;
-
-        shadow_root.style_scope().invalidate_rule_cache();
-        shadow_root.invalidate_style(StyleInvalidationReason::MediaQueryChangedMatchState);
-        CSS::invalidate_assigned_elements_for_dirty_slots(shadow_root);
-
-        if (auto* host = shadow_root.host())
-            host->root().invalidate_style(StyleInvalidationReason::MediaQueryChangedMatchState);
-    });
-
-    if (document_media_queries_changed_match_state) {
-        style_scope().invalidate_rule_cache();
-        invalidate_style(StyleInvalidationReason::MediaQueryChangedMatchState);
-    }
+    CSS::Invalidation::evaluate_media_rules_and_invalidate_style(*this);
 }
 
 DOMImplementation* Document::implementation()
@@ -7121,6 +7014,8 @@ void Document::add_render_blocking_element(GC::Ref<Element> element)
 void Document::remove_render_blocking_element(GC::Ref<Element> element)
 {
     m_render_blocking_elements.remove(element);
+    if (m_render_blocking_elements.is_empty())
+        page().client().request_frame();
 }
 
 // https://fullscreen.spec.whatwg.org/#run-the-fullscreen-steps
@@ -7155,6 +7050,7 @@ void Document::run_fullscreen_steps()
 void Document::append_pending_fullscreen_change(PendingFullscreenEvent::Type type, GC::Ref<Element> element)
 {
     m_pending_fullscreen_events.append(PendingFullscreenEvent { type, element });
+    page().client().request_frame();
 }
 
 // https://fullscreen.spec.whatwg.org/#fullscreen-an-element
@@ -7543,7 +7439,7 @@ void Document::set_needs_repaint(InvalidateDisplayList should_invalidate_display
     navigable->set_needs_repaint();
 
     if (navigable->is_traversable()) {
-        Web::HTML::main_thread_event_loop().schedule();
+        page().client().request_frame();
         return;
     }
 
@@ -7851,6 +7747,17 @@ void Document::flush_the_update_callback_queue()
 
     // 2. Set document’s update callback queue to an empty list.
     m_update_callback_queue.clear();
+}
+
+void Document::set_rendering_suppression_for_view_transitions(bool value)
+{
+    if (m_rendering_suppression_for_view_transitions == value)
+        return;
+
+    m_rendering_suppression_for_view_transitions = value;
+
+    if (!value)
+        page().client().request_frame();
 }
 
 // https://drafts.csswg.org/css-view-transitions-1/#view-transition-page-visibility-change-steps
@@ -8245,6 +8152,8 @@ void Document::add_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CS
 void Document::remove_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CSS::CSSImportRule> rule)
 {
     m_pending_css_import_rules.remove(rule);
+    if (m_pending_css_import_rules.is_empty())
+        page().client().request_frame();
 }
 
 void Document::exit_pointer_lock()

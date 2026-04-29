@@ -29,6 +29,11 @@
 #include <LibWeb/CSS/CascadedProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/CountersSet.h>
+#include <LibWeb/CSS/Invalidation/AttributeInvalidator.h>
+#include <LibWeb/CSS/Invalidation/CustomElementInvalidator.h>
+#include <LibWeb/CSS/Invalidation/ElementStateInvalidator.h>
+#include <LibWeb/CSS/Invalidation/LanguageInvalidator.h>
+#include <LibWeb/CSS/Invalidation/PartInvalidator.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/SelectorEngine.h>
@@ -855,7 +860,7 @@ void Element::run_attribute_change_steps(FlyString const& local_name, Optional<S
     attribute_changed(local_name, old_value, value, namespace_);
 
     if (old_value != value) {
-        invalidate_style_after_attribute_change(local_name, old_value, value);
+        CSS::Invalidation::invalidate_style_after_attribute_change(*this, local_name, old_value, value);
         document().bump_dom_tree_version();
     }
 }
@@ -1393,7 +1398,7 @@ void Element::set_being_activated(bool active)
     if (m_is_being_activated == active)
         return;
     m_is_being_activated = active;
-    invalidate_style(StyleInvalidationReason::ElementSetActive);
+    CSS::Invalidation::invalidate_style_after_active_state_change(*this);
 }
 
 bool Element::is_target() const
@@ -1428,7 +1433,7 @@ void Element::set_shadow_root(GC::Ptr<ShadowRoot> shadow_root)
         m_shadow_root->set_host(this);
         m_shadow_root->set_is_connected(is_connected());
     }
-    invalidate_style(StyleInvalidationReason::ElementSetShadowRoot);
+    CSS::Invalidation::invalidate_style_after_shadow_root_change(*this);
     set_needs_layout_tree_update(true, SetNeedsLayoutTreeUpdateReason::ElementSetShadowRoot);
 }
 
@@ -1876,101 +1881,6 @@ bool Element::matches_local_link_pseudo_class() const
     if (target_url->fragment().has_value())
         return document_url.equals(*target_url, URL::ExcludeFragment::No);
     return document_url.equals(*target_url, URL::ExcludeFragment::Yes);
-}
-
-bool Element::includes_properties_from_invalidation_set(CSS::InvalidationSet const& set) const
-{
-    auto includes_property = [&](CSS::InvalidationSet::Property const& property) {
-        switch (property.type) {
-        case CSS::InvalidationSet::Property::Type::Class:
-            return m_classes.contains_slow(property.name());
-        case CSS::InvalidationSet::Property::Type::Id:
-            return m_id == property.name();
-        case CSS::InvalidationSet::Property::Type::TagName:
-            return local_name() == property.name();
-        case CSS::InvalidationSet::Property::Type::Attribute: {
-            return has_attribute(property.name()) || m_removed_attributes_for_style_invalidation.contains_slow(property.name());
-        }
-        case CSS::InvalidationSet::Property::Type::PseudoClass: {
-            switch (property.value.get<CSS::PseudoClass>()) {
-            case CSS::PseudoClass::Has:
-                return affected_by_has_pseudo_class_in_subject_position()
-                    || affected_by_has_pseudo_class_in_non_subject_position();
-            case CSS::PseudoClass::Enabled: {
-                return matches_enabled_pseudo_class();
-            }
-            case CSS::PseudoClass::Disabled: {
-                return matches_disabled_pseudo_class();
-            }
-            case CSS::PseudoClass::Defined: {
-                return is_defined();
-            }
-            case CSS::PseudoClass::Checked: {
-                return matches_checked_pseudo_class();
-            }
-            case CSS::PseudoClass::PlaceholderShown: {
-                return matches_placeholder_shown_pseudo_class();
-            }
-            case CSS::PseudoClass::Empty: {
-                if (!has_children())
-                    return true;
-                if (first_child_of_type<DOM::Element>())
-                    return false;
-                bool has_nonempty_text_child = false;
-                for_each_child_of_type<DOM::Text>([&](auto const& text_child) {
-                    if (!text_child.data().is_empty()) {
-                        has_nonempty_text_child = true;
-                        return IterationDecision::Break;
-                    }
-                    return IterationDecision::Continue;
-                });
-                return !has_nonempty_text_child;
-            }
-            case CSS::PseudoClass::AnyLink:
-            case CSS::PseudoClass::Link:
-                return matches_link_pseudo_class();
-            case CSS::PseudoClass::LocalLink: {
-                return matches_local_link_pseudo_class();
-            }
-            case CSS::PseudoClass::Root:
-                return is<HTML::HTMLHtmlElement>(*this);
-            case CSS::PseudoClass::Host:
-                return is_shadow_host();
-            case CSS::PseudoClass::Required:
-            case CSS::PseudoClass::Optional:
-                return is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLSelectElement>(*this) || is<HTML::HTMLTextAreaElement>(*this);
-            default:
-                VERIFY_NOT_REACHED();
-            }
-        }
-        case CSS::InvalidationSet::Property::Type::InvalidateSelf:
-            return false;
-        case CSS::InvalidationSet::Property::Type::InvalidateWholeSubtree:
-            return true;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-    };
-
-    bool includes_any = false;
-    set.for_each_property([&](auto const& property) {
-        if (includes_property(property)) {
-            includes_any = true;
-            return IterationDecision::Break;
-        }
-        return IterationDecision::Continue;
-    });
-    return includes_any;
-}
-
-void Element::invalidate_style_if_affected_by_has()
-{
-    if (affected_by_has_pseudo_class_in_subject_position()) {
-        set_needs_style_update(true);
-    }
-    if (affected_by_has_pseudo_class_in_non_subject_position()) {
-        invalidate_style(StyleInvalidationReason::Other, { { CSS::InvalidationSet::Property::Type::PseudoClass, CSS::PseudoClass::Has } }, {});
-    }
 }
 
 bool Element::has_pseudo_elements() const
@@ -3068,66 +2978,6 @@ GC::Ref<WebIDL::Promise> Element::scroll_into_view(Optional<Variant<bool, Scroll
 ENUMERATE_ARIA_ATTRIBUTES
 #undef __ENUMERATE_ARIA_ATTRIBUTE
 
-void Element::invalidate_style_after_attribute_change(FlyString const& attribute_name, Optional<String> const& old_value, Optional<String> const& new_value)
-{
-    Vector<CSS::InvalidationSet::Property, 1> changed_properties;
-    StyleInvalidationOptions style_invalidation_options;
-    if (is_presentational_hint(attribute_name) || style_uses_attr_css_function()) {
-        style_invalidation_options.invalidate_self = true;
-    }
-
-    if (attribute_name == HTML::AttributeNames::style) {
-        style_invalidation_options.invalidate_self = true;
-    } else if (attribute_name == HTML::AttributeNames::class_) {
-        Vector<StringView> old_classes;
-        Vector<StringView> new_classes;
-        if (old_value.has_value())
-            old_classes = old_value->bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
-        if (new_value.has_value())
-            new_classes = new_value->bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
-        for (auto& old_class : old_classes) {
-            if (!new_classes.contains_slow(old_class)) {
-                changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Class, .value = FlyString::from_utf8_without_validation(old_class.bytes()) });
-            }
-        }
-        for (auto& new_class : new_classes) {
-            if (!old_classes.contains_slow(new_class)) {
-                changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Class, .value = FlyString::from_utf8_without_validation(new_class.bytes()) });
-            }
-        }
-    } else if (attribute_name == HTML::AttributeNames::id) {
-        if (old_value.has_value())
-            changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Id, .value = FlyString(old_value.value()) });
-        if (new_value.has_value())
-            changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Id, .value = FlyString(new_value.value()) });
-    } else if (attribute_name == HTML::AttributeNames::disabled) {
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Disabled });
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Enabled });
-    } else if (attribute_name == HTML::AttributeNames::placeholder) {
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::PlaceholderShown });
-    } else if (attribute_name == HTML::AttributeNames::value) {
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Checked });
-    } else if (attribute_name == HTML::AttributeNames::required) {
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Required });
-        changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Optional });
-    }
-
-    if (!new_value.has_value() && !m_removed_attributes_for_style_invalidation.contains_slow(attribute_name))
-        m_removed_attributes_for_style_invalidation.append(attribute_name);
-
-    changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::Attribute, .value = attribute_name });
-    invalidate_style(StyleInvalidationReason::ElementAttributeChange, changed_properties, style_invalidation_options);
-
-    // If this element hosts a shadow root whose stylesheets have :host()-matching rules, the shadow tree's computed
-    // styles can depend on this host's attributes. Mark the shadow subtree dirty so those rules re-evaluate.
-    if (auto shadow_root = this->shadow_root()) {
-        if (CSS::determine_shadow_root_stylesheet_effects(*shadow_root).may_match_shadow_host) {
-            shadow_root->set_entire_subtree_needs_style_update(true);
-            shadow_root->set_needs_style_update(true);
-        }
-    }
-}
-
 bool Element::is_hidden() const
 {
     if (layout_node() == nullptr)
@@ -3492,9 +3342,7 @@ void Element::set_custom_element_state(CustomElementState state)
         return;
     m_custom_element_state = state;
 
-    Vector<CSS::InvalidationSet::Property, 1> changed_properties;
-    changed_properties.append({ .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Defined });
-    invalidate_style(StyleInvalidationReason::CustomElementStateChange, changed_properties, {});
+    CSS::Invalidation::invalidate_style_after_custom_element_state_change(*this);
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#html-element-constructors
@@ -4491,21 +4339,10 @@ void Element::attribute_changed(FlyString const& local_name, Optional<String> co
             else
                 m_dir = {};
         }
-        // dir and lang both inherit, so all descendants' :dir() / :lang() matches and direction-dependent layout/text
-        // need to be recomputed.
-        for_each_shadow_including_inclusive_descendant([is_dir](auto& node) {
-            if (auto* element = as_if<Element>(node)) {
-                if (!is_dir)
-                    element->invalidate_lang_value();
-                element->set_needs_style_update(true);
-            }
-            return TraversalDecision::Continue;
-        });
-        // :has(:dir(...)) and :has(:lang(...)) on ancestors aren't keyed on any property the regular invalidation
-        // plan tracks, so explicitly schedule the :has() ancestor walk here.
-        for_each_style_scope_which_may_observe_the_node([this](CSS::StyleScope& scope) {
-            scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(*this);
-        });
+        if (is_dir)
+            CSS::Invalidation::invalidate_style_after_directionality_change(*this);
+        else
+            CSS::Invalidation::invalidate_style_after_language_change(*this);
     } else if (local_name == HTML::AttributeNames::part) {
         m_parts.clear();
         if (!value_or_empty.is_empty()) {
@@ -4517,19 +4354,9 @@ void Element::attribute_changed(FlyString const& local_name, Optional<String> co
         }
         if (m_part_list)
             m_part_list->associated_attribute_changed(value_or_empty);
-        // ::part(...) rules in the outer scope target this element by part name, so the element's computed style must
-        // be recomputed when its part tokens change.
-        set_needs_style_update(true);
+        CSS::Invalidation::invalidate_style_after_part_attribute_change(*this);
     } else if (local_name == HTML::AttributeNames::exportparts) {
-        // When exportparts changes on a shadow host, elements with part tokens inside its shadow tree may newly become
-        // or stop being targets of ::part() rules in the outer scope.
-        if (auto shadow_root = this->shadow_root()) {
-            shadow_root->for_each_in_subtree_of_type<Element>([](Element& element) {
-                if (!element.part_names().is_empty())
-                    element.set_needs_style_update(true);
-                return TraversalDecision::Continue;
-            });
-        }
+        CSS::Invalidation::invalidate_style_after_exportparts_attribute_change(*this);
     }
 
     // https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#reflecting-content-attributes-in-idl-attributes:concept-element-attributes-change-ext
