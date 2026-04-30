@@ -491,9 +491,9 @@ void LayoutState::commit(Box& root)
                 svg_graphics_paintable->set_computed_transforms(*used_values.computed_svg_transforms());
             }
 
-            if (auto* svg_path_paintable = as_if<Painting::SVGPathPaintable>(paintable.ptr());
-                svg_path_paintable && used_values.computed_svg_path().has_value()) {
-                svg_path_paintable->set_computed_path(move(*used_values.computed_svg_path()));
+            if (auto* svg_path_paintable = as_if<Painting::SVGPathPaintable>(paintable.ptr())) {
+                if (auto* path = used_values.computed_svg_path())
+                    svg_path_paintable->set_computed_path(move(*path));
             }
 
             if (node.display().is_grid_inside()) {
@@ -667,6 +667,49 @@ void LayoutState::commit(Box& root)
     });
 }
 
+LayoutState::UsedValues& LayoutState::UsedValues::operator=(UsedValues const& other)
+{
+    if (this == &other)
+        return *this;
+
+    offset = other.offset;
+    width_constraint = other.width_constraint;
+    height_constraint = other.height_constraint;
+    margin_left = other.margin_left;
+    margin_right = other.margin_right;
+    margin_top = other.margin_top;
+    margin_bottom = other.margin_bottom;
+    border_left = other.border_left;
+    border_right = other.border_right;
+    border_top = other.border_top;
+    border_bottom = other.border_bottom;
+    padding_left = other.padding_left;
+    padding_right = other.padding_right;
+    padding_top = other.padding_top;
+    padding_bottom = other.padding_bottom;
+    inset_left = other.inset_left;
+    inset_right = other.inset_right;
+    inset_top = other.inset_top;
+    inset_bottom = other.inset_bottom;
+    line_boxes = other.line_boxes;
+    containing_line_box_fragment = other.containing_line_box_fragment;
+
+    m_node = other.m_node;
+    m_containing_block_used_values = other.m_containing_block_used_values;
+    m_cumulative_offset = other.m_cumulative_offset;
+    m_content_width = other.m_content_width;
+    m_content_height = other.m_content_height;
+    m_has_definite_width = other.m_has_definite_width;
+    m_has_definite_height = other.m_has_definite_height;
+
+    if (other.m_rare)
+        m_rare = make<RareData>(*other.m_rare);
+    else
+        m_rare = nullptr;
+
+    return *this;
+}
+
 void LayoutState::UsedValues::set_node(NodeWithStyle const& node, UsedValues const* containing_block_used_values)
 {
     m_node = &node;
@@ -833,7 +876,7 @@ void LayoutState::UsedValues::materialize_from_paintable(Painting::PaintableBox 
     inset_bottom = box_model.inset.bottom;
 
     if (auto const* svg_graphics_paintable = as_if<Painting::SVGGraphicsPaintable>(paintable))
-        m_computed_svg_transforms = svg_graphics_paintable->computed_transforms();
+        set_computed_svg_transforms(svg_graphics_paintable->computed_transforms());
 }
 
 void LayoutState::UsedValues::set_content_width(CSSPixels width)

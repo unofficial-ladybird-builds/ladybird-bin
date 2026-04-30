@@ -1,0 +1,6 @@
+left quarter of 'o': focusOffset=0
+left quarter of 'c': focusOffset=4
+left quarter of 'e': focusOffset=5
+left quarter of first 'f' (in ligature): focusOffset=1
+left quarter of second 'f' (in ligature): focusOffset=2
+left quarter of 'i' (in ligature): focusOffset=3

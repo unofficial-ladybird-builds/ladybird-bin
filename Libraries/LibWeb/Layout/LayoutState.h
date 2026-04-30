@@ -121,6 +121,11 @@ private:
 
 struct LayoutState {
     struct UsedValues {
+        UsedValues() = default;
+        UsedValues(UsedValues&&) = default;
+        UsedValues& operator=(UsedValues&&) = default;
+        UsedValues& operator=(UsedValues const& other);
+
         NodeWithStyle const& node() const { return *m_node; }
         NodeWithStyle& node() { return const_cast<NodeWithStyle&>(*m_node); }
         void set_node(NodeWithStyle const&, UsedValues const* containing_block_used_values);
@@ -215,33 +220,62 @@ struct LayoutState {
 
         Optional<LineBoxFragmentCoordinate> containing_line_box_fragment;
 
-        void add_floating_descendant(Box const& box) { m_floating_descendants.set(&box); }
-        auto const& floating_descendants() const { return m_floating_descendants; }
+        void add_floating_descendant(Box const& box) { ensure_rare_data().floating_descendants.set(&box); }
+        HashTable<GC::Ptr<Box const>> const& floating_descendants() const
+        {
+            static HashTable<GC::Ptr<Box const>> const empty;
+            return m_rare ? m_rare->floating_descendants : empty;
+        }
 
-        void set_override_borders_data(Painting::PaintableBox::BordersDataWithElementKind const& override_borders_data) { m_override_borders_data = override_borders_data; }
-        auto const& override_borders_data() const { return m_override_borders_data; }
+        void set_override_borders_data(Painting::PaintableBox::BordersDataWithElementKind const& override_borders_data) { ensure_rare_data().override_borders_data = override_borders_data; }
+        Optional<Painting::PaintableBox::BordersDataWithElementKind> const& override_borders_data() const
+        {
+            static Optional<Painting::PaintableBox::BordersDataWithElementKind> const empty;
+            return m_rare ? m_rare->override_borders_data : empty;
+        }
 
-        void set_table_cell_coordinates(Painting::PaintableBox::TableCellCoordinates const& table_cell_coordinates) { m_table_cell_coordinates = table_cell_coordinates; }
-        auto const& table_cell_coordinates() const { return m_table_cell_coordinates; }
+        void set_table_cell_coordinates(Painting::PaintableBox::TableCellCoordinates const& table_cell_coordinates) { ensure_rare_data().table_cell_coordinates = table_cell_coordinates; }
+        Optional<Painting::PaintableBox::TableCellCoordinates> const& table_cell_coordinates() const
+        {
+            static Optional<Painting::PaintableBox::TableCellCoordinates> const empty;
+            return m_rare ? m_rare->table_cell_coordinates : empty;
+        }
 
-        void set_computed_svg_path(Gfx::Path const& svg_path) { m_computed_svg_path = svg_path; }
-        auto& computed_svg_path() { return m_computed_svg_path; }
+        void set_computed_svg_path(Gfx::Path const& svg_path) { ensure_rare_data().computed_svg_path = svg_path; }
+        Gfx::Path* computed_svg_path()
+        {
+            if (!m_rare || !m_rare->computed_svg_path.has_value())
+                return nullptr;
+            return &*m_rare->computed_svg_path;
+        }
 
-        void set_computed_svg_transforms(Painting::SVGGraphicsPaintable::ComputedTransforms const& computed_transforms) { m_computed_svg_transforms = computed_transforms; }
-        auto const& computed_svg_transforms() const { return m_computed_svg_transforms; }
+        void set_computed_svg_transforms(Painting::SVGGraphicsPaintable::ComputedTransforms const& computed_transforms) { ensure_rare_data().computed_svg_transforms = computed_transforms; }
+        Optional<Painting::SVGGraphicsPaintable::ComputedTransforms> const& computed_svg_transforms() const
+        {
+            static Optional<Painting::SVGGraphicsPaintable::ComputedTransforms> const empty;
+            return m_rare ? m_rare->computed_svg_transforms : empty;
+        }
 
-        void set_grid_template_columns(RefPtr<CSS::GridTrackSizeListStyleValue const> used_values_for_grid_template_columns) { m_grid_template_columns = move(used_values_for_grid_template_columns); }
-        auto const& grid_template_columns() const { return m_grid_template_columns; }
+        void set_grid_template_columns(RefPtr<CSS::GridTrackSizeListStyleValue const> used_values_for_grid_template_columns) { ensure_rare_data().grid_template_columns = move(used_values_for_grid_template_columns); }
+        RefPtr<CSS::GridTrackSizeListStyleValue const> const& grid_template_columns() const
+        {
+            static RefPtr<CSS::GridTrackSizeListStyleValue const> const empty;
+            return m_rare ? m_rare->grid_template_columns : empty;
+        }
 
-        void set_grid_template_rows(RefPtr<CSS::GridTrackSizeListStyleValue const> used_values_for_grid_template_rows) { m_grid_template_rows = move(used_values_for_grid_template_rows); }
-        auto const& grid_template_rows() const { return m_grid_template_rows; }
+        void set_grid_template_rows(RefPtr<CSS::GridTrackSizeListStyleValue const> used_values_for_grid_template_rows) { ensure_rare_data().grid_template_rows = move(used_values_for_grid_template_rows); }
+        RefPtr<CSS::GridTrackSizeListStyleValue const> const& grid_template_rows() const
+        {
+            static RefPtr<CSS::GridTrackSizeListStyleValue const> const empty;
+            return m_rare ? m_rare->grid_template_rows : empty;
+        }
 
-        void set_static_position_rect(StaticPositionRect const& static_position_rect) { m_static_position_rect = static_position_rect; }
+        void set_static_position_rect(StaticPositionRect const& static_position_rect) { ensure_rare_data().static_position_rect = static_position_rect; }
         CSSPixelPoint static_position() const
         {
-            if (!m_static_position_rect.has_value())
+            if (!m_rare || !m_rare->static_position_rect.has_value())
                 return {};
-            return m_static_position_rect->aligned_position_for_box_with_size({ margin_box_width(), margin_box_height() });
+            return m_rare->static_position_rect->aligned_position_for_box_with_size({ margin_box_width(), margin_box_height() });
         }
 
     private:
@@ -250,12 +284,30 @@ struct LayoutState {
         AvailableSize available_width_inside() const;
         AvailableSize available_height_inside() const;
 
-        bool use_collapsing_borders_model() const { return m_override_borders_data.has_value(); }
+        bool use_collapsing_borders_model() const { return m_rare && m_rare->override_borders_data.has_value(); }
         // Implement the collapsing border model https://www.w3.org/TR/CSS22/tables.html#collapsing-borders.
         CSSPixels border_left_collapsed() const { return use_collapsing_borders_model() ? round(border_left / 2) : border_left; }
         CSSPixels border_right_collapsed() const { return use_collapsing_borders_model() ? round(border_right / 2) : border_right; }
         CSSPixels border_top_collapsed() const { return use_collapsing_borders_model() ? round(border_top / 2) : border_top; }
         CSSPixels border_bottom_collapsed() const { return use_collapsing_borders_model() ? round(border_bottom / 2) : border_bottom; }
+
+        struct RareData {
+            HashTable<GC::Ptr<Box const>> floating_descendants;
+            Optional<Painting::PaintableBox::TableCellCoordinates> table_cell_coordinates;
+            Optional<Gfx::Path> computed_svg_path;
+            RefPtr<CSS::GridTrackSizeListStyleValue const> grid_template_columns;
+            RefPtr<CSS::GridTrackSizeListStyleValue const> grid_template_rows;
+            Optional<Painting::PaintableBox::BordersDataWithElementKind> override_borders_data;
+            Optional<Painting::SVGGraphicsPaintable::ComputedTransforms> computed_svg_transforms;
+            Optional<StaticPositionRect> static_position_rect;
+        };
+
+        RareData& ensure_rare_data()
+        {
+            if (!m_rare)
+                m_rare = make<RareData>();
+            return *m_rare;
+        }
 
         GC::Ptr<Layout::NodeWithStyle const> m_node { nullptr };
         UsedValues const* m_containing_block_used_values { nullptr };
@@ -267,18 +319,7 @@ struct LayoutState {
         bool m_has_definite_width { false };
         bool m_has_definite_height { false };
 
-        HashTable<GC::Ptr<Box const>> m_floating_descendants;
-
-        Optional<Painting::PaintableBox::BordersDataWithElementKind> m_override_borders_data;
-        Optional<Painting::PaintableBox::TableCellCoordinates> m_table_cell_coordinates;
-
-        Optional<Gfx::Path> m_computed_svg_path;
-        Optional<Painting::SVGGraphicsPaintable::ComputedTransforms> m_computed_svg_transforms;
-
-        RefPtr<CSS::GridTrackSizeListStyleValue const> m_grid_template_columns;
-        RefPtr<CSS::GridTrackSizeListStyleValue const> m_grid_template_rows;
-
-        Optional<StaticPositionRect> m_static_position_rect;
+        OwnPtr<RareData> m_rare;
     };
 
     LayoutState() = default;

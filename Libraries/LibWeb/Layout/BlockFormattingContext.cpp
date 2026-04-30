@@ -101,7 +101,7 @@ void BlockFormattingContext::run(AvailableSpace const& available_space)
 {
     FORMATTING_CONTEXT_TRACE();
     // https://drafts.csswg.org/css-multicol-2/#the-multi-column-model
-    auto root_state = m_state.get(root());
+    auto const& root_state = m_state.get(root());
     auto column_count = determine_used_value_for_column_count(root_state.content_width());
     if (column_count.has_value()) {
         auto column_width = determine_used_value_for_column_width(root_state.content_width(), column_count.value());
