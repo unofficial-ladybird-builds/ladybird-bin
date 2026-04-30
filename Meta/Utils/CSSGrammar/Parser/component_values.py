@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from math import inf
+from typing import Optional
 from typing import Union
 
 
@@ -51,8 +52,8 @@ def is_numeric_type(type_name: str) -> bool:
 @dataclass(frozen=True)
 class Type:
     name: str
-    custom_ident_blacklist: list[str] | None
-    numeric_type_accepted_range: NumericTypeRangeRestriction | None
+    custom_ident_blacklist: list[str]
+    numeric_type_accepted_range: Optional[NumericTypeRangeRestriction]
 
     def dump(self, indent: int) -> str:
         output = f"{'': >{indent}}Type: {self.name}"

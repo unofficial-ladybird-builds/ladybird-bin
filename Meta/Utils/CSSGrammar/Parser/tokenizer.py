@@ -24,7 +24,7 @@ class Tokenizer:
         return cls(input).tokenize_impl()
 
     def tokenize_impl(self) -> list[Token]:
-        tokens = []
+        tokens: list[Token] = []
 
         while True:
             self.discard_whitespace()
@@ -41,14 +41,14 @@ class Tokenizer:
         return self.lexer.consume_while(is_identifier_character)
 
     def consume_a_token(self) -> Token:
-        match self.lexer.peek():
-            case "|":
-                self.lexer.consume()
-                return Token.create(TokenType.SINGLE_BAR)
-            case "<":
-                return self.consume_a_non_terminal_token()
+        peeked = self.lexer.peek()
+        if peeked == "|":
+            self.lexer.consume()
+            return Token.create(TokenType.SINGLE_BAR)
+        if peeked == "<":
+            return self.consume_a_non_terminal_token()
 
-        if is_identifier_character(self.lexer.peek()):
+        if is_identifier_character(peeked):
             return self.consume_a_keyword_token()
 
         raise SyntaxError("CSSGrammar::Tokenizer: Unexpected character")
@@ -62,7 +62,7 @@ class Tokenizer:
         if not self.lexer.consume_specific("!["):
             return []
 
-        blacklist = []
+        blacklist: list[str] = []
 
         while True:
             self.discard_whitespace()
@@ -149,7 +149,7 @@ class Tokenizer:
         if not name:
             raise SyntaxError("CSSGrammar::Tokenizer: Expected a type name")
 
-        custom_ident_blacklist = None
+        custom_ident_blacklist = []
         if name == "custom-ident":
             custom_ident_blacklist = self.consume_custom_ident_blacklist()
 
