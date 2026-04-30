@@ -97,10 +97,13 @@ struct StyleCache : public RefCounted<StyleCache> {
 
 struct PendingHasInvalidationMutationFeatures {
     bool is_conservative { false };
+    bool may_affect_sibling_relationships { false };
+    bool may_affect_pseudo_classes { false };
     HashTable<FlyString> tag_names;
     HashTable<FlyString> ids;
     HashTable<FlyString> class_names;
     HashTable<FlyString> attribute_names;
+    HashTable<PseudoClass> pseudo_classes;
 };
 
 class StyleScope {
@@ -138,8 +141,6 @@ public:
     [[nodiscard]] bool have_has_selectors_with_relative_selector_that_has_sibling_combinator() const;
 
     void for_each_active_css_style_sheet(Function<void(CSS::CSSStyleSheet&)> const& callback) const;
-
-    void invalidate_style_of_elements_affected_by_has();
 
     void invalidate_counter_style_cache();
     void build_counter_style_cache();
