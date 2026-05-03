@@ -173,16 +173,16 @@ static ByteString union_type_to_variant(UnionType const& union_type, Context con
 CppType idl_type_name_to_cpp_type(Type const& type, Context const& context)
 {
     if (is_platform_object(context, type))
-        return { .name = ByteString::formatted("GC::Root<{}>", interface_cpp_type_name(context, type)), .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = ByteString::formatted("GC::Root<{}>", interface_cpp_type_name(context, type)), .sequence_storage_type = SequenceStorageType::Vector };
 
     if (is_javascript_builtin_buffer_source_type(type))
-        return { .name = ByteString::formatted("GC::Root<JS::{}>", type.name()), .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = ByteString::formatted("GC::Root<JS::{}>", type.name()), .sequence_storage_type = SequenceStorageType::Vector };
 
     if (auto const* callback_interface = callback_interface_for_type(context, type))
-        return { .name = ByteString::formatted("GC::Root<{}>", interface_cpp_type_name(*callback_interface)), .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = ByteString::formatted("GC::Root<{}>", interface_cpp_type_name(*callback_interface)), .sequence_storage_type = SequenceStorageType::Vector };
 
     if (context.callback_functions.contains(type.name()))
-        return { .name = "GC::Root<WebIDL::CallbackType>", .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = "GC::Root<WebIDL::CallbackType>", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.is_string()) {
         if (type.name().contains("Utf16"sv))
@@ -190,37 +190,37 @@ CppType idl_type_name_to_cpp_type(Type const& type, Context const& context)
         return { .name = "String", .sequence_storage_type = SequenceStorageType::Vector };
     }
 
-    if ((type.name() == "double" || type.name() == "unrestricted double") && !type.is_nullable())
+    if (type.name() == "double" || type.name() == "unrestricted double")
         return { .name = "double", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if ((type.name() == "float" || type.name() == "unrestricted float") && !type.is_nullable())
+    if (type.name() == "float" || type.name() == "unrestricted float")
         return { .name = "float", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "boolean" && !type.is_nullable())
+    if (type.name() == "boolean")
         return { .name = "bool", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "byte" && !type.is_nullable())
+    if (type.name() == "byte")
         return { .name = "WebIDL::Byte", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "octet" && !type.is_nullable())
+    if (type.name() == "octet")
         return { .name = "WebIDL::Octet", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "short" && !type.is_nullable())
+    if (type.name() == "short")
         return { .name = "WebIDL::Short", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "unsigned short" && !type.is_nullable())
+    if (type.name() == "unsigned short")
         return { .name = "WebIDL::UnsignedShort", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "long" && !type.is_nullable())
+    if (type.name() == "long")
         return { .name = "WebIDL::Long", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "unsigned long" && !type.is_nullable())
+    if (type.name() == "unsigned long")
         return { .name = "WebIDL::UnsignedLong", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "long long" && !type.is_nullable())
+    if (type.name() == "long long")
         return { .name = "WebIDL::LongLong", .sequence_storage_type = SequenceStorageType::Vector };
 
-    if (type.name() == "unsigned long long" && !type.is_nullable())
+    if (type.name() == "unsigned long long")
         return { .name = "WebIDL::UnsignedLongLong", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name() == "any")
@@ -230,19 +230,19 @@ CppType idl_type_name_to_cpp_type(Type const& type, Context const& context)
     //       only ever js_undefined). Therefore, we say that the type is Empty here, so that a union of (T, undefined) is
     //       generated as Variant<T, Empty>, which is then returned in the Variant's visit as undefined if it is Empty.
     if (type.name() == "undefined")
-        return { .name = "Empty", .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = "Empty", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name() == "object")
         return { .name = "GC::Root<JS::Object>", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name() == "BufferSource")
-        return { .name = "GC::Root<WebIDL::BufferSource>", .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = "GC::Root<WebIDL::BufferSource>", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name() == "ArrayBufferView")
-        return { .name = "GC::Root<WebIDL::ArrayBufferView>", .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = "GC::Root<WebIDL::ArrayBufferView>", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name() == "Promise")
-        return { .name = "GC::Root<WebIDL::Promise>", .sequence_storage_type = SequenceStorageType::RootVector };
+        return { .name = "GC::Root<WebIDL::Promise>", .sequence_storage_type = SequenceStorageType::Vector };
 
     if (type.name().is_one_of("sequence"sv, "FrozenArray"sv)) {
         auto& parameterized_type = as<ParameterizedType>(type);
@@ -271,13 +271,13 @@ CppType idl_type_name_to_cpp_type(Type const& type, Context const& context)
         return { .name = union_type_to_variant(union_type, context), .sequence_storage_type = SequenceStorageType::Vector };
     }
 
-    if (!type.is_nullable() && context.dictionaries.contains(type.name()))
+    if (context.dictionaries.contains(type.name()))
         return { .name = dictionary_cpp_type_name(context, type.name()), .sequence_storage_type = SequenceStorageType::Vector };
 
     if (context.enumerations.contains(type.name()))
         return { .name = type.name(), .sequence_storage_type = SequenceStorageType::Vector };
 
-    dbgln("Unimplemented type for idl_type_name_to_cpp_type: {}{}", type.name(), type.is_nullable() ? "?" : "");
+    dbgln("Unimplemented type for idl_type_name_to_cpp_type: {}", type.name());
     TODO();
 }
 
@@ -432,11 +432,6 @@ static void collect_interface_include_dependencies(Interface const& interface, T
 
     if (auto dictionary = interface.context.dictionaries.find(type.name()); dictionary != interface.context.dictionaries.end())
         collect_interface_include_dependencies(interface, dictionary->value, modules_to_include, paths_included);
-
-    if (auto partial_dictionaries = interface.context.partial_dictionaries.find(type.name()); partial_dictionaries != interface.context.partial_dictionaries.end()) {
-        for (auto const& partial_dictionary : partial_dictionaries->value)
-            collect_interface_include_dependencies(interface, partial_dictionary, modules_to_include, paths_included);
-    }
 
     if (auto callback_function = interface.context.callback_functions.find(type.name()); callback_function != interface.context.callback_functions.end())
         collect_interface_include_dependencies(interface, callback_function->value, modules_to_include, paths_included);
@@ -728,16 +723,7 @@ static void generate_dictionary_to_cpp(SourceGenerator& generator, Context const
     // FIXME: This (i) is a hack to make sure we don't generate duplicate variable names.
     static auto i = 0;
     while (true) {
-        Vector<DictionaryMember> members;
-        for (auto& member : current_dictionary->members)
-            members.append(member);
-
-        if (context.partial_dictionaries.contains(current_dictionary_name)) {
-            auto& partial_dictionaries = context.partial_dictionaries.find(current_dictionary_name)->value;
-            for (auto& partial_dictionary : partial_dictionaries)
-                for (auto& member : partial_dictionary.members)
-                    members.append(member);
-        }
+        auto const& members = current_dictionary->members;
 
         for (auto& member : members) {
             generator.set("member_key", member.name);

@@ -1046,6 +1046,27 @@ fn to_s_reg(reg: &str) -> String {
     }
 }
 
+fn emit_tst(
+    out: &mut String,
+    lhs: &str,
+    rhs: &Operand,
+    handler: &Handler,
+    program: &Program,
+) {
+    if let Some(val) = get_immediate_value(rhs, program) {
+        let uval = val as u64;
+        if is_logical_immediate(uval) {
+            w!(out, "    tst {lhs}, #0x{uval:x}");
+        } else {
+            emit_mov_imm(out, "x9", val);
+            w!(out, "    tst {lhs}, x9");
+        }
+    } else {
+        let rhs = resolve_op(rhs, handler, program);
+        w!(out, "    tst {lhs}, {rhs}");
+    }
+}
+
 fn emit_instruction(
     out: &mut String,
     insn: &AsmInstruction,
@@ -1071,6 +1092,90 @@ fn emit_instruction(
         // The register allocator consumes these before codegen runs; here
         // they emit nothing.
         "temp" | "ftemp" => {}
+
+        "assert_eq" | "assert_ne" if program.enable_assertions => {
+            if insn.operands.len() == 2 {
+                let a = resolve_op(&insn.operands[0], handler, program);
+                let ok_label = format!(".Lasm_{}.assert_ok_{}", handler.name, state.unique_counter);
+                state.unique_counter += 1;
+                let cc = if m == "assert_eq" { "b.eq" } else { "b.ne" };
+                if let Some(val) = get_immediate_value(&insn.operands[1], program) {
+                    emit_cmp_imm(out, &a, val, pinned);
+                } else {
+                    let b = resolve_op(&insn.operands[1], handler, program);
+                    w!(out, "    cmp {a}, {b}");
+                }
+                w!(out, "    {cc} {ok_label}");
+                w!(out, "    brk #0");
+                w!(out, "{ok_label}:");
+            }
+        }
+
+        "assert_lt_unsigned" | "assert_ge_unsigned" if program.enable_assertions => {
+            if insn.operands.len() == 2 {
+                let a = resolve_op(&insn.operands[0], handler, program);
+                let ok_label = format!(".Lasm_{}.assert_ok_{}", handler.name, state.unique_counter);
+                state.unique_counter += 1;
+                let cc = if m == "assert_lt_unsigned" { "b.lo" } else { "b.hs" };
+                if let Some(val) = get_immediate_value(&insn.operands[1], program) {
+                    emit_cmp_imm(out, &a, val, pinned);
+                } else {
+                    let b = resolve_op(&insn.operands[1], handler, program);
+                    w!(out, "    cmp {a}, {b}");
+                }
+                w!(out, "    {cc} {ok_label}");
+                w!(out, "    brk #0");
+                w!(out, "{ok_label}:");
+            }
+        }
+
+        "assert_zero" | "assert_nonzero" if program.enable_assertions => {
+            if insn.operands.len() == 1 {
+                let a = resolve_op(&insn.operands[0], handler, program);
+                let ok_label = format!(".Lasm_{}.assert_ok_{}", handler.name, state.unique_counter);
+                state.unique_counter += 1;
+                let cb = if m == "assert_zero" { "cbz" } else { "cbnz" };
+                w!(out, "    {cb} {a}, {ok_label}");
+                w!(out, "    brk #0");
+                w!(out, "{ok_label}:");
+            }
+        }
+
+        "assert_bits_set" | "assert_bits_clear" if program.enable_assertions => {
+            if insn.operands.len() == 2 {
+                let a = resolve_op(&insn.operands[0], handler, program);
+                let ok_label = format!(".Lasm_{}.assert_ok_{}", handler.name, state.unique_counter);
+                state.unique_counter += 1;
+                emit_tst(out, &a, &insn.operands[1], handler, program);
+                let cc = if m == "assert_bits_set" { "b.ne" } else { "b.eq" };
+                w!(out, "    {cc} {ok_label}");
+                w!(out, "    brk #0");
+                w!(out, "{ok_label}:");
+            }
+        }
+
+        "assert_tag" | "assert_not_tag" if program.enable_assertions => {
+            if insn.operands.len() == 2 {
+                let value = resolve_op(&insn.operands[0], handler, program);
+                let ok_label = format!(".Lasm_{}.assert_ok_{}", handler.name, state.unique_counter);
+                state.unique_counter += 1;
+                let cc = if m == "assert_tag" { "b.eq" } else { "b.ne" };
+                w!(out, "    lsr x9, {value}, #48");
+                if let Some(val) = get_immediate_value(&insn.operands[1], program) {
+                    emit_cmp_imm(out, "x9", val, pinned);
+                } else {
+                    let tag = resolve_op(&insn.operands[1], handler, program);
+                    w!(out, "    cmp x9, {tag}");
+                }
+                w!(out, "    {cc} {ok_label}");
+                w!(out, "    brk #0");
+                w!(out, "{ok_label}:");
+            }
+        }
+
+        "assert_eq" | "assert_ne" | "assert_lt_unsigned" | "assert_ge_unsigned" | "assert_zero"
+        | "assert_nonzero" | "assert_bits_set" | "assert_bits_clear" | "assert_tag"
+        | "assert_not_tag" => {}
 
         // dispatch_current: dispatch the instruction at current pc (without advancing).
         // Overrides the DSL macro to ensure x21 is set for the next handler.
