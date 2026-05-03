@@ -6,15 +6,21 @@ header = """/*
  */"""
 pragma_once = true
 include_version = true
-namespaces = ["JS", "FFI"]
+namespaces = ["Web", "CSS", "Parser", "FFI"]
 line_length  = 120
 tab_width = 4
 no_includes = true
 sys_includes = ["stdint.h", "stddef.h"]
 usize_is_size_t = true
 
+[parse]
+parse_deps = false
+
+[parse.expand]
+all_features = false
+
 [export]
-include = ["AbstractOperationKind", "ConstantTag", "LiteralValueKind", "ValidationErrorKind", "WellKnownSymbolKind", "FFIToken"]
+include = ["CssHashType", "CssNumberType", "CssToken", "CssTokenType"]
 
 [export.mangle]
 rename_types = "PascalCase"

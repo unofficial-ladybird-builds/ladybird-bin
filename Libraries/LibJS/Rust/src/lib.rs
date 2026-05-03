@@ -2687,3 +2687,90 @@ pub unsafe extern "C" fn rust_tokenize(
         });
     }
 }
+
+/// Validate the structural integrity of a packed bytecode buffer along with
+/// the structural metadata that travels with it (basic block offsets,
+/// exception handler ranges, source map entries).
+///
+/// Returns `true` if every instruction is well-formed against the supplied
+/// bounds. On failure, writes the error category, byte offset, and opcode
+/// into `*error_out` (when non-null) and returns `false`.
+///
+/// # Safety
+/// - `bytecode_ptr` must point to a buffer of `bytecode_len` bytes, aligned
+///   to 8 bytes (matching `alignof(Instruction)`). May be null only when
+///   `bytecode_len` is zero.
+/// - `bounds` must point to a valid `FFIValidatorBounds`.
+/// - `extras` must point to a valid `FFIValidatorExtras`. Each
+///   inner pointer may be null only when its corresponding count is zero.
+/// - `error_out` must be either null or a writable `FFIValidationError`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_validate_bytecode(
+    bytecode_ptr: *const u8,
+    bytecode_len: usize,
+    bounds: *const bytecode::validator::FFIValidatorBounds,
+    extras: *const bytecode::validator::FFIValidatorExtras,
+    error_out: *mut bytecode::validator::FFIValidationError,
+) -> bool {
+    unsafe {
+        abort_on_panic(|| {
+            use bytecode::validator::{FFIValidationError, ValidationErrorKind, validate_bytecode};
+
+            let write_error = |err: FFIValidationError| {
+                if !error_out.is_null() {
+                    *error_out = err;
+                }
+            };
+
+            if bytecode_len > 0 && bytecode_ptr.is_null() {
+                write_error(FFIValidationError::new(ValidationErrorKind::TruncatedInstruction, 0, 0));
+                return false;
+            }
+            if !bytecode_ptr.is_null() && !(bytecode_ptr as usize).is_multiple_of(8) {
+                write_error(FFIValidationError::new(ValidationErrorKind::BufferNotAligned, 0, 0));
+                return false;
+            }
+            if bounds.is_null() || extras.is_null() {
+                write_error(FFIValidationError::new(ValidationErrorKind::TruncatedInstruction, 0, 0));
+                return false;
+            }
+
+            let bytes = if bytecode_ptr.is_null() {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(bytecode_ptr, bytecode_len)
+            };
+
+            let extras_ref = &*extras;
+            let basic_block_offsets = if extras_ref.basic_block_count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(extras_ref.basic_block_offsets, extras_ref.basic_block_count)
+            };
+            let exception_handlers = if extras_ref.exception_handler_count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(extras_ref.exception_handlers, extras_ref.exception_handler_count)
+            };
+            let source_map_offsets = if extras_ref.source_map_count == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(extras_ref.source_map_offsets, extras_ref.source_map_count)
+            };
+
+            match validate_bytecode(
+                bytes,
+                &*bounds,
+                basic_block_offsets,
+                exception_handlers,
+                source_map_offsets,
+            ) {
+                Ok(()) => true,
+                Err(err) => {
+                    write_error(err);
+                    false
+                }
+            }
+        })
+    }
+}

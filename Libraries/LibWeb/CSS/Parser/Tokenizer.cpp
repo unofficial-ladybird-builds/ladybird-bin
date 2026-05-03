@@ -17,7 +17,7 @@
 namespace Web::CSS::Parser {
 
 // U+FFFD REPLACEMENT CHARACTER (�)
-#define REPLACEMENT_CHARACTER 0xFFFD
+static constexpr u32 REPLACEMENT_CHARACTER = 0xFFFD;
 static constexpr u32 TOKENIZER_EOF = 0xFFFFFFFF;
 
 static inline void log_parse_error(SourceLocation const& location = SourceLocation::current())
@@ -231,7 +231,7 @@ Vector<Token> Tokenizer::tokenize()
     for (;;) {
         auto token_start = m_position;
         auto token = consume_a_token();
-        token.set_position_range({}, token_start, m_position);
+        token.set_position_range(Badge<Tokenizer> {}, token_start, m_position);
         tokens.append(token);
 
         if (token.is(Token::Type::EndOfFile)) {
@@ -879,8 +879,10 @@ Token Tokenizer::consume_string_token(u32 ending_code_point)
         auto input = next_code_point();
 
         // ending code point
-        if (input == ending_code_point)
+        if (input == ending_code_point) {
+            // Return the <string-token>.
             return Token::create_string(builder.to_fly_string_without_validation(), input_since(original_source_text_start_byte_offset_including_quotation_mark));
+        }
 
         // EOF
         if (is_eof(input)) {
