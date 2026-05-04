@@ -37,6 +37,13 @@
 namespace Web::Painting {
 
 DisplayListPlayerSkia::DisplayListPlayerSkia()
+    : DisplayListPlayerSkia(Gfx::SkiaBackendContext::the_main_thread_context())
+{
+}
+
+DisplayListPlayerSkia::DisplayListPlayerSkia(RefPtr<Gfx::SkiaBackendContext> skia_backend_context)
+    : m_skia_backend_context(move(skia_backend_context))
+    , m_image_cache(m_skia_backend_context)
 {
 }
 
@@ -93,9 +100,10 @@ static SkM44 to_skia_matrix4x4(Gfx::FloatMatrix4x4 const& matrix)
 
 void DisplayListPlayerSkia::flush()
 {
-    if (auto context = Gfx::SkiaBackendContext::the())
+    if (auto context = surface().skia_backend_context())
         context->flush_and_submit(&surface().sk_surface());
     surface().flush();
+    m_image_cache.prune();
 }
 
 void DisplayListPlayerSkia::draw_glyph_run(DrawGlyphRun const& command)
@@ -139,19 +147,21 @@ void DisplayListPlayerSkia::draw_external_content(DrawExternalContent const& com
     auto bitmap = command.source->current_bitmap();
     if (!bitmap)
         return;
-    if (Gfx::SkiaBackendContext::the() && !bitmap->ensure_sk_image(*Gfx::SkiaBackendContext::the()))
+    auto image = m_image_cache.image_for_bitmap(*bitmap);
+    if (!image)
         return;
     auto dst_rect = to_skia_rect(command.dst_rect);
-    SkRect src_rect = SkRect::MakeIWH(bitmap->width(), bitmap->height());
+    SkRect src_rect = SkRect::MakeIWH(image->width(), image->height());
     auto& canvas = surface().canvas();
     SkPaint paint;
     paint.setAntiAlias(true);
-    canvas.drawImageRect(bitmap->sk_image(), src_rect, dst_rect, to_skia_sampling_options(command.scaling_mode), &paint, SkCanvas::kStrict_SrcRectConstraint);
+    canvas.drawImageRect(image.get(), src_rect, dst_rect, to_skia_sampling_options(command.scaling_mode), &paint, SkCanvas::kStrict_SrcRectConstraint);
 }
 
 void DisplayListPlayerSkia::draw_scaled_immutable_bitmap(DrawScaledImmutableBitmap const& command)
 {
-    if (Gfx::SkiaBackendContext::the() && !command.bitmap->ensure_sk_image(*Gfx::SkiaBackendContext::the()))
+    auto image = m_image_cache.image_for_bitmap(*command.bitmap);
+    if (!image)
         return;
 
     auto dst_rect = to_skia_rect(command.dst_rect);
@@ -161,13 +171,14 @@ void DisplayListPlayerSkia::draw_scaled_immutable_bitmap(DrawScaledImmutableBitm
     paint.setAntiAlias(true);
     canvas.save();
     canvas.clipRect(clip_rect, true);
-    canvas.drawImageRect(command.bitmap->sk_image(), dst_rect, to_skia_sampling_options(command.scaling_mode), &paint);
+    canvas.drawImageRect(image.get(), dst_rect, to_skia_sampling_options(command.scaling_mode), &paint);
     canvas.restore();
 }
 
 void DisplayListPlayerSkia::draw_repeated_immutable_bitmap(DrawRepeatedImmutableBitmap const& command)
 {
-    if (Gfx::SkiaBackendContext::the() && !command.bitmap->ensure_sk_image(*Gfx::SkiaBackendContext::the()))
+    auto image = m_image_cache.image_for_bitmap(*command.bitmap);
+    if (!image)
         return;
 
     SkMatrix matrix;
@@ -179,7 +190,7 @@ void DisplayListPlayerSkia::draw_repeated_immutable_bitmap(DrawRepeatedImmutable
 
     auto tile_mode_x = command.repeat.x ? SkTileMode::kRepeat : SkTileMode::kDecal;
     auto tile_mode_y = command.repeat.y ? SkTileMode::kRepeat : SkTileMode::kDecal;
-    auto shader = command.bitmap->sk_image()->makeShader(tile_mode_x, tile_mode_y, sampling_options, matrix);
+    auto shader = image->makeShader(tile_mode_x, tile_mode_y, sampling_options, matrix);
 
     SkPaint paint;
     paint.setAntiAlias(true);
@@ -484,7 +495,7 @@ SkPaint DisplayListPlayerSkia::paint_style_to_skia_paint(Painting::SVGPaintServe
         if (tile_size.is_empty())
             return {};
 
-        auto tile_surface = Gfx::PaintingSurface::create_with_size(tile_size, Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied);
+        auto tile_surface = Gfx::PaintingSurface::create_with_size(tile_size, Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, m_skia_backend_context);
 
         execute_display_list_into_surface(*pattern->tile_display_list(), *tile_surface);
 

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGfx/ImmutableBitmapSkiaImageCache.h>
 #include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/DisplayListCommand.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
@@ -18,6 +19,7 @@ namespace Web::Painting {
 class DisplayListPlayerSkia final : public DisplayListPlayer {
 public:
     DisplayListPlayerSkia();
+    explicit DisplayListPlayerSkia(RefPtr<Gfx::SkiaBackendContext>);
     ~DisplayListPlayerSkia();
 
 private:
@@ -57,6 +59,9 @@ private:
     bool would_be_fully_clipped_by_painter(Gfx::IntRect) const override;
 
     SkPaint paint_style_to_skia_paint(SVGPaintServerPaintStyle const&, Gfx::FloatRect const& bounding_rect);
+
+    RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
+    Gfx::ImmutableBitmapSkiaImageCache m_image_cache;
 };
 
 }

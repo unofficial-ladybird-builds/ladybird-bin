@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2024-2026, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,7 +8,6 @@
 
 #include <AK/AtomicRefCounted.h>
 #include <AK/Noncopyable.h>
-#include <LibThreading/Mutex.h>
 
 #ifdef USE_VULKAN
 #    include <LibGfx/VulkanContext.h>
@@ -40,7 +39,8 @@ public:
 #endif
 
     static void initialize_gpu_backend();
-    static RefPtr<SkiaBackendContext> the();
+    static RefPtr<SkiaBackendContext> create_independent_gpu_backend();
+    static RefPtr<SkiaBackendContext> the_main_thread_context();
 
     SkiaBackendContext() { }
     virtual ~SkiaBackendContext() { }
@@ -50,12 +50,6 @@ public:
 
     virtual MetalContext& metal_context() = 0;
     virtual VulkanContext const& vulkan_context() = 0;
-
-    void lock() { m_mutex.lock(); }
-    void unlock() { m_mutex.unlock(); }
-
-private:
-    Threading::Mutex m_mutex;
 };
 
 }

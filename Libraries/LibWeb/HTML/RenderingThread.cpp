@@ -7,11 +7,19 @@
 #include <LibCore/EventLoop.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/PaintingSurface.h>
+#include <LibGfx/SharedImage.h>
+#include <LibGfx/SharedImageBuffer.h>
+#include <LibGfx/SkiaBackendContext.h>
 #include <LibThreading/Thread.h>
 #include <LibWeb/HTML/RenderingThread.h>
-#include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/Painting/DisplayListPlayerSkia.h>
 #include <LibWeb/Painting/ExternalContentSource.h>
+
+#ifdef USE_VULKAN_DMABUF_IMAGES
+#    include <AK/Array.h>
+#    include <LibGfx/VulkanImage.h>
+#    include <libdrm/drm_fourcc.h>
+#endif
 
 #include <core/SkCanvas.h>
 #include <core/SkColor.h>
@@ -41,10 +49,10 @@ struct UpdateDisplayListCommand {
 };
 
 struct UpdateBackingStoresCommand {
-    RefPtr<Gfx::PaintingSurface> front_store;
-    RefPtr<Gfx::PaintingSurface> back_store;
+    Gfx::IntSize size;
     i32 front_bitmap_id;
     i32 back_bitmap_id;
+    Function<void(i32, Gfx::SharedImage, i32, Gfx::SharedImage)> allocation_callback;
 };
 
 struct ScreenshotCommand {
@@ -53,6 +61,77 @@ struct ScreenshotCommand {
 };
 
 using CompositorCommand = Variant<UpdateDisplayListCommand, UpdateBackingStoresCommand, ScreenshotCommand>;
+
+struct BackingStorePair {
+    RefPtr<Gfx::PaintingSurface> front;
+    RefPtr<Gfx::PaintingSurface> back;
+};
+
+#ifdef USE_VULKAN
+static NonnullRefPtr<Gfx::PaintingSurface> create_gpu_painting_surface_with_bitmap_flush(Gfx::IntSize size, Gfx::SharedImageBuffer& buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
+{
+    auto surface = Gfx::PaintingSurface::create_with_size(size, Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, skia_backend_context);
+    auto bitmap = buffer.bitmap();
+    surface->on_flush = [bitmap = move(bitmap)](auto& surface) {
+        surface.read_into_bitmap(*bitmap);
+    };
+    return surface;
+}
+#endif
+
+static BackingStorePair create_shareable_bitmap_backing_stores([[maybe_unused]] Gfx::IntSize size, Gfx::SharedImageBuffer& front_buffer, Gfx::SharedImageBuffer& back_buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
+{
+#ifdef AK_OS_MACOS
+    if (skia_backend_context) {
+        return {
+            .front = Gfx::PaintingSurface::create_from_shared_image_buffer(front_buffer, *skia_backend_context),
+            .back = Gfx::PaintingSurface::create_from_shared_image_buffer(back_buffer, *skia_backend_context),
+        };
+    }
+#else
+#    ifdef USE_VULKAN
+    if (skia_backend_context) {
+        return {
+            .front = create_gpu_painting_surface_with_bitmap_flush(size, front_buffer, skia_backend_context),
+            .back = create_gpu_painting_surface_with_bitmap_flush(size, back_buffer, skia_backend_context),
+        };
+    }
+#    else
+    (void)skia_backend_context;
+#    endif
+#endif
+
+    return {
+        .front = Gfx::PaintingSurface::wrap_bitmap(*front_buffer.bitmap()),
+        .back = Gfx::PaintingSurface::wrap_bitmap(*back_buffer.bitmap()),
+    };
+}
+
+#ifdef USE_VULKAN_DMABUF_IMAGES
+struct DMABufBackingStorePair {
+    RefPtr<Gfx::PaintingSurface> front;
+    RefPtr<Gfx::PaintingSurface> back;
+    Gfx::SharedImage front_shared_image;
+    Gfx::SharedImage back_shared_image;
+};
+
+static ErrorOr<DMABufBackingStorePair> create_linear_dmabuf_backing_stores(Gfx::IntSize size, Gfx::SkiaBackendContext& skia_backend_context)
+{
+    auto const& vulkan_context = skia_backend_context.vulkan_context();
+    static constexpr Array<uint64_t, 1> linear_modifiers = { DRM_FORMAT_MOD_LINEAR };
+    auto front_image = TRY(Gfx::create_shared_vulkan_image(vulkan_context, size.width(), size.height(), VK_FORMAT_B8G8R8A8_UNORM, linear_modifiers.span()));
+    auto back_image = TRY(Gfx::create_shared_vulkan_image(vulkan_context, size.width(), size.height(), VK_FORMAT_B8G8R8A8_UNORM, linear_modifiers.span()));
+    auto front_shared_image = Gfx::duplicate_shared_image(*front_image);
+    auto back_shared_image = Gfx::duplicate_shared_image(*back_image);
+
+    return DMABufBackingStorePair {
+        .front = Gfx::PaintingSurface::create_from_vkimage(skia_backend_context, move(front_image), Gfx::PaintingSurface::Origin::TopLeft),
+        .back = Gfx::PaintingSurface::create_from_vkimage(skia_backend_context, move(back_image), Gfx::PaintingSurface::Origin::TopLeft),
+        .front_shared_image = move(front_shared_image),
+        .back_shared_image = move(back_shared_image),
+    };
+}
+#endif
 
 class RenderingThread::ThreadData final : public AtomicRefCounted<ThreadData> {
 public:
@@ -63,13 +142,6 @@ public:
     }
 
     ~ThreadData() = default;
-
-    void set_skia_player(OwnPtr<Painting::DisplayListPlayerSkia>&& player)
-    {
-        m_skia_player = move(player);
-    }
-
-    bool has_skia_player() const { return m_skia_player != nullptr; }
 
     void set_presentation_mode(RenderingThread::PresentationMode mode)
     {
@@ -117,8 +189,10 @@ public:
             m_frame_completed.wait();
     }
 
-    void compositor_loop()
+    void compositor_loop(DisplayListPlayerType display_list_player_type)
     {
+        initialize_skia_player(display_list_player_type);
+
         while (true) {
             {
                 Threading::MutexLocker const locker { m_mutex };
@@ -150,8 +224,7 @@ public:
                         m_cached_scroll_state_snapshot = move(cmd.scroll_state_snapshot);
                     },
                     [this](UpdateBackingStoresCommand& cmd) {
-                        m_backing_stores.front_store = move(cmd.front_store);
-                        m_backing_stores.back_store = move(cmd.back_store);
+                        allocate_backing_stores(cmd);
                         m_backing_stores.front_bitmap_id = cmd.front_bitmap_id;
                         m_backing_stores.back_bitmap_id = cmd.back_bitmap_id;
                     },
@@ -209,9 +282,7 @@ public:
                     if (should_clear_back_store) {
                         // Embedded navigables leave their PaintConfig canvas unfilled, so double-buffered back stores
                         // must be cleared before repainting.
-                        m_backing_stores.back_store->lock_context();
                         m_backing_stores.back_store->canvas().clear(SK_ColorTRANSPARENT);
-                        m_backing_stores.back_store->unlock_context();
                     }
                     m_skia_player->execute(*m_cached_display_list, m_cached_scroll_state_snapshot, *m_backing_stores.back_store);
                     i32 rendered_bitmap_id = m_backing_stores.back_bitmap_id;
@@ -235,6 +306,52 @@ public:
     }
 
 private:
+    void initialize_skia_player(DisplayListPlayerType display_list_player_type)
+    {
+        switch (display_list_player_type) {
+        case DisplayListPlayerType::SkiaGPUIfAvailable:
+            m_skia_backend_context = Gfx::SkiaBackendContext::create_independent_gpu_backend();
+            break;
+        case DisplayListPlayerType::SkiaCPU:
+            break;
+        }
+        m_skia_player = make<Painting::DisplayListPlayerSkia>(m_skia_backend_context);
+    }
+
+    void publish_backing_store_pair(UpdateBackingStoresCommand& cmd, Gfx::SharedImage front_shared_image, Gfx::SharedImage back_shared_image)
+    {
+        if (!cmd.allocation_callback)
+            return;
+        invoke_on_main_thread([callback = move(cmd.allocation_callback), front_bitmap_id = cmd.front_bitmap_id, front_shared_image = move(front_shared_image), back_bitmap_id = cmd.back_bitmap_id, back_shared_image = move(back_shared_image)]() mutable {
+            callback(front_bitmap_id, move(front_shared_image), back_bitmap_id, move(back_shared_image));
+        });
+    }
+
+    void allocate_backing_stores(UpdateBackingStoresCommand& cmd)
+    {
+#ifdef USE_VULKAN_DMABUF_IMAGES
+        if (m_skia_backend_context && cmd.allocation_callback) {
+            auto backing_stores = create_linear_dmabuf_backing_stores(cmd.size, *m_skia_backend_context);
+            if (!backing_stores.is_error()) {
+                auto backing_store_pair = backing_stores.release_value();
+                m_backing_stores.front_store = move(backing_store_pair.front);
+                m_backing_stores.back_store = move(backing_store_pair.back);
+                publish_backing_store_pair(cmd, move(backing_store_pair.front_shared_image), move(backing_store_pair.back_shared_image));
+                return;
+            }
+        }
+#endif
+
+        auto front_buffer = Gfx::SharedImageBuffer::create(cmd.size);
+        auto back_buffer = Gfx::SharedImageBuffer::create(cmd.size);
+        auto front_shared_image = front_buffer.export_shared_image();
+        auto back_shared_image = back_buffer.export_shared_image();
+        auto backing_store_pair = create_shareable_bitmap_backing_stores(cmd.size, front_buffer, back_buffer, m_skia_backend_context);
+        m_backing_stores.front_store = move(backing_store_pair.front);
+        m_backing_stores.back_store = move(backing_store_pair.back);
+        publish_backing_store_pair(cmd, move(front_shared_image), move(back_shared_image));
+    }
+
     template<typename Invokee>
     void invoke_on_main_thread(Invokee invokee)
     {
@@ -258,6 +375,7 @@ private:
     Queue<CompositorCommand> m_command_queue;
 
     OwnPtr<Painting::DisplayListPlayerSkia> m_skia_player;
+    RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     RefPtr<Painting::DisplayList> m_cached_display_list;
     Painting::ScrollStateSnapshot m_cached_scroll_state_snapshot;
     BackingStoreState m_backing_stores;
@@ -293,20 +411,14 @@ RenderingThread::~RenderingThread()
     m_thread_data->exit();
 }
 
-void RenderingThread::start(DisplayListPlayerType)
+void RenderingThread::start(DisplayListPlayerType display_list_player_type)
 {
-    VERIFY(m_thread_data->has_skia_player());
-    m_thread = Threading::Thread::construct("Renderer"sv, [thread_data = m_thread_data] {
-        thread_data->compositor_loop();
+    m_thread = Threading::Thread::construct("Renderer"sv, [thread_data = m_thread_data, display_list_player_type] {
+        thread_data->compositor_loop(display_list_player_type);
         return static_cast<intptr_t>(0);
     });
     m_thread->start();
     m_thread->detach();
-}
-
-void RenderingThread::set_skia_player(OwnPtr<Painting::DisplayListPlayerSkia>&& player)
-{
-    m_thread_data->set_skia_player(move(player));
 }
 
 void RenderingThread::set_presentation_mode(PresentationMode mode)
@@ -319,9 +431,9 @@ void RenderingThread::update_display_list(NonnullRefPtr<Painting::DisplayList> d
     m_thread_data->enqueue_command(UpdateDisplayListCommand { move(display_list), move(scroll_state_snapshot) });
 }
 
-void RenderingThread::update_backing_stores(RefPtr<Gfx::PaintingSurface> front, RefPtr<Gfx::PaintingSurface> back, i32 front_id, i32 back_id)
+void RenderingThread::update_backing_stores(Gfx::IntSize size, i32 front_id, i32 back_id, Function<void(i32, Gfx::SharedImage, i32, Gfx::SharedImage)>&& allocation_callback)
 {
-    m_thread_data->enqueue_command(UpdateBackingStoresCommand { move(front), move(back), front_id, back_id });
+    m_thread_data->enqueue_command(UpdateBackingStoresCommand { size, front_id, back_id, move(allocation_callback) });
 }
 
 u64 RenderingThread::present_frame(Gfx::IntRect viewport_rect)
