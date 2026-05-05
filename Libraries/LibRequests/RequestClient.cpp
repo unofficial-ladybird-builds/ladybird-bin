@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/EventLoop.h>
 #include <LibCore/Promise.h>
 #include <LibCore/System.h>
 #include <LibRequests/Request.h>
@@ -28,8 +29,29 @@ void RequestClient::die()
     for (auto& [id, promise] : m_pending_cache_size_estimations)
         promise->reject(Error::from_string_literal("RequestServer process died"));
 
+    auto websockets = move(m_websockets);
+
     m_requests.clear();
     m_pending_cache_size_estimations.clear();
+    m_websockets.clear();
+
+    for (auto& [id, websocket] : websockets) {
+        auto ready_state = websocket->ready_state();
+        websocket->detach_from_client({});
+        websocket->set_ready_state(WebSocket::ReadyState::Closed);
+
+        auto error = ready_state == WebSocket::ReadyState::Connecting
+            ? WebSocket::Error::CouldNotEstablishConnection
+            : WebSocket::Error::ServerClosedSocket;
+        websocket->did_error({}, to_underlying(error));
+        websocket->did_close({}, to_underlying(::WebSocket::CloseStatusCode::AbnormalClosure), {}, false);
+    }
+
+    if (auto request_server_died_callback = move(on_request_server_died)) {
+        Core::deferred_invoke([request_server_died_callback = move(request_server_died_callback)]() mutable {
+            request_server_died_callback();
+        });
+    }
 }
 
 RefPtr<Request> RequestClient::start_request(ByteString const& method, URL::URL const& url, Optional<HTTP::HeaderList const&> request_headers, ReadonlyBytes request_body, HTTP::CacheMode cache_mode, HTTP::Cookie::IncludeCredentials include_credentials, Core::ProxyData const& proxy_data)
@@ -154,8 +176,10 @@ void RequestClient::websocket_errored(u64 websocket_id, i32 message)
 
 void RequestClient::websocket_closed(u64 websocket_id, u16 code, ByteString reason, bool clean)
 {
-    if (auto connection = m_websockets.get(websocket_id); connection.has_value())
+    if (auto connection = m_websockets.take(websocket_id); connection.has_value()) {
+        (*connection)->set_ready_state(WebSocket::ReadyState::Closed);
         (*connection)->did_close({}, code, move(reason), clean);
+    }
 }
 
 void RequestClient::websocket_ready_state_changed(u64 websocket_id, u32 ready_state)

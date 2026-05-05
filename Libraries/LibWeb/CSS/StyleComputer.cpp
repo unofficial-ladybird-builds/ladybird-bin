@@ -1623,20 +1623,18 @@ static void compute_text_align(ComputedProperties& style, DOM::AbstractElement a
         }
     }
 
-    // AD-HOC: The -libweb-inherit-or-center style defaults to centering, unless a style value usually would have been
-    //         inherited. This is used to support the ad-hoc default <th> text-align behavior.
+    // AD-HOC: The -libweb-inherit-or-center style defaults to centering, unless the parent element has a non-initial
+    //         computed text-align value. This is used to support the ad-hoc default <th> text-align behavior.
     if (text_align_keyword == Keyword::LibwebInheritOrCenter && abstract_element.element().local_name() == HTML::TagNames::th) {
-        for (auto parent_element = abstract_element.element_to_inherit_style_from(); parent_element.has_value(); parent_element = parent_element->element_to_inherit_style_from()) {
-            auto parent_computed = parent_element->computed_properties();
-            auto parent_cascaded = parent_element->cascaded_properties();
-            if (!parent_computed || !parent_cascaded)
-                break;
-            if (parent_cascaded->property(PropertyID::TextAlign)) {
-                auto const& style_value = parent_computed->property(PropertyID::TextAlign);
-                style.set_property(PropertyID::TextAlign, style_value, ComputedProperties::Inherited::Yes);
-                break;
+        auto parent_element = abstract_element.element_to_inherit_style_from();
+        if (parent_element.has_value() && parent_element->computed_properties()) {
+            auto const& parent_text_align = parent_element->computed_properties()->property(PropertyID::TextAlign);
+            if (parent_text_align.to_keyword() != Keyword::Start) {
+                style.set_property(PropertyID::TextAlign, parent_text_align, ComputedProperties::Inherited::Yes);
+                return;
             }
         }
+        style.set_property(PropertyID::TextAlign, KeywordStyleValue::create(Keyword::Center));
     }
 }
 
@@ -1834,10 +1832,6 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
 
         auto style = compute_style(abstract_element_for_pseudo_element);
 
-        // Copy cascaded properties to the element itself so that elements
-        // slotted into this slot can find them via element_to_inherit_style_from().
-        abstract_element.set_cascaded_properties(abstract_element_for_pseudo_element.cascaded_properties());
-
         // Merge back inline styles
         if (auto inline_style = element.inline_style()) {
             for (auto const& property : inline_style->properties())
@@ -1865,10 +1859,9 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
             PseudoElement::Marker,
             PseudoElement::Placeholder);
 
-        // Bail if no pseudo-element rules matched. Clear any stale cascaded/custom property data so
+        // Bail if no pseudo-element rules matched. Clear any stale custom property data so
         // getComputedStyle() doesn't return values from a previous match.
         if (!did_match_any_pseudo_element_rules && !has_implicit_style) {
-            abstract_element.set_cascaded_properties(nullptr);
             abstract_element.set_custom_property_data(nullptr);
             return {};
         }
@@ -1912,7 +1905,6 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
     }
 
     auto cascaded_properties = compute_cascaded_values(abstract_element, did_match_any_pseudo_element_rules, mode, matching_rule_set);
-    abstract_element.set_cascaded_properties(cascaded_properties);
 
     if (mode == ComputeStyleMode::CreatePseudoElementStyleIfNeeded) {
         // Bail if no pseudo-element would be generated due to...
@@ -1994,8 +1986,10 @@ RefPtr<StyleValue const> StyleComputer::recascade_font_size_if_needed(DOM::Abstr
     CSSPixels current_size_in_px = default_monospace_font_size_in_px;
 
     for (auto& ancestor : ancestors.in_reverse()) {
-        auto& ancestor_cascaded_properties = *ancestor.cascaded_properties();
-        auto font_size_value = ancestor_cascaded_properties.property(CSS::PropertyID::FontSize);
+        auto ancestor_computed_properties = ancestor.computed_properties();
+        if (!ancestor_computed_properties)
+            continue;
+        auto font_size_value = ancestor_computed_properties->raw_cascaded_font_size();
 
         if (!font_size_value)
             continue;
@@ -2109,6 +2103,12 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
                 computed_style->set_property_important(property_id, Important::Yes);
             value = cascaded_style_property->value;
             requires_computation = property_requires_computation_with_cascaded_value(property_id);
+
+            // Store the raw winning cascaded font-size. This is needed to implement the time-traveling inheritance for
+            // font-size when font-family is monospace.
+            // See the recascade_font_size_if_needed() function for further details.
+            if (property_id == PropertyID::FontSize)
+                computed_style->set_raw_cascaded_font_size(*cascaded_style_property->value);
         }
 
         // NOTE: We've already handled font-size above.
@@ -2149,6 +2149,16 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
             value = property_initial_value(property_id);
             requires_computation = property_requires_computation_with_initial_value(property_id);
         }
+
+        // Store the resolved specified value for properties whose computation depends on inherited info, so they can
+        // be re-resolved when an ancestor changes without keeping CascadedProperties alive on the element.
+        // FIXME: Consider other style values that rely on relative lengths (e.g. CalculatedStyleValue, StyleValues
+        //        which contain lengths (e.g. StyleValueList)) - maybe we can use `is_computationally_independent()`
+        bool depends_on_inherited_info = (value->is_length() && value->as_length().length().is_font_relative())
+            || (property_id == PropertyID::FontWeight && first_is_one_of(value->to_keyword(), Keyword::Bolder, Keyword::Lighter))
+            || (property_id == PropertyID::FontSize && first_is_one_of(value->to_keyword(), Keyword::Larger, Keyword::Smaller));
+        if (depends_on_inherited_info)
+            computed_style->add_inheritance_dependent_specified_value(property_id, *value);
 
         // NB: We compute using the inherited (physical) property to avoid having to add cases for all the logical
         //     alias properties in `compute_value_of_property`

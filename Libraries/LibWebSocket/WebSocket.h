@@ -9,6 +9,7 @@
 
 #include <AK/Span.h>
 #include <LibCore/EventReceiver.h>
+#include <LibCore/Forward.h>
 #include <LibWebSocket/ConnectionInfo.h>
 #include <LibWebSocket/Impl/WebSocketImpl.h>
 #include <LibWebSocket/Message.h>
@@ -98,7 +99,6 @@ private:
     void notify_error(Error);
     void notify_message(Message);
 
-    void fatal_error(Error);
     void discard_connection();
 
     enum class InternalState {
@@ -133,6 +133,7 @@ private:
 
     ConnectionInfo m_connection;
     RefPtr<WebSocketImpl> m_impl;
+    RefPtr<Core::Timer> m_closing_handshake_timer;
 
     Vector<u8> m_buffered_data;
     ByteBuffer m_fragmented_data_buffer;
