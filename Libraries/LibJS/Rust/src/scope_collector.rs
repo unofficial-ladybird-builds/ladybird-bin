@@ -49,13 +49,10 @@
 //! - `IdentifierGroup` — a set of identifier references with the same
 //!   name within one scope (multiple `foo` refs are grouped together)
 
-use indexmap::IndexMap;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use crate::fast_hash::{HashMap, IndexMap};
 
 use crate::ast::{
-    FunctionScopeData, Identifier, LocalBinding, LocalVarKind, LocalVariable, ScopeData, SharedUtf16String,
+    FunctionScopeData, IdentifierArena, IdentifierId, LocalBinding, LocalVarKind, LocalVariable, ScopeId, StringId,
     Utf16String, VarToInit,
 };
 use crate::parser::{DeclarationKind, FunctionKind, ParseError, ProgramType};
@@ -139,7 +136,7 @@ struct ScopeVariable {
     flags: VarFlags,
     /// The Identifier AST node for the `var` declaration (used to build
     /// FunctionScopeData). None if not a var.
-    var_identifier: Option<Rc<Identifier>>,
+    var_identifier: Option<IdentifierId>,
 }
 
 /// Groups all Identifier AST nodes that share the same name within a scope.
@@ -154,7 +151,7 @@ struct IdentifierGroup {
     /// (prevents local variable optimization since `with` can shadow anything).
     used_inside_with_statement: bool,
     /// All Identifier AST nodes with this name in this scope.
-    identifiers: Vec<Rc<Identifier>>,
+    identifiers: Vec<IdentifierId>,
     /// If this name was declared (var/let/const), tracks the declaration kind
     /// so we can annotate each Identifier AST node.
     declaration_kind: Option<DeclarationKind>,
@@ -166,7 +163,7 @@ struct HoistableFunction {
     name: Utf16String,
     /// Reference to the block ScopeData that contains the function declaration.
     /// Used to set `is_hoisted = true` on the FunctionData when it's hoisted.
-    block_scope_data: Option<Rc<RefCell<ScopeData>>>,
+    block_scope_data: Option<ScopeId>,
 }
 
 #[derive(Debug)]
@@ -178,7 +175,7 @@ struct ParameterName {
 /// Entry describing a single parameter binding for scope analysis.
 pub struct ParameterEntry {
     pub name: Utf16String,
-    pub identifier: Option<Rc<Identifier>>,
+    pub identifier: Option<IdentifierId>,
     pub is_rest: bool,
     pub is_from_pattern: bool,
     pub is_first_from_pattern: bool,
@@ -188,10 +185,10 @@ pub struct ParameterEntry {
 struct ScopeRecord {
     scope_type: ScopeType,
     scope_level: ScopeLevel,
-    scope_data: Option<Rc<RefCell<ScopeData>>>,
+    scope_data: Option<ScopeId>,
 
     variables: IndexMap<Utf16String, ScopeVariable>,
-    identifier_groups: IndexMap<SharedUtf16String, IdentifierGroup>,
+    identifier_groups: IndexMap<Utf16String, IdentifierGroup>,
     functions_to_hoist: Vec<HoistableFunction>,
 
     // Parameter tracking
@@ -217,13 +214,13 @@ struct ScopeRecord {
 }
 
 impl ScopeRecord {
-    fn new(scope_type: ScopeType, scope_level: ScopeLevel, scope_data: Option<Rc<RefCell<ScopeData>>>) -> Self {
+    fn new(scope_type: ScopeType, scope_level: ScopeLevel, scope_data: Option<ScopeId>) -> Self {
         Self {
             scope_type,
             scope_level,
             scope_data,
-            variables: IndexMap::new(),
-            identifier_groups: IndexMap::new(),
+            variables: IndexMap::default(),
+            identifier_groups: IndexMap::default(),
             functions_to_hoist: Vec::new(),
             has_function_parameters: false,
             parameter_names: Vec::new(),
@@ -397,12 +394,7 @@ impl ScopeCollector {
 
     // === Open/close scopes ===
 
-    fn open_scope(
-        &mut self,
-        scope_type: ScopeType,
-        scope_data: Option<Rc<RefCell<ScopeData>>>,
-        scope_level: ScopeLevel,
-    ) {
+    fn open_scope(&mut self, scope_type: ScopeType, scope_data: Option<ScopeId>, scope_level: ScopeLevel) {
         let index = self.records.len();
         let mut record = ScopeRecord::new(scope_type, scope_level, scope_data);
         record.parent = self.current;
@@ -411,7 +403,7 @@ impl ScopeCollector {
             && record.scope_data.is_none()
             && let Some(parent_index) = self.current
         {
-            record.scope_data = self.records[parent_index].scope_data.clone();
+            record.scope_data = self.records[parent_index].scope_data;
         }
 
         if scope_level == ScopeLevel::NotTopLevel {
@@ -464,11 +456,11 @@ impl ScopeCollector {
         }
     }
 
-    pub fn open_block_scope(&mut self, scope_data: Option<Rc<RefCell<ScopeData>>>) {
+    pub fn open_block_scope(&mut self, scope_data: Option<ScopeId>) {
         self.open_scope(ScopeType::Block, scope_data, ScopeLevel::NotTopLevel);
     }
 
-    pub fn open_for_loop_scope(&mut self, scope_data: Option<Rc<RefCell<ScopeData>>>) {
+    pub fn open_for_loop_scope(&mut self, scope_data: Option<ScopeId>) {
         self.open_scope(ScopeType::ForLoop, scope_data, ScopeLevel::NotTopLevel);
     }
 
@@ -476,7 +468,7 @@ impl ScopeCollector {
     // The `with` statement creates an object environment record that intercepts
     // identifier lookups, preventing any local variable optimization for
     // identifiers used within its scope.
-    pub fn open_with_scope(&mut self, scope_data: Option<Rc<RefCell<ScopeData>>>) {
+    pub fn open_with_scope(&mut self, scope_data: Option<ScopeId>) {
         self.open_scope(ScopeType::With, scope_data, ScopeLevel::NotTopLevel);
     }
 
@@ -484,11 +476,11 @@ impl ScopeCollector {
         self.open_scope(ScopeType::Catch, None, ScopeLevel::NotTopLevel);
     }
 
-    pub fn open_static_init_scope(&mut self, scope_data: Option<Rc<RefCell<ScopeData>>>) {
+    pub fn open_static_init_scope(&mut self, scope_data: Option<ScopeId>) {
         self.open_scope(ScopeType::ClassStaticInit, scope_data, ScopeLevel::StaticInitTopLevel);
     }
 
-    pub fn open_class_field_scope(&mut self, scope_data: Option<Rc<RefCell<ScopeData>>>) {
+    pub fn open_class_field_scope(&mut self, scope_data: Option<ScopeId>) {
         self.open_scope(ScopeType::ClassField, scope_data, ScopeLevel::NotTopLevel);
     }
 
@@ -523,19 +515,23 @@ impl ScopeCollector {
     // They walk the scope chain upward, registering in every scope along
     // the way until reaching a top-level scope (function, program, or
     // class static initializer).
+    #[allow(clippy::too_many_arguments)]
     pub fn add_var_declaration(
         &mut self,
-        bound_names: &[(&[u16], Option<Rc<Identifier>>)],
+        bound_names: &[(&[u16], Option<IdentifierId>)],
         declaration_line: u32,
         declaration_column: u32,
         declaration_kind: Option<DeclarationKind>,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
     ) {
         let index = self.current.expect("no current scope");
 
         for (name, identifier) in bound_names {
             // Register the declaration identifier so it participates in scope analysis.
             if let Some(id) = identifier {
-                self.register_identifier(id.clone(), declaration_kind);
+                self.register_identifier(*id, declaration_kind, identifiers, strings, scopes);
             }
 
             let mut scope_index = index;
@@ -546,7 +542,7 @@ impl ScopeCollector {
                 }
                 let var = self.records[scope_index].variable(name);
                 var.flags |= VarFlags::VAR;
-                var.var_identifier = identifier.clone();
+                var.var_identifier = *identifier;
                 if self.records[scope_index].is_top_level() {
                     break;
                 }
@@ -562,21 +558,25 @@ impl ScopeCollector {
     // a `var` binding to the enclosing function scope.
     // In strict mode (or for async/generator functions), block-scoped function
     // declarations are treated as lexical bindings and are NOT Annex-B hoisted.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_function_declaration(
         &mut self,
         name: &[u16],
-        name_identifier: Option<Rc<Identifier>>,
+        name_identifier: Option<IdentifierId>,
         function_kind: FunctionKind,
         strict_mode: bool,
         declaration_line: u32,
         declaration_column: u32,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
     ) {
         let index = self.current.expect("no current scope");
         let scope_level = self.records[index].scope_level;
 
         // Register the name identifier so it participates in scope analysis.
-        if let Some(ref id) = name_identifier {
-            self.register_identifier(id.clone(), None);
+        if let Some(id) = name_identifier {
+            self.register_identifier(id, None, identifiers, strings, scopes);
         }
 
         if scope_level != ScopeLevel::NotTopLevel && scope_level != ScopeLevel::ModuleTopLevel {
@@ -604,7 +604,7 @@ impl ScopeCollector {
             }
 
             if !existing_flags.intersects(VarFlags::LEXICAL) {
-                let block_scope = self.records[index].scope_data.clone();
+                let block_scope = self.records[index].scope_data;
                 self.records[index].functions_to_hoist.push(HoistableFunction {
                     name: Utf16String::from(name),
                     block_scope_data: block_scope,
@@ -628,7 +628,7 @@ impl ScopeCollector {
         }
     }
 
-    pub fn add_catch_parameter_identifier(&mut self, name: &[u16], identifier: Rc<Identifier>) {
+    pub fn add_catch_parameter_identifier(&mut self, name: &[u16], identifier: IdentifierId) {
         let index = self.current.expect("no current scope");
         let var = self.records[index].variable(name);
         var.flags |= VarFlags::VAR | VarFlags::BOUND | VarFlags::CATCH_PARAMETER;
@@ -637,13 +637,21 @@ impl ScopeCollector {
 
     // === Identifier registration ===
 
-    pub fn register_identifier(&mut self, id: Rc<Identifier>, declaration_kind: Option<DeclarationKind>) {
+    pub fn register_identifier(
+        &mut self,
+        id: IdentifierId,
+        declaration_kind: Option<DeclarationKind>,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        _scopes: &mut crate::ast::ScopeArena,
+    ) {
         let index = self.current.expect("no current scope");
+        let name = strings[identifiers[id].name].clone();
         self.records[index]
             .identifier_groups
-            .entry(id.name.clone())
+            .entry(name)
             .and_modify(|group| {
-                group.identifiers.push(id.clone());
+                group.identifiers.push(id);
                 if declaration_kind.is_some() && group.declaration_kind.is_none() {
                     group.declaration_kind = declaration_kind;
                 }
@@ -658,7 +666,14 @@ impl ScopeCollector {
 
     // === Function parameters ===
 
-    pub fn set_function_parameters(&mut self, entries: &[ParameterEntry], has_parameter_expressions: bool) {
+    pub fn set_function_parameters(
+        &mut self,
+        entries: &[ParameterEntry],
+        has_parameter_expressions: bool,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         let index = self.current.expect("no current scope");
         self.records[index].has_function_parameters = true;
         self.records[index].has_parameter_expressions = has_parameter_expressions;
@@ -681,8 +696,8 @@ impl ScopeCollector {
                     is_rest: entry.is_rest,
                 });
             }
-            if let Some(ref id) = entry.identifier {
-                self.register_identifier(id.clone(), None);
+            if let Some(id) = entry.identifier {
+                self.register_identifier(id, None, identifiers, strings, scopes);
             }
             let var = self.records[index].variables.entry(entry.name.clone()).or_default();
             var.flags |= VarFlags::PARAMETER_CANDIDATE | VarFlags::FORBIDDEN_LEXICAL;
@@ -693,28 +708,28 @@ impl ScopeCollector {
         // declares the same name, it must not be optimized to a local, since the
         // default expression needs to resolve it from the outer scope.
         if has_parameter_expressions {
-            let names_to_mark: Vec<SharedUtf16String> = self.records[index]
+            let names_to_mark: Vec<Utf16String> = self.records[index]
                 .identifier_groups
                 .keys()
-                .filter(|name| !self.records[index].has_flag(name, VarFlags::FORBIDDEN_LEXICAL))
+                .filter(|name| !self.records[index].has_flag(name.as_slice(), VarFlags::FORBIDDEN_LEXICAL))
                 .cloned()
                 .collect();
             for name in names_to_mark {
-                self.records[index].variable(&name).flags |= VarFlags::REFERENCED_IN_FORMAL_PARAMETERS;
+                self.records[index].variable(name.as_slice()).flags |= VarFlags::REFERENCED_IN_FORMAL_PARAMETERS;
             }
         }
     }
 
     // === Scope node ===
 
-    pub fn set_scope_node(&mut self, scope_data: Rc<RefCell<ScopeData>>) {
+    pub fn set_scope_node(&mut self, scope_data: ScopeId) {
         let index = self.current.expect("no current scope");
-        self.records[index].scope_data = Some(scope_data.clone());
+        self.records[index].scope_data = Some(scope_data);
         // Update block_scope_data for any pending functions_to_hoist that
         // were registered before the ScopeData was created.
         for function in &mut self.records[index].functions_to_hoist {
             if function.block_scope_data.is_none() {
-                function.block_scope_data = Some(scope_data.clone());
+                function.block_scope_data = Some(scope_data);
             }
         }
     }
@@ -845,32 +860,65 @@ impl ScopeCollector {
 
     // === Post-parse analysis ===
 
-    pub fn analyze(&mut self, initiated_by_eval: bool) {
-        self.analyze_inner(initiated_by_eval, false);
+    pub fn analyze(
+        &mut self,
+        initiated_by_eval: bool,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
+        self.analyze_inner(initiated_by_eval, false, identifiers, strings, scopes);
     }
 
     /// Like analyze(), but suppresses marking identifiers as global.
     /// Used for dynamic functions (new Function(...)) where the source is
     /// parsed as a Script but identifiers must not use GetGlobal/SetGlobal,
     /// matching the C++ path which parses as a FunctionExpression.
-    pub fn analyze_as_dynamic_function(&mut self) {
-        self.analyze_inner(false, true);
+    pub fn analyze_as_dynamic_function(
+        &mut self,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
+        self.analyze_inner(false, true, identifiers, strings, scopes);
     }
 
-    fn analyze_inner(&mut self, initiated_by_eval: bool, suppress_globals: bool) {
+    fn analyze_inner(
+        &mut self,
+        initiated_by_eval: bool,
+        suppress_globals: bool,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         if !self.records.is_empty() {
-            self.analyze_recursive(0, initiated_by_eval, suppress_globals);
+            self.analyze_recursive(0, initiated_by_eval, suppress_globals, identifiers, strings, scopes);
         }
     }
 
     /// Analyze a scope and all its descendants, bottom-up.
     /// Children are analyzed first so that unresolved identifiers bubble up
     /// to their parent, and eval poisoning propagates outward.
-    fn analyze_recursive(&mut self, index: usize, initiated_by_eval: bool, suppress_globals: bool) {
+    fn analyze_recursive(
+        &mut self,
+        index: usize,
+        initiated_by_eval: bool,
+        suppress_globals: bool,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         // Process children first (bottom-up traversal).
         let children = std::mem::take(&mut self.records[index].children);
         for child_index in children {
-            self.analyze_recursive(child_index, initiated_by_eval, suppress_globals);
+            self.analyze_recursive(
+                child_index,
+                initiated_by_eval,
+                suppress_globals,
+                identifiers,
+                strings,
+                scopes,
+            );
         }
 
         // Steps 1-3 must run even for scopes without scope_data (e.g. catch
@@ -881,9 +929,17 @@ impl ScopeCollector {
         // 1. Propagate eval() flags from children to parent.
         Self::propagate_eval_poisoning(&mut self.records, index);
         // 2. Match identifier references to declarations; optimize as locals.
-        Self::resolve_identifiers(&mut self.records, index, initiated_by_eval, suppress_globals);
+        Self::resolve_identifiers(
+            &mut self.records,
+            index,
+            initiated_by_eval,
+            suppress_globals,
+            identifiers,
+            strings,
+            scopes,
+        );
         // 3. Annex B: hoist block-scoped functions to enclosing function scope.
-        Self::hoist_functions(&mut self.records, index);
+        Self::hoist_functions(&mut self.records, index, identifiers, strings, scopes);
 
         // 4. For function-like scopes, build the var declaration list that
         //    the bytecode generator uses to initialize function-scoped variables.
@@ -893,7 +949,7 @@ impl ScopeCollector {
                 || st == ScopeType::ClassStaticInit
                 || st == ScopeType::ClassField;
             if needs_fsd {
-                Self::build_function_scope_data(&self.records, index);
+                Self::build_function_scope_data(&self.records, index, identifiers, strings, scopes);
             }
         }
     }
@@ -931,17 +987,25 @@ impl ScopeCollector {
     /// - It's NOT captured by a nested function
     /// - It's NOT used inside a `with` statement
     /// - The scope chain is NOT poisoned by `eval()`
-    fn resolve_identifiers(records: &mut [ScopeRecord], index: usize, initiated_by_eval: bool, suppress_globals: bool) {
+    fn resolve_identifiers(
+        records: &mut [ScopeRecord],
+        index: usize,
+        initiated_by_eval: bool,
+        suppress_globals: bool,
+        identifiers: &mut IdentifierArena,
+        _strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         // identifier_groups is an IndexMap, so iteration is in source order
         // of first reference. Local variable indices follow that order.
         let groups = std::mem::take(&mut records[index].identifier_groups);
-        let mut propagate_to_parent: Vec<(SharedUtf16String, IdentifierGroup)> = Vec::new();
+        let mut propagate_to_parent: Vec<(Utf16String, IdentifierGroup)> = Vec::new();
         for (name, mut group) in groups {
             // Annotate each Identifier AST node with its declaration kind,
             // so the bytecode generator knows how to handle TDZ checks, etc.
             if let Some(dk) = group.declaration_kind {
                 for id in &group.identifiers {
-                    id.declaration_kind.set(Some(dk));
+                    identifiers[*id].declaration_kind = Some(dk);
                 }
             }
 
@@ -1018,7 +1082,7 @@ impl ScopeCollector {
                 && var_flags.intersects(VarFlags::BOUND)
             {
                 for id in &group.identifiers {
-                    id.is_inside_scope_with_eval.set(true);
+                    identifiers[*id].is_inside_scope_with_eval = true;
                 }
             }
 
@@ -1046,8 +1110,9 @@ impl ScopeCollector {
                 let can_use_global = !(suppress_globals || group.used_inside_with_statement || initiated_by_eval);
                 if can_use_global {
                     for id in &group.identifiers {
-                        if !id.is_inside_scope_with_eval.get() {
-                            id.is_global.set(true);
+                        let identifier = &mut identifiers[*id];
+                        if !identifier.is_inside_scope_with_eval {
+                            identifier.is_global = true;
                         }
                     }
                 }
@@ -1092,38 +1157,41 @@ impl ScopeCollector {
                     }
 
                     if let Some(ls) = local_scope
-                        && let Some(ref scope_data) = records[ls].scope_data
+                        && let Some(scope_id) = records[ls].scope_data
                     {
-                        let mut sd = scope_data.borrow_mut();
+                        let sd = &mut scopes[scope_id];
 
                         if is_function_parameter {
                             let argument_index = records[ls].get_parameter_index(&name);
                             if let Some(ai) = argument_index {
                                 for id in &group.identifiers {
-                                    id.local_index.set(ai);
-                                    id.local_type.set(Some(crate::ast::LocalType::Argument));
+                                    let identifier = &mut identifiers[*id];
+                                    identifier.local_index = ai;
+                                    identifier.local_type = Some(crate::ast::LocalType::Argument);
                                 }
                             } else {
                                 let lvi = u32_from_usize(sd.local_variables.len());
                                 sd.local_variables.push(LocalVariable {
-                                    name: name.to_utf16_string(),
+                                    name: name.clone(),
                                     kind: LocalVarKind::Var,
                                 });
                                 for id in &group.identifiers {
-                                    id.local_index.set(lvi);
-                                    id.local_type.set(Some(crate::ast::LocalType::Variable));
+                                    let identifier = &mut identifiers[*id];
+                                    identifier.local_index = lvi;
+                                    identifier.local_type = Some(crate::ast::LocalType::Variable);
                                 }
                             }
                         } else {
                             let kind = local_var_kind.expect("local_var_kind must be set for local variables");
                             let lvi = u32_from_usize(sd.local_variables.len());
                             sd.local_variables.push(LocalVariable {
-                                name: name.to_utf16_string(),
+                                name: name.clone(),
                                 kind,
                             });
                             for id in &group.identifiers {
-                                id.local_index.set(lvi);
-                                id.local_type.set(Some(crate::ast::LocalType::Variable));
+                                let identifier = &mut identifiers[*id];
+                                identifier.local_index = lvi;
+                                identifier.local_type = Some(crate::ast::LocalType::Variable);
                             }
                         }
                     }
@@ -1142,7 +1210,7 @@ impl ScopeCollector {
 
                 if records[index].eval_in_current_function {
                     for id in &group.identifiers {
-                        id.is_inside_scope_with_eval.set(true);
+                        identifiers[*id].is_inside_scope_with_eval = true;
                     }
                 }
 
@@ -1172,9 +1240,15 @@ impl ScopeCollector {
     // - vars_to_initialize: var-declared names and their local variable indices
     // - functions_to_initialize: function declarations to instantiate (in reverse order)
     // - arguments object metadata (has_argument_parameter, has_function_named_arguments, etc.)
-    fn build_function_scope_data(records: &[ScopeRecord], index: usize) {
+    fn build_function_scope_data(
+        records: &[ScopeRecord],
+        index: usize,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         let record = &records[index];
-        let Some(ref scope_data) = record.scope_data else {
+        let Some(scope_id) = record.scope_data else {
             return;
         };
 
@@ -1197,20 +1271,23 @@ impl ScopeCollector {
         // position matches. Keys are SharedUtf16String so each insert is a cheap
         // Rc bump rather than a deep clone of the name.
         let mut functions_to_initialize: Vec<crate::ast::FunctionToInit> = Vec::new();
-        let mut last_position: HashMap<SharedUtf16String, usize> = HashMap::new();
+        let mut last_position: HashMap<StringId, usize> = HashMap::default();
+        let mut last_position_by_slice: HashMap<Utf16String, usize> = HashMap::default();
         {
-            let sd = scope_data.borrow();
+            let sd = &scopes[scope_id];
             for (i, child) in sd.children.iter().enumerate() {
                 if let crate::ast::StatementKind::FunctionDeclaration(ref fd) = child.inner
-                    && let Some(ref name_ident) = fd.name
+                    && let Some(name_ident) = fd.name
                 {
-                    last_position.insert(name_ident.name.clone(), i);
+                    let name_id = identifiers[name_ident].name;
+                    last_position.insert(name_id, i);
+                    last_position_by_slice.insert(strings[name_id].clone(), i);
                 }
             }
             for (i, child) in sd.children.iter().enumerate() {
                 if let crate::ast::StatementKind::FunctionDeclaration(ref fd) = child.inner
-                    && let Some(ref name_ident) = fd.name
-                    && last_position.get(&name_ident.name).copied() == Some(i)
+                    && let Some(name_ident) = fd.name
+                    && last_position.get(&identifiers[name_ident].name).copied() == Some(i)
                 {
                     functions_to_initialize.push(crate::ast::FunctionToInit { child_index: i });
                 }
@@ -1225,13 +1302,14 @@ impl ScopeCollector {
             var_names.push(name.clone());
 
             let is_parameter = var.flags.intersects(VarFlags::FORBIDDEN_LEXICAL);
-            let is_function_name = last_position.contains_key(name.as_slice());
+            let is_function_name = last_position_by_slice.contains_key(name.as_slice());
 
-            let local_info = if let Some(ref ident) = var.var_identifier {
+            let local_info = if let Some(ident_id) = var.var_identifier {
+                let ident = &identifiers[ident_id];
                 if ident.is_local() {
                     Some(LocalBinding {
-                        local_type: ident.local_type.get().expect("is_local() implies local_type is Some"),
-                        index: ident.local_index.get(),
+                        local_type: ident.local_type.expect("is_local() implies local_type is Some"),
+                        index: ident.local_index,
                     })
                 } else {
                     None
@@ -1258,7 +1336,7 @@ impl ScopeCollector {
         // vars_to_initialize and var_names follow source order via the
         // insertion order of `record.variables`, which is now an IndexMap.
 
-        if last_position.contains_key(utf16!("arguments") as &[u16]) {
+        if last_position_by_slice.contains_key(utf16!("arguments") as &[u16]) {
             has_function_named_arguments = true;
         }
 
@@ -1282,7 +1360,7 @@ impl ScopeCollector {
         };
 
         {
-            let mut sd = scope_data.borrow_mut();
+            let sd = &mut scopes[scope_id];
             sd.function_scope_data = Some(Box::new(fsd));
 
             // Write scope analysis insights to ScopeData so they can be read
@@ -1311,7 +1389,13 @@ impl ScopeCollector {
     /// The function propagates upward through block scopes until it reaches
     /// a function/program scope (top level) or is blocked by an existing
     /// lexical or function declaration with the same name.
-    fn hoist_functions(records: &mut [ScopeRecord], index: usize) {
+    fn hoist_functions(
+        records: &mut [ScopeRecord],
+        index: usize,
+        identifiers: &mut IdentifierArena,
+        strings: &crate::ast::StringInterner,
+        scopes: &mut crate::ast::ScopeArena,
+    ) {
         let functions = std::mem::take(&mut records[index].functions_to_hoist);
 
         for function in functions {
@@ -1334,21 +1418,23 @@ impl ScopeCollector {
                     continue;
                 }
                 // Reached function/program scope — register the hoisted function name.
-                if let Some(ref scope_data) = records[index].scope_data {
-                    let mut sd = scope_data.borrow_mut();
+                if let Some(scope_id) = records[index].scope_data {
+                    let sd = &mut scopes[scope_id];
                     if !sd.annexb_function_names.contains(&function.name) {
                         sd.annexb_function_names.push(function.name.clone());
                     }
                 }
                 // Mark all function declarations with this name in the block
                 // as hoisted, so they emit GetBinding + SetVariableBinding.
-                if let Some(ref block_scope) = function.block_scope_data {
-                    let bs = block_scope.borrow();
-                    for child in &bs.children {
-                        if let crate::ast::StatementKind::FunctionDeclaration(ref fd) = child.inner
-                            && fd.name.as_ref().is_some_and(|n| n.name == function.name)
+                if let Some(block_scope_id) = function.block_scope_data {
+                    let bs = &mut scopes[block_scope_id];
+                    for child in &mut bs.children {
+                        if let crate::ast::StatementKind::FunctionDeclaration(ref mut fd) = child.inner
+                            && fd
+                                .name
+                                .is_some_and(|n| strings[identifiers[n].name].as_slice() == function.name.as_slice())
                         {
-                            fd.is_hoisted.set(true);
+                            fd.is_hoisted = true;
                         }
                     }
                 }

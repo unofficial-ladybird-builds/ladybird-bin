@@ -17,8 +17,9 @@ use super::basic_block::{BasicBlock, SourceMapEntry};
 use super::ffi::{AbstractOperationKind, WellKnownSymbolKind};
 use super::instruction::Instruction;
 use super::operand::*;
-use crate::ast::{FunctionData, FunctionId, FunctionTable, LocalType, Position, Utf16String};
+use crate::ast::{AstArena, FunctionData, FunctionId, FunctionTable, IdentifierId, LocalType, Position, Utf16String};
 use crate::u32_from_usize;
+use std::sync::Arc;
 
 /// Identifies an operand that auto-frees its register when the last
 /// clone is dropped.
@@ -39,6 +40,7 @@ pub(crate) struct ScopedOperandInner {
 pub struct PendingSharedFunctionData {
     pub function_data: Option<Box<FunctionData>>,
     pub subtable: Option<FunctionTable>,
+    pub arena: Option<Arc<AstArena>>,
     pub name_override: Option<Utf16String>,
     pub class_field_initializer_name: Option<(Utf16String, bool)>,
     pub should_eager_compile: bool,
@@ -300,6 +302,20 @@ pub struct Generator {
     // Side table owning all FunctionData from the parser. Codegen
     // takes ownership of individual entries via `take()`.
     pub function_table: crate::ast::FunctionTable,
+
+    // --- AST arena ---
+    // Shared (read-only post-parse) storage for identifiers, scopes, and
+    // interned strings. Cloning is a refcount bump — multiple generators
+    // (top-level + nested IIFE + lazy children) share the same arena.
+    pub arena: Arc<AstArena>,
+}
+
+impl Generator {
+    /// Convenience: look up an identifier by ID in this generator's arena.
+    #[inline]
+    pub fn identifier(&self, id: IdentifierId) -> &crate::ast::Identifier {
+        &self.arena.identifiers[id]
+    }
 }
 
 macro_rules! singleton_constant {
@@ -425,6 +441,7 @@ impl Generator {
             source_code_ptr: std::ptr::null(),
             source_len: 0,
             function_table: crate::ast::FunctionTable::new(),
+            arena: Arc::new(AstArena::new()),
             free_register_pool,
         }
     }
@@ -625,6 +642,30 @@ impl Generator {
         property_key_table,
         property_key_table_index
     );
+
+    /// Convenience: look up a `StringId` in the AST interner and intern the
+    /// resulting slice into the bytecode identifier table.
+    pub fn intern_identifier_id(&mut self, id: crate::ast::StringId) -> IdentifierTableIndex {
+        let arena = self.arena.clone();
+        let slice = arena.strings[id].as_slice();
+        self.intern_identifier(slice)
+    }
+
+    /// Convenience: look up a `StringId` in the AST interner and intern the
+    /// resulting slice into the bytecode property key table.
+    pub fn intern_property_key_id(&mut self, id: crate::ast::StringId) -> PropertyKeyTableIndex {
+        let arena = self.arena.clone();
+        let slice = arena.strings[id].as_slice();
+        self.intern_property_key(slice)
+    }
+
+    /// Convenience: look up a `StringId` in the AST interner and intern the
+    /// resulting slice into the bytecode string table.
+    pub fn intern_string_id(&mut self, id: crate::ast::StringId) -> StringTableIndex {
+        let arena = self.arena.clone();
+        let slice = arena.strings[id].as_slice();
+        self.intern_string(slice)
+    }
 
     /// If `operand` is a constant string that is not an array index, intern it
     /// as a property key and return the index. Uses split borrows to avoid
