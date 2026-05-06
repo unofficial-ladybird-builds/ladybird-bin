@@ -51,10 +51,9 @@ endif()
 set(LADYBIRD_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LADYBIRD_SOURCE_DIR}/Meta/CMake")
 
-include(check_for_dependencies)
-include(gui_framework)
-include(cmake_options NO_POLICY_SCOPE)
 include(compile_options)
+include(check_for_dependencies)
+include(cmake_options)
 
 if(ENABLE_ALL_THE_DEBUG_MACROS)
     include(all_the_debug_macros)
@@ -130,11 +129,6 @@ include(targets)
 # Plugins need to be installed in order to be used by non-lagom builds
 add_lagom_library_install_rules(GenericClangPlugin)
 add_lagom_library_install_rules(JSClangPlugin)
-
-# Create mostly empty targets for system libraries we don't need to build for Lagom
-add_library(NoCoverage INTERFACE)
-# "install" these special targets to placate CMake
-install(TARGETS NoCoverage EXPORT LagomTargets)
 
 add_subdirectory(AK)
 add_subdirectory(Libraries)

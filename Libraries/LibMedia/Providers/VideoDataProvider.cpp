@@ -5,7 +5,6 @@
  */
 
 #include <LibCore/EventLoop.h>
-#include <LibGfx/ImmutableBitmap.h>
 #include <LibMedia/Demuxer.h>
 #include <LibMedia/FFmpeg/FFmpegVideoDecoder.h>
 #include <LibMedia/Providers/MediaTimeProvider.h>
@@ -82,11 +81,11 @@ void VideoDataProvider::set_frames_queue_is_full_handler(FramesQueueIsFullHandle
     m_thread_data->set_frames_queue_is_full_handler(move(handler));
 }
 
-TimedImage VideoDataProvider::retrieve_frame()
+RefPtr<VideoFrame> VideoDataProvider::retrieve_frame()
 {
     auto locker = m_thread_data->take_lock();
     if (m_thread_data->queue().is_empty())
-        return TimedImage();
+        return nullptr;
     auto result = m_thread_data->take_frame();
     m_thread_data->wake();
     return result;
@@ -173,12 +172,12 @@ void VideoDataProvider::ThreadData::exit()
     wake();
 }
 
-VideoDataProvider::ImageQueue& VideoDataProvider::ThreadData::queue()
+VideoDataProvider::FrameQueue& VideoDataProvider::ThreadData::queue()
 {
     return m_queue;
 }
 
-TimedImage VideoDataProvider::ThreadData::take_frame()
+NonnullRefPtr<VideoFrame> VideoDataProvider::ThreadData::take_frame()
 {
     return m_queue.dequeue();
 }
@@ -281,9 +280,9 @@ void VideoDataProvider::ThreadData::dispatch_frame_end_time(CodedFrame const& fr
     });
 }
 
-void VideoDataProvider::ThreadData::queue_frame(NonnullOwnPtr<VideoFrame> const& frame)
+void VideoDataProvider::ThreadData::queue_frame(NonnullRefPtr<VideoFrame> const& frame)
 {
-    m_queue.enqueue(TimedImage(frame->timestamp(), frame->immutable_bitmap()));
+    m_queue.enqueue(frame);
 }
 
 void VideoDataProvider::ThreadData::dispatch_error(DecoderError&& error)
@@ -391,7 +390,7 @@ bool VideoDataProvider::ThreadData::handle_seek()
 
         auto new_seek_id = m_seek_id.load();
         auto found_desired_keyframe = false;
-        OwnPtr<VideoFrame> last_frame;
+        RefPtr<VideoFrame> last_frame;
 
         while (new_seek_id == seek_id) {
             auto coded_frame_result = m_demuxer->get_next_sample_for_track(m_track);

@@ -1,9 +1,7 @@
-include(skia)
-include(vulkan)
-
 set(SOURCES
     AffineTransform.cpp
     Bitmap.cpp
+    BitmapExport.cpp
     BitmapSequence.cpp
     CMYKBitmap.cpp
     Color.cpp
@@ -40,8 +38,7 @@ set(SOURCES
     ImageFormats/WebPSharedLossless.cpp
     ImageFormats/WebPWriter.cpp
     ImageFormats/WebPWriterLossless.cpp
-    ImmutableBitmap.cpp
-    ImmutableBitmapSkiaImageCache.cpp
+    DecodedImageFrameSkiaImageCache.cpp
     PaintStyle.cpp
     Painter.cpp
     PainterSkia.cpp

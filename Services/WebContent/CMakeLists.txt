@@ -1,5 +1,4 @@
 include(audio)
-include(SDL3)
 
 set(SOURCES
     ConnectionFromClient.cpp
@@ -39,7 +38,7 @@ add_executable(WebContent main.cpp)
 target_link_libraries(WebContent PRIVATE webcontentservice LibURL)
 
 if(WIN32)
-    lagom_windows_bin(WebContent CONSOLE)
+    ladybird_windows_bin(WebContent CONSOLE)
 endif()
 
 

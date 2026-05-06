@@ -1,7 +1,5 @@
 include(audio)
 
-include(ffmpeg)
-
 set(SOURCES
     Audio/AudioDevices.cpp
     Containers/Matroska/MatroskaDemuxer.cpp
@@ -17,7 +15,6 @@ set(SOURCES
     Providers/VideoDataProvider.cpp
     Sinks/AudioMixingSink.cpp
     Sinks/DisplayingVideoSink.cpp
-    TimedImage.cpp
     TimeRanges.cpp
     VideoFrame.cpp
 )

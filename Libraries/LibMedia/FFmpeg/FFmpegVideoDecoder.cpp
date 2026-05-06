@@ -5,7 +5,7 @@
  */
 
 #include <LibCore/System.h>
-#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/ColorSpace.h>
 #include <LibGfx/YUVData.h>
 #include <LibMedia/VideoFrame.h>
 
@@ -144,7 +144,7 @@ void FFmpegVideoDecoder::signal_end_of_stream()
     VERIFY(result == 0 || result == AVERROR_EOF);
 }
 
-DecoderErrorOr<NonnullOwnPtr<VideoFrame>> FFmpegVideoDecoder::get_decoded_frame(CodingIndependentCodePoints const& container_cicp)
+DecoderErrorOr<NonnullRefPtr<VideoFrame>> FFmpegVideoDecoder::get_decoded_frame(CodingIndependentCodePoints const& container_cicp)
 {
     auto result = avcodec_receive_frame(m_codec_context, m_frame);
 
@@ -247,9 +247,9 @@ DecoderErrorOr<NonnullOwnPtr<VideoFrame>> FFmpegVideoDecoder::get_decoded_frame(
             }
         }
 
-        auto bitmap = DECODER_TRY_ALLOC(Gfx::ImmutableBitmap::create_from_yuv(move(yuv_data)));
+        auto color_space = DECODER_TRY_ALLOC(Gfx::ColorSpace::from_cicp(cicp));
 
-        return DECODER_TRY_ALLOC(try_make<VideoFrame>(timestamp, duration, size, bit_depth, cicp, move(bitmap)));
+        return DECODER_TRY_ALLOC(try_make_ref_counted<VideoFrame>(timestamp, duration, size, bit_depth, move(color_space), move(yuv_data)));
     }
     case AVERROR(EAGAIN):
         return DecoderError::with_description(DecoderErrorCategory::NeedsMoreInput, "FFmpeg decoder has no frames available, send more input"sv);

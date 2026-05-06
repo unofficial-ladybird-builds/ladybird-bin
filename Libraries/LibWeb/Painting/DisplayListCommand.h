@@ -11,9 +11,9 @@
 #include <AK/Vector.h>
 #include <LibGfx/Color.h>
 #include <LibGfx/CompositingAndBlendingOperator.h>
+#include <LibGfx/DecodedImageFrame.h>
 #include <LibGfx/Filter.h>
 #include <LibGfx/Forward.h>
-#include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/LineStyle.h>
 #include <LibGfx/PaintStyle.h>
 #include <LibGfx/Path.h>
@@ -30,6 +30,7 @@
 #include <LibWeb/Painting/PaintStyle.h>
 #include <LibWeb/Painting/ScrollState.h>
 #include <LibWeb/Painting/ShouldAntiAlias.h>
+#include <LibWeb/Painting/VideoFrameSource.h>
 
 namespace Web::Painting {
 
@@ -58,20 +59,20 @@ struct FillRect {
     void dump(StringBuilder&) const;
 };
 
-struct DrawScaledImmutableBitmap {
-    static constexpr StringView command_name = "DrawScaledImmutableBitmap"sv;
+struct DrawScaledDecodedImageFrame {
+    static constexpr StringView command_name = "DrawScaledDecodedImageFrame"sv;
 
     Gfx::IntRect dst_rect;
     Gfx::IntRect clip_rect;
-    NonnullRefPtr<Gfx::ImmutableBitmap const> bitmap;
+    NonnullRefPtr<Gfx::DecodedImageFrame const> frame;
     Gfx::ScalingMode scaling_mode;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return clip_rect; }
     void dump(StringBuilder&) const;
 };
 
-struct DrawRepeatedImmutableBitmap {
-    static constexpr StringView command_name = "DrawRepeatedImmutableBitmap"sv;
+struct DrawRepeatedDecodedImageFrame {
+    static constexpr StringView command_name = "DrawRepeatedDecodedImageFrame"sv;
 
     struct Repeat {
         bool x { false };
@@ -80,7 +81,7 @@ struct DrawRepeatedImmutableBitmap {
 
     Gfx::IntRect dst_rect;
     Gfx::IntRect clip_rect;
-    NonnullRefPtr<Gfx::ImmutableBitmap const> bitmap;
+    NonnullRefPtr<Gfx::DecodedImageFrame const> frame;
     Gfx::ScalingMode scaling_mode;
     Repeat repeat;
 
@@ -93,6 +94,17 @@ struct DrawExternalContent {
 
     Gfx::IntRect dst_rect;
     NonnullRefPtr<ExternalContentSource> source;
+    Gfx::ScalingMode scaling_mode;
+
+    [[nodiscard]] Gfx::IntRect bounding_rect() const { return dst_rect; }
+    void dump(StringBuilder&) const;
+};
+
+struct DrawVideoFrameSource {
+    static constexpr StringView command_name = "DrawVideoFrameSource"sv;
+
+    Gfx::IntRect dst_rect;
+    NonnullRefPtr<VideoFrameSource> source;
     Gfx::ScalingMode scaling_mode;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return dst_rect; }
@@ -377,9 +389,10 @@ struct ApplyEffects {
 using DisplayListCommand = Variant<
     DrawGlyphRun,
     FillRect,
-    DrawScaledImmutableBitmap,
-    DrawRepeatedImmutableBitmap,
+    DrawScaledDecodedImageFrame,
+    DrawRepeatedDecodedImageFrame,
     DrawExternalContent,
+    DrawVideoFrameSource,
     Save,
     SaveLayer,
     Restore,

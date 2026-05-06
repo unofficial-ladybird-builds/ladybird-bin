@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <LibGfx/ImmutableBitmapSkiaImageCache.h>
+#include <LibGfx/DecodedImageFrameSkiaImageCache.h>
 #include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/DisplayListCommand.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
@@ -26,9 +26,10 @@ private:
     void flush() override;
     void draw_glyph_run(DrawGlyphRun const&) override;
     void fill_rect(FillRect const&) override;
-    void draw_scaled_immutable_bitmap(DrawScaledImmutableBitmap const&) override;
-    void draw_repeated_immutable_bitmap(DrawRepeatedImmutableBitmap const&) override;
+    void draw_scaled_decoded_image_frame(DrawScaledDecodedImageFrame const&) override;
+    void draw_repeated_decoded_image_frame(DrawRepeatedDecodedImageFrame const&) override;
     void draw_external_content(DrawExternalContent const&) override;
+    void draw_video_frame_source(DrawVideoFrameSource const&) override;
     void add_clip_rect(AddClipRect const&) override;
     void save(Save const&) override;
     void save_layer(SaveLayer const&) override;
@@ -61,7 +62,7 @@ private:
     SkPaint paint_style_to_skia_paint(SVGPaintServerPaintStyle const&, Gfx::FloatRect const& bounding_rect);
 
     RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
-    Gfx::ImmutableBitmapSkiaImageCache m_image_cache;
+    Gfx::DecodedImageFrameSkiaImageCache m_image_cache;
 };
 
 }

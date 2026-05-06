@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/DecodedImageFrame.h>
 #include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/ComputedValues.h>
 #include <LibWeb/CSS/Fetch.h>
@@ -118,10 +118,10 @@ bool ImageStyleValue::is_paintable() const
     return image_data();
 }
 
-Gfx::ImmutableBitmap const* ImageStyleValue::bitmap(size_t frame_index, Gfx::IntSize size) const
+RefPtr<Gfx::DecodedImageFrame> ImageStyleValue::frame(size_t frame_index, Gfx::IntSize size) const
 {
     if (auto image_data = this->image_data())
-        return image_data->bitmap(frame_index, size);
+        return image_data->frame(frame_index, size);
     return nullptr;
 }
 
@@ -170,9 +170,9 @@ void ImageStyleValue::paint(DisplayListRecordingContext& context, DevicePixelRec
     image_data->paint(context, m_current_frame_index, dest_int_rect, dest_int_rect, scaling_mode);
 }
 
-Gfx::ImmutableBitmap const* ImageStyleValue::current_frame_bitmap(DevicePixelRect const& dest_rect) const
+RefPtr<Gfx::DecodedImageFrame> ImageStyleValue::current_frame(DevicePixelRect const& dest_rect) const
 {
-    return bitmap(m_current_frame_index, dest_rect.size().to_type<int>());
+    return frame(m_current_frame_index, dest_rect.size().to_type<int>());
 }
 
 GC::Ptr<HTML::DecodedImageData> ImageStyleValue::image_data() const
@@ -184,9 +184,10 @@ GC::Ptr<HTML::DecodedImageData> ImageStyleValue::image_data() const
 
 Optional<Gfx::Color> ImageStyleValue::color_if_single_pixel_bitmap() const
 {
-    if (auto const* b = bitmap(m_current_frame_index)) {
-        if (b->width() == 1 && b->height() == 1)
-            return b->get_pixel(0, 0);
+    if (auto decoded_frame = frame(m_current_frame_index)) {
+        auto const& bitmap = decoded_frame->bitmap();
+        if (bitmap.width() == 1 && bitmap.height() == 1)
+            return bitmap.get_pixel(0, 0);
     }
     return {};
 }

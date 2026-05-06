@@ -6,11 +6,13 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/Date.h>
 #include <LibJS/Runtime/Promise.h>
 #include <LibMedia/IncrementallyPopulatedStream.h>
 #include <LibMedia/PlaybackManager.h>
 #include <LibMedia/Sinks/DisplayingVideoSink.h>
 #include <LibMedia/Track.h>
+#include <LibMedia/VideoFrame.h>
 #include <LibURL/Parser.h>
 #include <LibWeb/Bindings/HTMLMediaElement.h>
 #include <LibWeb/Bindings/Intrinsics.h>
@@ -473,6 +475,16 @@ double HTMLMediaElement::duration() const
     return m_duration;
 }
 
+// https://html.spec.whatwg.org/multipage/media.html#dom-media-getstartdate
+JS::Object* HTMLMediaElement::get_start_date()
+{
+    // The getStartDate() method must return a new Date object representing the current timeline offset.
+    auto date_value = m_timeline_offset.has_value()
+        ? static_cast<double>(m_timeline_offset->milliseconds_since_epoch())
+        : NAN;
+    return JS::Date::create(realm(), date_value).ptr();
+}
+
 // https://html.spec.whatwg.org/multipage/media.html#dom-media-ended
 bool HTMLMediaElement::ended() const
 {
@@ -752,7 +764,8 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::load_element()
             });
         }
 
-        // FIXME: 9. Set the timeline offset to Not-a-Number (NaN).
+        // 9. Set the timeline offset to Not-a-Number (NaN).
+        m_timeline_offset = {};
 
         // 10. Update the duration attribute to Not-a-Number (NaN).
         set_duration(NAN);
@@ -1530,11 +1543,11 @@ void HTMLMediaElement::set_audio_track_enabled(Badge<AudioTrack>, GC::Ptr<HTML::
         m_playback_manager->disable_an_audio_track(audio_track->track_in_playback_manager());
 }
 
-Painting::ExternalContentSource& HTMLMediaElement::ensure_external_content_source()
+Painting::VideoFrameSource& HTMLMediaElement::ensure_video_frame_source()
 {
-    if (!m_external_content_source)
-        m_external_content_source = Painting::ExternalContentSource::create();
-    return *m_external_content_source;
+    if (!m_video_frame_source)
+        m_video_frame_source = Painting::VideoFrameSource::create();
+    return *m_video_frame_source;
 }
 
 void HTMLMediaElement::set_selected_video_track(Badge<VideoTrack>, GC::Ptr<HTML::VideoTrack> video_track)
@@ -1544,8 +1557,8 @@ void HTMLMediaElement::set_selected_video_track(Badge<VideoTrack>, GC::Ptr<HTML:
     if (video_track && !m_playback_manager->video_tracks().contains_slow(video_track->track_in_playback_manager()))
         return;
 
-    if (m_external_content_source)
-        m_external_content_source->clear();
+    if (m_video_frame_source)
+        m_video_frame_source->clear();
 
     auto previous_track = m_selected_video_track;
 
@@ -1554,7 +1567,10 @@ void HTMLMediaElement::set_selected_video_track(Badge<VideoTrack>, GC::Ptr<HTML:
         m_selected_video_track_sink = m_playback_manager->get_or_create_the_displaying_video_sink_for_track(video_track->track_in_playback_manager());
         auto sink_update_result = m_selected_video_track_sink->update();
         if (sink_update_result == Media::DisplayingVideoSinkUpdateResult::NewFrameAvailable) {
-            ensure_external_content_source().update(m_selected_video_track_sink->current_frame());
+            if (auto current_frame = m_selected_video_track_sink->current_frame())
+                ensure_video_frame_source().update(move(current_frame));
+            else if (m_video_frame_source)
+                m_video_frame_source->clear();
             update_intrinsic_video_dimensions();
             set_needs_repaint();
         } else if (auto* video_element = as_if<HTMLVideoElement>(this)) {
@@ -1577,7 +1593,10 @@ void HTMLMediaElement::update_video_frame_and_timeline()
     if (m_selected_video_track_sink) {
         auto sink_update_result = m_selected_video_track_sink->update();
         if (sink_update_result == Media::DisplayingVideoSinkUpdateResult::NewFrameAvailable) {
-            ensure_external_content_source().update(m_selected_video_track_sink->current_frame());
+            if (auto current_frame = m_selected_video_track_sink->current_frame())
+                ensure_video_frame_source().update(move(current_frame));
+            else if (m_video_frame_source)
+                m_video_frame_source->clear();
             update_intrinsic_video_dimensions();
             set_needs_repaint();
         }
@@ -1689,8 +1708,9 @@ void HTMLMediaElement::on_metadata_parsed()
     m_source_element_selector = nullptr;
 
     // FIXME: 1. Establish the media timeline for the purposes of the current playback position and the earliest possible position, based on the media data.
-    // FIXME: 2. Update the timeline offset to the date and time that corresponds to the zero time in the media timeline established in the previous step,
-    //           if any. If no explicit time and date is given by the media resource, the timeline offset must be set to Not-a-Number (NaN).
+    // 2. Update the timeline offset to the date and time that corresponds to the zero time in the media timeline established in the previous step,
+    //    if any. If no explicit time and date is given by the media resource, the timeline offset must be set to Not-a-Number (NaN).
+    m_timeline_offset = m_playback_manager->start_time_realtime();
 
     // 3. Set the current playback position and the official playback position to the earliest possible position.
     m_current_playback_position = 0;

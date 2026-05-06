@@ -14,9 +14,9 @@
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/TypeCasts.h>
+#include <LibGfx/DecodedImageFrame.h>
+#include <LibGfx/DecodedImageFrameSkiaImageCache.h>
 #include <LibGfx/Filter.h>
-#include <LibGfx/ImmutableBitmap.h>
-#include <LibGfx/ImmutableBitmapSkiaImageCache.h>
 #include <LibGfx/PainterSkia.h>
 #include <LibGfx/PathSkia.h>
 #include <LibGfx/SkiaUtils.h>
@@ -32,7 +32,7 @@ namespace Gfx {
 
 struct PainterSkia::Impl {
     RefPtr<Gfx::PaintingSurface> painting_surface;
-    ImmutableBitmapSkiaImageCache image_cache;
+    DecodedImageFrameSkiaImageCache image_cache;
 
     Impl(Gfx::PaintingSurface& surface)
         : painting_surface(surface)
@@ -41,7 +41,7 @@ struct PainterSkia::Impl {
     }
 };
 
-static void apply_paint_style(SkPaint& paint, PaintStyle const& style, ImmutableBitmapSkiaImageCache& image_cache)
+static void apply_paint_style(SkPaint& paint, PaintStyle const& style, DecodedImageFrameSkiaImageCache& image_cache)
 {
     if (auto const& solid_color = as_if<SolidColorPaintStyle>(style)) {
         paint.setColor(to_skia_color(solid_color->color()));
@@ -86,10 +86,10 @@ static void apply_paint_style(SkPaint& paint, PaintStyle const& style, Immutable
         auto shader = SkGradientShader::MakeTwoPointConical(start_sk_point, start_radius, end_sk_point, end_radius, colors.data(), positions.data(), color_stops.size(), SkTileMode::kClamp, 0, &matrix);
         paint.setShader(shader);
     } else if (auto const* canvas_pattern = as_if<CanvasPatternPaintStyle>(style)) {
-        auto image = canvas_pattern->image();
-        if (!image)
+        auto frame = canvas_pattern->image();
+        if (!frame)
             return;
-        auto sk_image = image_cache.image_for_bitmap(*image);
+        auto sk_image = image_cache.image_for_frame(*frame);
         if (!sk_image)
             return;
 
@@ -123,7 +123,7 @@ static void apply_filter(SkPaint& paint, Gfx::Filter const& filter)
     paint.setImageFilter(to_skia_image_filter(filter));
 }
 
-static SkPaint to_skia_paint(Gfx::PaintStyle const& style, Optional<Gfx::Filter const&> filter, ImmutableBitmapSkiaImageCache& image_cache)
+static SkPaint to_skia_paint(Gfx::PaintStyle const& style, Optional<Gfx::Filter const&> filter, DecodedImageFrameSkiaImageCache& image_cache)
 {
     SkPaint paint;
 
@@ -165,7 +165,7 @@ void PainterSkia::fill_rect(Gfx::FloatRect const& rect, Color color)
     canvas.drawRect(to_skia_rect(rect), paint);
 }
 
-void PainterSkia::draw_bitmap(Gfx::FloatRect const& dst_rect, Gfx::ImmutableBitmap const& src_bitmap, Gfx::IntRect const& src_rect, Gfx::ScalingMode scaling_mode, Optional<Gfx::Filter> filter, float global_alpha, Gfx::CompositingAndBlendingOperator compositing_and_blending_operator)
+void PainterSkia::draw_bitmap(Gfx::FloatRect const& dst_rect, Gfx::DecodedImageFrame const& source, Gfx::IntRect const& src_rect, Gfx::ScalingMode scaling_mode, Optional<Gfx::Filter> filter, float global_alpha, Gfx::CompositingAndBlendingOperator compositing_and_blending_operator)
 {
     SkPaint paint;
 
@@ -175,7 +175,7 @@ void PainterSkia::draw_bitmap(Gfx::FloatRect const& dst_rect, Gfx::ImmutableBitm
     paint.setAlpha(static_cast<u8>(global_alpha * 255));
     paint.setBlender(to_skia_blender(compositing_and_blending_operator));
 
-    auto sk_image = impl().image_cache.image_for_bitmap(src_bitmap);
+    auto sk_image = impl().image_cache.image_for_frame(source);
     if (!sk_image)
         return;
 

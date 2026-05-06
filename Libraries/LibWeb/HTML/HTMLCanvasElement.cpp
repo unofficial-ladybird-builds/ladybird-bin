@@ -7,7 +7,7 @@
 #include <AK/Base64.h>
 #include <AK/Checked.h>
 #include <LibGfx/Bitmap.h>
-#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/DecodedImageFrame.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/HTMLCanvasElement.h>
 #include <LibWeb/CSS/ComputedProperties.h>
@@ -361,8 +361,7 @@ String HTMLCanvasElement::to_data_url(StringView type, JS::Value js_quality)
         return "data:,"_string;
 
     // 3. Let file be a serialization of this canvas element's bitmap as a file, passing type and quality if given.
-    auto bitmap = MUST(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, surface->size()));
-    surface->read_into_bitmap(*bitmap);
+    auto bitmap = surface->snapshot_bitmap();
     Optional<double> quality = js_quality.is_number() ? js_quality.as_double() : Optional<double>();
     auto file = serialize_bitmap(bitmap, type, quality);
 
@@ -432,8 +431,7 @@ RefPtr<Gfx::Bitmap> HTMLCanvasElement::get_bitmap_from_surface()
 
     RefPtr<Gfx::Bitmap> bitmap;
     if (surface) {
-        bitmap = MUST(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, surface->size()));
-        surface->read_into_bitmap(*bitmap);
+        bitmap = surface->snapshot_bitmap();
     }
 
     return bitmap;
@@ -466,7 +464,7 @@ void HTMLCanvasElement::present()
 
     if (auto surface = this->surface()) {
         surface->flush();
-        auto snapshot = Gfx::ImmutableBitmap::create_snapshot_from_painting_surface(*surface);
+        auto snapshot = Gfx::DecodedImageFrame::create(*surface->snapshot_bitmap());
         ensure_external_content_source().update(snapshot);
     }
 }

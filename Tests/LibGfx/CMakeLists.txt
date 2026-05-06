@@ -1,9 +1,9 @@
 set(TEST_SOURCES
     BenchmarkJPEGLoader.cpp
+    TestBitmapExport.cpp
     TestColor.cpp
     TestImageDecoder.cpp
     TestImageWriter.cpp
-    TestImmutableBitmap.cpp
     TestQuad.cpp
     TestRect.cpp
     TestWOFF.cpp
@@ -13,3 +13,5 @@ set(TEST_SOURCES
 foreach(source IN LISTS TEST_SOURCES)
     ladybird_test("${source}" LibGfx LIBS LibGfx)
 endforeach()
+
+ladybird_test(TestYUVData.cpp LibGfx LIBS LibGfx skia)

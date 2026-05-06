@@ -1,8 +1,4 @@
-include(fontconfig)
 include(libweb_generators)
-include(vulkan)
-include(skia)
-include(SDL3)
 
 set(SOURCES
     Animations/Animatable.cpp
@@ -878,6 +874,7 @@ set(SOURCES
     Painting/RadioButtonPaintable.cpp
     Painting/ReplacedElementCommon.cpp
     Painting/ResolvedCSSFilter.cpp
+    Painting/VideoFrameSource.cpp
     Painting/ResizeHandle.cpp
     Painting/Scrollbar.cpp
     Painting/ScrollFrame.cpp

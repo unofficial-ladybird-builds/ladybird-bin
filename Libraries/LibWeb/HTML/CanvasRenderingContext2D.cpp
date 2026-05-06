@@ -12,7 +12,7 @@
 #include <AK/OwnPtr.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/CompositingAndBlendingOperator.h>
-#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/DecodedImageFrame.h>
 #include <LibGfx/PainterSkia.h>
 #include <LibGfx/Rect.h>
 #include <LibJS/Runtime/TypedArray.h>
@@ -143,9 +143,10 @@ WebIDL::ExceptionOr<void> CanvasRenderingContext2D::draw_image_internal(CanvasIm
     if (usability == CanvasImageSourceUsability::Bad)
         return {};
 
-    auto bitmap = canvas_image_source_bitmap(image);
-    if (!bitmap)
+    auto frame = canvas_image_source_frame(image);
+    if (!frame)
         return {};
+    auto const& bitmap = frame->bitmap();
 
     // 4. Establish the source and destination rectangles as follows:
     //    If not specified, the dw and dh arguments must default to the values of sw and sh, interpreted such that one CSS pixel in the image is treated as one unit in the output bitmap's coordinate space.
@@ -178,7 +179,7 @@ WebIDL::ExceptionOr<void> CanvasRenderingContext2D::draw_image_internal(CanvasIm
     auto destination_rect = Gfx::FloatRect { destination_x, destination_y, destination_width, destination_height };
     //    When the source rectangle is outside the source image, the source rectangle must be clipped
     //    to the source image and the destination rectangle must be clipped in the same proportion.
-    auto clipped_source = source_rect.intersected(bitmap->rect().to_type<float>());
+    auto clipped_source = source_rect.intersected(bitmap.rect().to_type<float>());
     auto clipped_destination = destination_rect;
     if (clipped_source != source_rect) {
         clipped_destination.set_width(clipped_destination.width() * (clipped_source.width() / source_rect.width()));
@@ -197,7 +198,7 @@ WebIDL::ExceptionOr<void> CanvasRenderingContext2D::draw_image_internal(CanvasIm
     }
 
     if (auto* painter = this->painter()) {
-        painter->draw_bitmap(destination_rect, *bitmap, source_rect.to_rounded<int>(), scaling_mode, drawing_state().filter, drawing_state().global_alpha, drawing_state().current_compositing_and_blending_operator);
+        painter->draw_bitmap(destination_rect, *frame, source_rect.to_rounded<int>(), scaling_mode, drawing_state().filter, drawing_state().global_alpha, drawing_state().current_compositing_and_blending_operator);
         did_draw(destination_rect);
     }
 
@@ -551,9 +552,10 @@ WebIDL::ExceptionOr<GC::Ptr<ImageData>> CanvasRenderingContext2D::get_image_data
     auto image_data = TRY(ImageData::create(realm(), abs_width, abs_height, settings));
 
     // NOTE: We don't attempt to create the underlying bitmap here; if it doesn't exist, it's like copying only transparent black pixels (which is a no-op).
-    if (!canvas_element().surface())
+    auto surface = canvas_element().surface();
+    if (!surface)
         return image_data;
-    auto const snapshot = Gfx::ImmutableBitmap::create_snapshot_from_painting_surface(*canvas_element().surface());
+    auto const snapshot = Gfx::DecodedImageFrame::create(*surface->snapshot_bitmap());
 
     // 5. Let the source rectangle be the rectangle whose corners are the four points (sx, sy), (sx+sw, sy), (sx+sw, sy+sh), (sx, sy+sh).
     auto source_rect = Gfx::Rect { x, y, abs_width, abs_height };
@@ -570,7 +572,7 @@ WebIDL::ExceptionOr<GC::Ptr<ImageData>> CanvasRenderingContext2D::get_image_data
     // NOTE: Internally we must use premultiplied alpha, but ImageData should hold unpremultiplied alpha. This conversion
     //       might result in a loss of precision, but is according to spec.
     //       See: https://html.spec.whatwg.org/multipage/canvas.html#premultiplied-alpha-and-the-2d-rendering-context
-    VERIFY(snapshot->alpha_type() == Gfx::AlphaType::Premultiplied);
+    VERIFY(snapshot->bitmap().alpha_type() == Gfx::AlphaType::Premultiplied);
     VERIFY(image_data->bitmap().alpha_type() == Gfx::AlphaType::Unpremultiplied);
 
     auto painter = Gfx::Painter::create(image_data->bitmap());
@@ -666,7 +668,7 @@ WebIDL::ExceptionOr<void> CanvasRenderingContext2D::put_pixels_from_an_image_dat
     painter.set_transform({});
     painter.draw_bitmap(
         dst_rect,
-        Gfx::ImmutableBitmap::create(image_data.bitmap(), Gfx::AlphaType::Unpremultiplied),
+        *Gfx::DecodedImageFrame::create(image_data.bitmap(), Gfx::AlphaType::Unpremultiplied),
         Gfx::IntRect { dirty_x, dirty_y, dirty_width, dirty_height },
         Gfx::ScalingMode::NearestNeighbor,
         {},
@@ -893,11 +895,11 @@ WebIDL::ExceptionOr<CanvasImageSourceUsability> check_usability_of_image(CanvasI
                 return WebIDL::InvalidStateError::create(image_element->realm(), "Image element state is broken"_utf16);
 
             // If image is not fully decodable, then return bad.
-            if (!image_element->immutable_bitmap())
+            if (!image_element->current_image_frame())
                 return { CanvasImageSourceUsability::Bad };
 
             // If image has an intrinsic width or intrinsic height (or both) equal to zero, then return bad.
-            if (image_element->immutable_bitmap()->width() == 0 || image_element->immutable_bitmap()->height() == 0)
+            if (image_element->current_image_frame()->width() == 0 || image_element->current_image_frame()->height() == 0)
                 return { CanvasImageSourceUsability::Bad };
             return Optional<CanvasImageSourceUsability> {};
         },
@@ -906,11 +908,11 @@ WebIDL::ExceptionOr<CanvasImageSourceUsability> check_usability_of_image(CanvasI
             // FIXME: If image's current request's state is broken, then throw an "InvalidStateError" DOMException.
 
             // If image is not fully decodable, then return bad.
-            if (!image_element->current_image_bitmap())
+            if (!image_element->current_image_frame())
                 return { CanvasImageSourceUsability::Bad };
 
             // If image has an intrinsic width or intrinsic height (or both) equal to zero, then return bad.
-            if (image_element->current_image_bitmap()->width() == 0 || image_element->current_image_bitmap()->height() == 0)
+            if (image_element->current_image_frame()->width() == 0 || image_element->current_image_frame()->height() == 0)
                 return { CanvasImageSourceUsability::Bad };
             return Optional<CanvasImageSourceUsability> {};
         },

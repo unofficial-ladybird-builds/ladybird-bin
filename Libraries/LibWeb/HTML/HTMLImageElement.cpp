@@ -8,7 +8,7 @@
 #include <LibCore/Timer.h>
 #include <LibGC/Weak.h>
 #include <LibGfx/Bitmap.h>
-#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/DecodedImageFrame.h>
 #include <LibWeb/ARIA/Roles.h>
 #include <LibWeb/Bindings/HTMLImageElement.h>
 #include <LibWeb/CSS/ComputedProperties.h>
@@ -241,15 +241,10 @@ void HTMLImageElement::adjust_computed_style(CSS::ComputedProperties& style)
         style.set_property(CSS::PropertyID::Display, CSS::DisplayStyleValue::create(CSS::Display::from_short(CSS::Display::Short::None)));
 }
 
-RefPtr<Gfx::ImmutableBitmap> HTMLImageElement::immutable_bitmap() const
-{
-    return current_image_bitmap();
-}
-
-RefPtr<Gfx::ImmutableBitmap> HTMLImageElement::default_image_bitmap_sized(Gfx::IntSize size) const
+RefPtr<Gfx::DecodedImageFrame> HTMLImageElement::default_image_frame_sized(Gfx::IntSize size) const
 {
     if (auto data = m_current_request->image_data())
-        return data->bitmap(0, size);
+        return data->frame(0, size);
     return nullptr;
 }
 
@@ -279,10 +274,10 @@ Optional<CSSPixelFraction> HTMLImageElement::intrinsic_aspect_ratio() const
     return {};
 }
 
-RefPtr<Gfx::ImmutableBitmap> HTMLImageElement::current_image_bitmap_sized(Gfx::IntSize size) const
+RefPtr<Gfx::DecodedImageFrame> HTMLImageElement::current_image_frame_sized(Gfx::IntSize size) const
 {
     if (auto data = m_current_request->image_data())
-        return data->bitmap(m_current_frame_index, size);
+        return data->frame(m_current_frame_index, size);
     return nullptr;
 }
 
@@ -308,7 +303,7 @@ WebIDL::UnsignedLong HTMLImageElement::width() const
 
     // ...or else the density-corrected intrinsic width and height of the image, in CSS pixels,
     // if the image has intrinsic dimensions and is available but not being rendered.
-    if (auto bitmap = current_image_bitmap())
+    if (auto bitmap = current_image_frame())
         return bitmap->width();
 
     // ...or else 0, if the image is not available or does not have intrinsic dimensions.
@@ -339,7 +334,7 @@ WebIDL::UnsignedLong HTMLImageElement::height() const
 
     // ...or else the density-corrected intrinsic height and height of the image, in CSS pixels,
     // if the image has intrinsic dimensions and is available but not being rendered.
-    if (auto bitmap = current_image_bitmap())
+    if (auto bitmap = current_image_frame())
         return bitmap->height();
 
     // ...or else 0, if the image is not available or does not have intrinsic dimensions.
@@ -358,7 +353,7 @@ unsigned HTMLImageElement::natural_width() const
 {
     // Return the density-corrected intrinsic width of the image, in CSS pixels,
     // if the image has intrinsic dimensions and is available.
-    if (auto bitmap = current_image_bitmap())
+    if (auto bitmap = current_image_frame())
         return bitmap->width();
 
     // ...or else 0.
@@ -370,7 +365,7 @@ unsigned HTMLImageElement::natural_height() const
 {
     // Return the density-corrected intrinsic height of the image, in CSS pixels,
     // if the image has intrinsic dimensions and is available.
-    if (auto bitmap = current_image_bitmap())
+    if (auto bitmap = current_image_frame())
         return bitmap->height();
 
     // ...or else 0.

@@ -11,7 +11,7 @@ namespace Gfx {
 class Bitmap;
 class CMYKBitmap;
 class ColorSpace;
-class ImmutableBitmap;
+class DecodedImageFrame;
 class Color;
 
 class Emoji;
