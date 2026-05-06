@@ -83,6 +83,7 @@ macro_rules! utf16 {
 pub mod ast;
 pub mod ast_dump;
 pub mod bytecode;
+mod bytecode_cache;
 pub mod fast_hash;
 pub mod lexer;
 pub mod parser;
@@ -96,6 +97,7 @@ pub(crate) fn u32_from_usize(value: usize) -> u32 {
 }
 
 use ast::StatementKind;
+use bytecode::generator::PendingSharedFunctionData;
 use parser::{ParseError, Parser, ProgramType};
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -121,6 +123,7 @@ pub struct ParsedProgram {
     function_table: ast::FunctionTable,
     arena: std::sync::Arc<ast::AstArena>,
     scope_ref: ast::ScopeId,
+    program_type: ast::ProgramType,
     is_strict_mode: bool,
     has_top_level_await: bool,
     errors: Vec<ParseError>,
@@ -130,6 +133,21 @@ pub struct ParsedProgram {
 pub struct CompiledProgram {
     parsed: ParsedProgram,
     bytecode: CompiledProgramBytecode,
+    declaration_functions: Vec<PendingSharedFunctionData>,
+}
+
+pub struct CompiledFunction {
+    precompiled: Box<bytecode::generator::PrecompiledFunction>,
+}
+
+#[repr(C)]
+pub struct BytecodeCacheBlob {
+    data: *mut u8,
+    length: usize,
+}
+
+pub struct DecodedBytecodeCacheBlob {
+    _blob: bytecode_cache::DecodedCacheBlob,
 }
 
 enum CompiledProgramBytecode {
@@ -146,6 +164,10 @@ struct CompiledBytecode {
 // raw VM pointers; it is created on the parse-worker thread and consumed (or
 // freed) on the main thread, never accessed concurrently.
 unsafe impl Send for CompiledProgram {}
+
+// SAFETY: `CompiledFunction` owns GC-free codegen state and is transferred
+// from a compile worker back to the main thread for materialization.
+unsafe impl Send for CompiledFunction {}
 
 // =============================================================================
 // Internal helpers
@@ -327,9 +349,18 @@ unsafe fn create_executable_from_compiled_bytecode(
     }
 }
 
-fn precompile_eager_functions(generator: &mut bytecode::generator::Generator) {
+#[derive(Clone, Copy, PartialEq)]
+enum FunctionPrecompileMode {
+    EagerOnly,
+    All,
+}
+
+fn precompile_functions(generator: &mut bytecode::generator::Generator, mode: FunctionPrecompileMode) {
     for pending in &mut generator.shared_function_data {
-        if !pending.should_eager_compile || pending.precompiled_function.is_some() {
+        if pending.precompiled_function.is_some() {
+            continue;
+        }
+        if matches!(mode, FunctionPrecompileMode::EagerOnly) && !pending.should_eager_compile {
             continue;
         }
 
@@ -352,6 +383,7 @@ fn precompile_eager_functions(generator: &mut bytecode::generator::Generator) {
             generator.source_len,
             generator.builtin_abstract_operations_enabled,
             arena,
+            mode,
         );
 
         pending.function_data = Some(function_data);
@@ -360,6 +392,138 @@ fn precompile_eager_functions(generator: &mut bytecode::generator::Generator) {
         // immediately cleared after the precompiled executable is attached.
         pending.subtable = Some(ast::FunctionTable::new());
         pending.precompiled_function = Some(precompiled);
+    }
+}
+
+fn precompile_declaration_functions(
+    program_type: ast::ProgramType,
+    scope_id: ast::ScopeId,
+    generator: &mut bytecode::generator::Generator,
+    mode: FunctionPrecompileMode,
+) -> Vec<PendingSharedFunctionData> {
+    if mode != FunctionPrecompileMode::All {
+        return Vec::new();
+    }
+
+    match program_type {
+        ast::ProgramType::Script => precompile_script_declaration_functions(scope_id, generator, mode),
+        ast::ProgramType::Module => precompile_module_declaration_functions(scope_id, generator, mode),
+    }
+}
+
+fn precompile_script_declaration_functions(
+    scope_id: ast::ScopeId,
+    generator: &mut bytecode::generator::Generator,
+    mode: FunctionPrecompileMode,
+) -> Vec<PendingSharedFunctionData> {
+    use ast::StatementKind;
+
+    let arena = generator.arena.clone();
+    let scope = &arena.scopes[scope_id];
+    let mut last_position: std::collections::HashMap<ast::StringId, usize> = std::collections::HashMap::new();
+    for (index, child) in scope.children.iter().enumerate() {
+        if let StatementKind::FunctionDeclaration(ref function) = child.inner
+            && let Some(name) = function.name
+        {
+            last_position.insert(arena.identifiers[name].name, index);
+        }
+    }
+
+    let mut declaration_functions = Vec::new();
+    for (index, child) in scope.children.iter().enumerate() {
+        if let StatementKind::FunctionDeclaration(ref function) = child.inner
+            && let Some(name) = function.name
+            && last_position.get(&arena.identifiers[name].name).copied() == Some(index)
+        {
+            declaration_functions.push(precompile_declaration_function(
+                function.function_id,
+                None,
+                generator,
+                mode,
+            ));
+        }
+    }
+
+    declaration_functions
+}
+
+fn precompile_module_declaration_functions(
+    scope_id: ast::ScopeId,
+    generator: &mut bytecode::generator::Generator,
+    mode: FunctionPrecompileMode,
+) -> Vec<PendingSharedFunctionData> {
+    use ast::StatementKind;
+
+    let arena = generator.arena.clone();
+    let scope = &arena.scopes[scope_id];
+    let default_name: ast::Utf16String = utf16!("*default*").into();
+    let mut declaration_functions = Vec::new();
+    for child in &scope.children {
+        let (declaration, is_exported) = match &child.inner {
+            StatementKind::Export(export_data) => {
+                if let Some(ref statement) = export_data.statement {
+                    (&statement.inner, true)
+                } else {
+                    continue;
+                }
+            }
+            other => (other, false),
+        };
+
+        if let StatementKind::FunctionDeclaration(function) = declaration {
+            let is_default = is_exported
+                && function
+                    .name
+                    .is_some_and(|name| arena.name_slice(name) == default_name.as_slice());
+            let name_override = if is_default {
+                Some(utf16!("default").into())
+            } else {
+                None
+            };
+            declaration_functions.push(precompile_declaration_function(
+                function.function_id,
+                name_override,
+                generator,
+                mode,
+            ));
+        }
+    }
+
+    declaration_functions
+}
+
+fn precompile_declaration_function(
+    function_id: ast::FunctionId,
+    name_override: Option<ast::Utf16String>,
+    generator: &mut bytecode::generator::Generator,
+    mode: FunctionPrecompileMode,
+) -> PendingSharedFunctionData {
+    let function_data = generator.function_table.take(function_id);
+    let arena = generator.arena.clone();
+    let subtable = generator
+        .function_table
+        .extract_reachable(&function_data, &arena.scopes);
+    let payload = ast::FunctionPayload {
+        data: *function_data,
+        function_table: subtable,
+        arena: arena.clone(),
+    };
+    let (function_data, precompiled_function) = compile_function_payload_to_bytecode(
+        payload,
+        generator.source_len,
+        generator.builtin_abstract_operations_enabled,
+        arena.clone(),
+        mode,
+    );
+
+    PendingSharedFunctionData {
+        function_data: Some(function_data),
+        subtable: Some(ast::FunctionTable::new()),
+        arena: Some(arena),
+        name_override,
+        class_field_initializer_name: None,
+        should_eager_compile: false,
+        precompiled_function: Some(precompiled_function),
     }
 }
 
@@ -531,6 +695,7 @@ pub unsafe extern "C" fn rust_parse_program(
                 function_table: std::mem::take(&mut parser.function_table),
                 arena: std::sync::Arc::new(std::mem::take(&mut parser.arena)),
                 scope_ref,
+                program_type: pt,
                 is_strict_mode: is_strict,
                 has_top_level_await: has_tla,
                 errors,
@@ -585,6 +750,68 @@ pub unsafe extern "C" fn rust_free_parsed_program(parsed: *mut ParsedProgram) {
     }
 }
 
+fn compile_parsed_program_off_thread_impl(
+    parsed: *mut ParsedProgram,
+    source_len: usize,
+    function_precompile_mode: FunctionPrecompileMode,
+) -> *mut CompiledProgram {
+    unsafe {
+        abort_on_panic(|| {
+            if parsed.is_null() {
+                return std::ptr::null_mut();
+            }
+
+            let mut parsed = Box::from_raw(parsed);
+            let arena_arc = parsed.arena.clone();
+            let (bytecode, declaration_functions) = if parsed.has_top_level_await {
+                let mut generator = new_module_async_generator(source_len, std::mem::take(&mut parsed.function_table));
+                generator.arena = arena_arc;
+                generator.eager_compile_direct_iifes = true;
+                let assembled = compile_module_as_async_to_bytecode(&parsed.program, parsed.scope_ref, &mut generator);
+                let declaration_functions = precompile_declaration_functions(
+                    parsed.program_type,
+                    parsed.scope_ref,
+                    &mut generator,
+                    function_precompile_mode,
+                );
+                precompile_functions(&mut generator, function_precompile_mode);
+                (
+                    CompiledProgramBytecode::AsyncModule(CompiledBytecode { generator, assembled }),
+                    declaration_functions,
+                )
+            } else {
+                let mut generator = new_program_generator(
+                    parsed.is_strict_mode,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    source_len,
+                );
+                generator.arena = arena_arc;
+                generator.eager_compile_direct_iifes = true;
+                generator.function_table = std::mem::take(&mut parsed.function_table);
+                let assembled = compile_program_body_to_bytecode(&mut generator, &parsed.program, parsed.scope_ref);
+                let declaration_functions = precompile_declaration_functions(
+                    parsed.program_type,
+                    parsed.scope_ref,
+                    &mut generator,
+                    function_precompile_mode,
+                );
+                precompile_functions(&mut generator, function_precompile_mode);
+                (
+                    CompiledProgramBytecode::Program(CompiledBytecode { generator, assembled }),
+                    declaration_functions,
+                )
+            };
+
+            Box::into_raw(Box::new(CompiledProgram {
+                parsed: *parsed,
+                bytecode,
+                declaration_functions,
+            }))
+        })
+    }
+}
+
 /// Compile a parsed program to an off-thread bytecode artifact.
 ///
 /// Consumes and frees the ParsedProgram. The returned CompiledProgram still needs to be materialized on the main thread
@@ -597,42 +824,22 @@ pub unsafe extern "C" fn rust_compile_parsed_program_off_thread(
     parsed: *mut ParsedProgram,
     source_len: usize,
 ) -> *mut CompiledProgram {
-    unsafe {
-        abort_on_panic(|| {
-            if parsed.is_null() {
-                return std::ptr::null_mut();
-            }
+    compile_parsed_program_off_thread_impl(parsed, source_len, FunctionPrecompileMode::EagerOnly)
+}
 
-            let mut parsed = Box::from_raw(parsed);
-            let arena_arc = parsed.arena.clone();
-            let bytecode = if parsed.has_top_level_await {
-                let mut generator = new_module_async_generator(source_len, std::mem::take(&mut parsed.function_table));
-                generator.arena = arena_arc;
-                generator.eager_compile_direct_iifes = true;
-                let assembled = compile_module_as_async_to_bytecode(&parsed.program, parsed.scope_ref, &mut generator);
-                precompile_eager_functions(&mut generator);
-                CompiledProgramBytecode::AsyncModule(CompiledBytecode { generator, assembled })
-            } else {
-                let mut generator = new_program_generator(
-                    parsed.is_strict_mode,
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                    source_len,
-                );
-                generator.arena = arena_arc;
-                generator.eager_compile_direct_iifes = true;
-                generator.function_table = std::mem::take(&mut parsed.function_table);
-                let assembled = compile_program_body_to_bytecode(&mut generator, &parsed.program, parsed.scope_ref);
-                precompile_eager_functions(&mut generator);
-                CompiledProgramBytecode::Program(CompiledBytecode { generator, assembled })
-            };
-
-            Box::into_raw(Box::new(CompiledProgram {
-                parsed: *parsed,
-                bytecode,
-            }))
-        })
-    }
+/// Fully compile a parsed program to an off-thread bytecode artifact for persistence.
+///
+/// This is intended for post-handoff cache generation, not the latency-sensitive
+/// path that produces bytecode for immediate execution.
+///
+/// # Safety
+/// - `parsed` must be a valid pointer from `rust_parse_program()` with no errors.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_compile_parsed_program_fully_off_thread(
+    parsed: *mut ParsedProgram,
+    source_len: usize,
+) -> *mut CompiledProgram {
+    compile_parsed_program_off_thread_impl(parsed, source_len, FunctionPrecompileMode::All)
 }
 
 /// Free a CompiledProgram without materializing it.
@@ -643,6 +850,178 @@ pub unsafe extern "C" fn rust_compile_parsed_program_off_thread(
 pub unsafe extern "C" fn rust_free_compiled_program(compiled: *mut CompiledProgram) {
     unsafe {
         drop(Box::from_raw(compiled));
+    }
+}
+
+/// Serialize a fully compiled program into a versioned bytecode cache blob.
+///
+/// The caller owns the returned bytes and must release them with
+/// `rust_free_bytecode_cache_blob()`.
+///
+/// # Safety
+/// `compiled` must be a valid pointer from `rust_compile_parsed_program_fully_off_thread()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_serialize_compiled_program_for_bytecode_cache(
+    compiled: *const CompiledProgram,
+    program_type: u8,
+    source_hash: *const u8,
+    source_hash_len: usize,
+) -> BytecodeCacheBlob {
+    unsafe {
+        abort_on_panic(|| {
+            if compiled.is_null() || source_hash.is_null() || source_hash_len != 32 {
+                return BytecodeCacheBlob {
+                    data: std::ptr::null_mut(),
+                    length: 0,
+                };
+            }
+
+            let program_type = match program_type {
+                0 => ast::ProgramType::Script,
+                1 => ast::ProgramType::Module,
+                _ => {
+                    return BytecodeCacheBlob {
+                        data: std::ptr::null_mut(),
+                        length: 0,
+                    };
+                }
+            };
+
+            let source_hash = std::slice::from_raw_parts(source_hash, source_hash_len)
+                .try_into()
+                .expect("source hash length was checked");
+            let bytes = bytecode_cache::serialize_compiled_program(&*compiled, program_type, source_hash);
+            let length = bytes.len();
+            let mut bytes = bytes.into_boxed_slice();
+            let data = bytes.as_mut_ptr();
+            std::mem::forget(bytes);
+            BytecodeCacheBlob { data, length }
+        })
+    }
+}
+
+/// Free a bytecode cache blob returned by `rust_serialize_compiled_program_for_bytecode_cache()`.
+///
+/// # Safety
+/// `data` and `length` must match a blob returned by Rust.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_free_bytecode_cache_blob(data: *mut u8, length: usize) {
+    unsafe {
+        abort_on_panic(|| {
+            if !data.is_null() {
+                drop(Vec::from_raw_parts(data, length, length));
+            }
+        });
+    }
+}
+
+/// Decode a bytecode cache blob into an owned parser-free cache handle.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_decode_bytecode_cache_blob(
+    data: *const u8,
+    length: usize,
+    expected_program_type: u8,
+    expected_source_hash: *const u8,
+    expected_source_hash_len: usize,
+) -> *mut DecodedBytecodeCacheBlob {
+    unsafe {
+        abort_on_panic(|| {
+            if data.is_null() || expected_source_hash.is_null() || expected_source_hash_len != 32 {
+                return std::ptr::null_mut();
+            }
+            let expected_program_type = match expected_program_type {
+                0 => ast::ProgramType::Script,
+                1 => ast::ProgramType::Module,
+                _ => return std::ptr::null_mut(),
+            };
+            let expected_source_hash = std::slice::from_raw_parts(expected_source_hash, expected_source_hash_len)
+                .try_into()
+                .expect("source hash length was checked");
+            let Some(blob) = bytecode_cache::decode_blob(
+                std::slice::from_raw_parts(data, length),
+                expected_program_type,
+                expected_source_hash,
+            ) else {
+                return std::ptr::null_mut();
+            };
+            Box::into_raw(Box::new(DecodedBytecodeCacheBlob { _blob: blob }))
+        })
+    }
+}
+
+/// Free a decoded bytecode cache blob.
+///
+/// # Safety
+/// `blob` must be a valid pointer from `rust_decode_bytecode_cache_blob()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_free_decoded_bytecode_cache_blob(blob: *mut DecodedBytecodeCacheBlob) {
+    unsafe {
+        drop(Box::from_raw(blob));
+    }
+}
+
+/// Materialize a decoded script bytecode cache blob. Consumes and frees the blob.
+///
+/// # Safety
+/// - `blob` must be a valid pointer from `rust_decode_bytecode_cache_blob()`.
+/// - `vm_ptr` must be a valid `JS::VM*`.
+/// - `source_code_ptr` must be a valid `JS::SourceCode const*`.
+/// - `gdi_context` must be a valid pointer to a C++ ScriptGdiBuilder.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_materialize_bytecode_cache_script(
+    blob: *mut DecodedBytecodeCacheBlob,
+    vm_ptr: *mut c_void,
+    source_code_ptr: *const c_void,
+    source_len: usize,
+    gdi_context: *mut c_void,
+) -> *mut c_void {
+    unsafe {
+        abort_on_panic(|| {
+            if blob.is_null() {
+                return std::ptr::null_mut();
+            }
+            let blob = Box::from_raw(blob);
+            if !blob._blob.source_ranges_are_valid(source_len) {
+                return std::ptr::null_mut();
+            }
+            blob._blob.materialize_script(vm_ptr, source_code_ptr, gdi_context)
+        })
+    }
+}
+
+/// Materialize a decoded module bytecode cache blob. Consumes and frees the blob.
+///
+/// # Safety
+/// - `blob` must be a valid pointer from `rust_decode_bytecode_cache_blob()`.
+/// - `vm_ptr` must be a valid `JS::VM*`.
+/// - `source_code_ptr` must be a valid `JS::SourceCode const*`.
+/// - `module_context` must be a valid `ModuleBuilder*`.
+/// - `callbacks` must point to a valid `ModuleCallbacks`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_materialize_bytecode_cache_module(
+    blob: *mut DecodedBytecodeCacheBlob,
+    vm_ptr: *mut c_void,
+    source_code_ptr: *const c_void,
+    source_len: usize,
+    module_context: *mut c_void,
+    callbacks: *const ModuleCallbacks,
+    tla_executable_out: *mut *mut c_void,
+) -> *mut c_void {
+    unsafe {
+        abort_on_panic(|| {
+            if blob.is_null() {
+                return std::ptr::null_mut();
+            }
+            let blob = Box::from_raw(blob);
+            if !blob._blob.source_ranges_are_valid(source_len) {
+                return std::ptr::null_mut();
+            }
+            blob._blob
+                .materialize_module(vm_ptr, source_code_ptr, module_context, callbacks, tla_executable_out)
+        })
     }
 }
 
@@ -2270,6 +2649,26 @@ pub unsafe extern "C" fn rust_free_function_ast(ast: *mut c_void) {
     }
 }
 
+/// Clone a lazy function compilation payload.
+///
+/// The clone lets background compilation race with synchronous lazy
+/// compilation. Each path owns and eventually frees its own AST payload.
+///
+/// # Safety
+/// `ast` must be null or a valid pointer returned by `Box::into_raw(Box<FunctionPayload>)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_clone_function_ast(ast: *const c_void) -> *mut c_void {
+    unsafe {
+        abort_on_panic(|| {
+            if ast.is_null() {
+                return std::ptr::null_mut();
+            }
+            let payload = &*(ast as *const ast::FunctionPayload);
+            Box::into_raw(Box::new(payload.clone())) as *mut c_void
+        })
+    }
+}
+
 /// Free a string allocated by Rust (e.g. AST dump output).
 ///
 /// # Safety
@@ -2313,8 +2712,13 @@ pub unsafe extern "C" fn rust_compile_function(
             }
             let payload = Box::from_raw(rust_function_ast as *mut ast::FunctionPayload);
             let arena = payload.arena.clone();
-            let (_function_data, mut precompiled) =
-                compile_function_payload_to_bytecode(*payload, source_len, builtin_abstract_operations_enabled, arena);
+            let (_function_data, mut precompiled) = compile_function_payload_to_bytecode(
+                *payload,
+                source_len,
+                builtin_abstract_operations_enabled,
+                arena,
+                FunctionPrecompileMode::EagerOnly,
+            );
 
             precompiled.generator.vm_ptr = vm_ptr;
             precompiled.generator.source_code_ptr = source_code_ptr;
@@ -2331,11 +2735,105 @@ pub unsafe extern "C" fn rust_compile_function(
     }
 }
 
+/// Compile a function payload to a GC-free bytecode artifact.
+///
+/// Takes ownership of the cloned `Box<FunctionPayload>`. The result must be
+/// materialized on the main thread or freed with `rust_free_compiled_function`.
+///
+/// # Safety
+/// `rust_function_ast` must be a valid `Box<FunctionPayload>` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_compile_function_off_thread(
+    rust_function_ast: *mut c_void,
+    source_len: usize,
+    builtin_abstract_operations_enabled: bool,
+) -> *mut CompiledFunction {
+    unsafe {
+        abort_on_panic(|| {
+            if rust_function_ast.is_null() {
+                return std::ptr::null_mut();
+            }
+            let payload = Box::from_raw(rust_function_ast as *mut ast::FunctionPayload);
+            let arena = payload.arena.clone();
+            let (_function_data, precompiled) = compile_function_payload_to_bytecode(
+                *payload,
+                source_len,
+                builtin_abstract_operations_enabled,
+                arena,
+                FunctionPrecompileMode::All,
+            );
+            Box::into_raw(Box::new(CompiledFunction { precompiled }))
+        })
+    }
+}
+
+/// Materialize a GC-free compiled function onto an existing SFD.
+///
+/// Consumes and frees the compiled function.
+///
+/// # Safety
+/// - `compiled` must be a valid pointer returned by `rust_compile_function_off_thread`.
+/// - `vm_ptr`, `source_code_ptr`, and `sfd_ptr` must be valid main-thread pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_materialize_compiled_function(
+    compiled: *mut CompiledFunction,
+    vm_ptr: *mut c_void,
+    source_code_ptr: *const c_void,
+    sfd_ptr: *mut c_void,
+) {
+    unsafe {
+        abort_on_panic(|| {
+            if compiled.is_null() {
+                return;
+            }
+            let mut compiled = Box::from_raw(compiled);
+            compiled.precompiled.generator.vm_ptr = vm_ptr;
+            compiled.precompiled.generator.source_code_ptr = source_code_ptr;
+            let executable_ptr = bytecode::ffi::create_executable(
+                &mut compiled.precompiled.generator,
+                &compiled.precompiled.assembled,
+                vm_ptr,
+                source_code_ptr,
+            );
+            assert!(
+                !executable_ptr.is_null(),
+                "rust_materialize_compiled_function: executable materialization failed"
+            );
+            bytecode::ffi::rust_sfd_set_precompiled_executable(
+                sfd_ptr,
+                executable_ptr,
+                compiled.precompiled.metadata.uses_this,
+                compiled.precompiled.metadata.this_value_needs_environment_resolution,
+                compiled.precompiled.metadata.function_environment_needed,
+                compiled.precompiled.metadata.function_environment_bindings_count,
+                compiled.precompiled.metadata.might_need_arguments,
+                compiled.precompiled.metadata.contains_eval,
+            );
+        });
+    }
+}
+
+/// Free a GC-free compiled function without materializing it.
+///
+/// # Safety
+/// `compiled` must be null or a valid pointer returned by `rust_compile_function_off_thread`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rust_free_compiled_function(compiled: *mut CompiledFunction) {
+    unsafe {
+        abort_on_panic(|| {
+            if !compiled.is_null() {
+                drop(Box::from_raw(compiled));
+            }
+        });
+    }
+}
+
 fn compile_function_payload_to_bytecode(
     payload: ast::FunctionPayload,
     source_len: usize,
     builtin_abstract_operations_enabled: bool,
     arena: std::sync::Arc<ast::AstArena>,
+    precompile_mode: FunctionPrecompileMode,
 ) -> (Box<ast::FunctionData>, Box<bytecode::generator::PrecompiledFunction>) {
     let function_data = Box::new(payload.data);
 
@@ -2426,6 +2924,8 @@ fn compile_function_payload_to_bytecode(
     if generator.is_in_generator_or_async_function() {
         generator.terminate_unterminated_blocks_with_yield();
     }
+
+    precompile_functions(&mut generator, precompile_mode);
 
     let assembled = generator.assemble();
 

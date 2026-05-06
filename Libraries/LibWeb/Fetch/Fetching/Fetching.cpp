@@ -229,6 +229,14 @@ GC::Ref<Infrastructure::FetchController> fetch(JS::Realm& realm, Infrastructure:
         //    response: set fetchParams’s preloaded response candidate to response.
         auto on_preloaded_response_available = GC::create_function(realm.heap(), [fetch_params](GC::Ref<Infrastructure::Response> response) {
             fetch_params->set_preloaded_response_candidate(response);
+
+            // NB: main fetch may already be parked on this preload result.
+            // Resolve that waiter here instead of spinning the event loop.
+            auto controller = fetch_params->controller();
+            if (auto pending_preloaded_response = controller->pending_preloaded_response()) {
+                controller->set_pending_preloaded_response(nullptr);
+                pending_preloaded_response->resolve(response);
+            }
         });
 
         // 3. Let foundPreloadedResource be the result of invoking consume a preloaded resource for request’s
@@ -456,10 +464,22 @@ GC::Ptr<PendingResponse> main_fetch(JS::Realm& realm, Infrastructure::FetchParam
 
         // -> fetchParams’s preloaded response candidate is not null
         if (!fetch_params.preloaded_response_candidate().has<Empty>()) {
-            // 1. Wait until fetchParams’s preloaded response candidate is not "pending".
-            HTML::main_thread_event_loop().spin_until(GC::create_function(vm.heap(), [&] {
-                return !fetch_params.preloaded_response_candidate().has<Infrastructure::FetchParams::PreloadedResponseCandidatePendingTag>();
-            }));
+            // 1. Wait until fetchParams's preloaded response candidate is not "pending".
+            if (fetch_params.preloaded_response_candidate().has<Infrastructure::FetchParams::PreloadedResponseCandidatePendingTag>()) {
+                // NB: The spec says to wait here. Spinning the main-thread event
+                // loop strands the queued preload callback behind nested work,
+                // so we park a PendingResponse and let that callback resolve it.
+                auto controller = fetch_params.controller();
+
+                // NB: Reuse the parked response if this branch is re-entered
+                // before the preload callback runs.
+                if (auto pending_preloaded_response = controller->pending_preloaded_response())
+                    return *pending_preloaded_response;
+
+                auto pending_preloaded_response = PendingResponse::create(vm, request);
+                controller->set_pending_preloaded_response(pending_preloaded_response);
+                return pending_preloaded_response;
+            }
 
             // 2. Assert: fetchParams’s preloaded response candidate is a response.
             VERIFY(fetch_params.preloaded_response_candidate().has<GC::Ref<Infrastructure::Response>>());
@@ -2167,7 +2187,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
     stream->set_up_with_byte_reading_support(pull_algorithm, cancel_algorithm);
 
-    auto on_headers_received = GC::create_function(vm.heap(), [&vm, pending_response, stream, request, fetched_data_receiver](HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase) {
+    auto on_headers_received = GC::create_function(vm.heap(), [&vm, pending_response, stream, request, fetched_data_receiver](HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::AnonymousBuffer> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key) {
         if (pending_response->is_resolved()) {
             // RequestServer will send us the response headers twice, the second time being for HTTP trailers. This
             // fetch algorithm is not interested in trailers, so just drop them here.
@@ -2179,6 +2199,8 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
 
         if (reason_phrase.has_value())
             response->set_status_message(reason_phrase->to_byte_string());
+        response->set_javascript_bytecode_cache(move(javascript_bytecode));
+        response->set_javascript_bytecode_cache_vary_key(javascript_bytecode_cache_vary_key);
 
         (void)request;
         if constexpr (WEB_FETCH_DEBUG) {

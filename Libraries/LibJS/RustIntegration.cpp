@@ -6,6 +6,7 @@
 
 #include <LibJS/RustIntegration.h>
 
+#include <AK/TemporaryChange.h>
 #include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
 #include <AK/kmalloc.h>
@@ -37,6 +38,11 @@ using namespace JS::FFI;
 namespace JS::RustIntegration {
 
 // --- Shared helpers ---
+
+// Bytecode cache materialization rebuilds executables from disk, which is untrusted input. Materialization paths flip
+// this flag for the duration of their work so that the in-process bytecode validator runs even in release builds; the
+// normal Rust pipeline path leaves it off and keeps the existing debug/sanitizer-only behavior.
+static thread_local bool s_validate_materialized_bytecode_cache_executables = false;
 
 static Utf16View utf16_view_from_bytes(uint16_t const* data, size_t len)
 {
@@ -366,6 +372,11 @@ CompiledProgram* compile_parsed_program_off_thread(ParsedProgram* parsed, size_t
     return rust_compile_parsed_program_off_thread(parsed, length_in_code_units);
 }
 
+CompiledProgram* compile_parsed_program_fully_off_thread(ParsedProgram* parsed, size_t length_in_code_units)
+{
+    return rust_compile_parsed_program_fully_off_thread(parsed, length_in_code_units);
+}
+
 bool parsed_program_has_errors(ParsedProgram const* parsed)
 {
     return rust_parsed_program_has_errors(const_cast<ParsedProgram*>(parsed));
@@ -379,6 +390,27 @@ void free_parsed_program(ParsedProgram* parsed)
 void free_compiled_program(CompiledProgram* compiled)
 {
     rust_free_compiled_program(compiled);
+}
+
+ByteBuffer serialize_compiled_program_for_bytecode_cache(CompiledProgram const& compiled, ProgramType type, ReadonlyBytes source_hash)
+{
+    auto blob = rust_serialize_compiled_program_for_bytecode_cache(&compiled, static_cast<u8>(type), source_hash.data(), source_hash.size());
+    if (!blob.data || blob.length == 0)
+        return {};
+
+    auto bytes = ByteBuffer::copy({ blob.data, blob.length }).release_value_but_fixme_should_propagate_errors();
+    rust_free_bytecode_cache_blob(blob.data, blob.length);
+    return bytes;
+}
+
+DecodedBytecodeCacheBlob* decode_bytecode_cache_blob(ReadonlyBytes bytes, ProgramType expected_type, ReadonlyBytes source_hash)
+{
+    return rust_decode_bytecode_cache_blob(bytes.data(), bytes.size(), static_cast<u8>(expected_type), source_hash.data(), source_hash.size());
+}
+
+void free_decoded_bytecode_cache_blob(DecodedBytecodeCacheBlob* blob)
+{
+    rust_free_decoded_bytecode_cache_blob(blob);
 }
 
 Optional<Result<ScriptResult, Vector<ParserError>>> compile_parsed_script(ParsedProgram* parsed, NonnullRefPtr<SourceCode const> source_code, Realm& realm)
@@ -419,6 +451,24 @@ Optional<Result<ScriptResult, Vector<ParserError>>> materialize_compiled_script(
 
     if (!exec_ptr)
         return Vector<ParserError> {};
+
+    builder.result.executable = static_cast<Bytecode::Executable*>(exec_ptr);
+    return builder.result;
+}
+
+Optional<Result<ScriptResult, Vector<ParserError>>> materialize_bytecode_cache_script(DecodedBytecodeCacheBlob* blob, NonnullRefPtr<SourceCode const> source_code, Realm& realm)
+{
+    if (!blob)
+        return {};
+
+    GC::DeferGC defer_gc(realm.vm().heap());
+    TemporaryChange validate_cache_executables { s_validate_materialized_bytecode_cache_executables, true };
+    ScriptGdiBuilder builder;
+
+    void* exec_ptr = rust_materialize_bytecode_cache_script(blob, &realm.vm(), source_code.ptr(), source_code->length_in_code_units(), &builder);
+
+    if (!exec_ptr)
+        return Vector<ParserError> { ParserError { "Failed to materialize bytecode cache"_string, {} } };
 
     builder.result.executable = static_cast<Bytecode::Executable*>(exec_ptr);
     return builder.result;
@@ -580,6 +630,56 @@ Optional<Result<ModuleResult, Vector<ParserError>>> materialize_compiled_module(
     return builder.result;
 }
 
+Optional<Result<ModuleResult, Vector<ParserError>>> materialize_bytecode_cache_module(DecodedBytecodeCacheBlob* blob, NonnullRefPtr<SourceCode const> source_code, Realm& realm)
+{
+    if (!blob)
+        return {};
+
+    GC::DeferGC defer_gc(realm.vm().heap());
+    TemporaryChange validate_cache_executables { s_validate_materialized_bytecode_cache_executables, true };
+    ModuleBuilder builder;
+    ModuleCallbacks callbacks {
+        .set_has_top_level_await = module_set_has_top_level_await,
+        .push_import_entry = module_push_import_entry,
+        .push_local_export = module_push_local_export,
+        .push_indirect_export = module_push_indirect_export,
+        .push_star_export = module_push_star_export,
+        .push_requested_module = module_push_requested_module,
+        .set_default_export_binding = module_set_default_export_binding,
+        .push_var_name = module_push_var_name,
+        .push_function = module_push_function,
+        .push_lexical_binding = module_push_lexical_binding,
+    };
+
+    void* tla_executable = nullptr;
+
+    void* exec_ptr = rust_materialize_bytecode_cache_module(blob, &realm.vm(), source_code.ptr(), source_code->length_in_code_units(),
+        &builder, &callbacks, &tla_executable);
+
+    if (!exec_ptr && !tla_executable)
+        return Vector<ParserError> { ParserError { "Failed to materialize bytecode cache"_string, {} } };
+
+    if (tla_executable) {
+        auto& vm = realm.vm();
+        auto* tla_exec = static_cast<Bytecode::Executable*>(tla_executable);
+
+        builder.result.tla_shared_data = vm.heap().allocate<SharedFunctionInstanceData>(
+            vm, FunctionKind::Async,
+            "module code with top-level await"_utf16_fly_string,
+            0, 0, true, false, true,
+            Vector<Utf16FlyString> {}, nullptr);
+        builder.result.tla_shared_data->m_is_module_wrapper = true;
+        builder.result.tla_shared_data->m_uses_this = true;
+        builder.result.tla_shared_data->m_function_environment_needed = true;
+        builder.result.tla_shared_data->update_asm_call_metadata();
+        builder.result.tla_shared_data->set_executable(tla_exec);
+    } else {
+        builder.result.executable = static_cast<Bytecode::Executable*>(exec_ptr);
+    }
+
+    return builder.result;
+}
+
 Optional<Result<ModuleResult, Vector<ParserError>>> compile_module(StringView source_text, Realm& realm, StringView filename)
 {
     auto source_code = SourceCode::create(String::from_utf8(filename).release_value_but_fixme_should_propagate_errors(), Utf16String::from_utf8(source_text));
@@ -680,6 +780,27 @@ GC::Ptr<Bytecode::Executable> compile_function(VM& vm, SharedFunctionInstanceDat
     shared_data.m_rust_function_ast = nullptr;
 
     return exec;
+}
+
+void* clone_function_ast(void const* ast)
+{
+    return rust_clone_function_ast(ast);
+}
+
+CompiledFunction* compile_function_off_thread(void* function_ast, size_t length_in_code_units, bool builtin_abstract_operations_enabled)
+{
+    return rust_compile_function_off_thread(function_ast, length_in_code_units, builtin_abstract_operations_enabled);
+}
+
+void materialize_compiled_function(CompiledFunction* compiled, VM& vm, SourceCode const& source_code, SharedFunctionInstanceData& shared_data)
+{
+    GC::DeferGC defer_gc(vm.heap());
+    rust_materialize_compiled_function(compiled, &vm, &source_code, &shared_data);
+}
+
+void free_compiled_function(CompiledFunction* compiled)
+{
+    rust_free_compiled_function(compiled);
 }
 
 void free_function_ast(void* ast)
@@ -940,10 +1061,23 @@ extern "C" void* rust_create_executable(
         delete bp;
     }
 
+    auto const is_materializing_bytecode_cache = JS::RustIntegration::s_validate_materialized_bytecode_cache_executables;
 #if !defined(NDEBUG) || defined(HAS_ADDRESS_SANITIZER)
-    if (auto validation = JS::Bytecode::validate_bytecode(*executable, JS::Bytecode::CacheState::BeforeFixup); validation.is_error())
-        VERIFY_NOT_REACHED();
+    auto const should_validate_bytecode = true;
+#else
+    auto const should_validate_bytecode = is_materializing_bytecode_cache;
 #endif
+    if (should_validate_bytecode) {
+        if (auto validation = JS::Bytecode::validate_bytecode(*executable, JS::Bytecode::CacheState::BeforeFixup); validation.is_error()) {
+            if (is_materializing_bytecode_cache)
+                return nullptr;
+#if !defined(NDEBUG) || defined(HAS_ADDRESS_SANITIZER)
+            VERIFY_NOT_REACHED();
+#else
+            return nullptr;
+#endif
+        }
+    }
 
     executable->fixup_cache_pointers();
 

@@ -7,7 +7,9 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <LibCore/AnonymousBuffer.h>
 #include <LibHTTP/Cache/CacheMode.h>
+#include <LibHTTP/Cache/Utilities.h>
 #include <LibHTTP/Cookie/IncludeCredentials.h>
 #include <LibHTTP/HeaderList.h>
 #include <LibIPC/ConnectionToServer.h>
@@ -42,6 +44,8 @@ public:
     RefPtr<WebSocket> websocket_connect(URL::URL const&, ByteString const& origin, Vector<ByteString> const& protocols, Vector<ByteString> const& extensions, HTTP::HeaderList const& request_headers);
 
     NonnullRefPtr<Core::Promise<CacheSizes>> estimate_cache_size_accessed_since(UnixDateTime since);
+    ErrorOr<bool> store_cache_associated_data(URL::URL const&, ByteString const& method, Optional<HTTP::HeaderList const&> request_headers, Optional<u64> vary_key, HTTP::CacheEntryAssociatedData, ReadonlyBytes);
+    ErrorOr<Optional<Core::AnonymousBuffer>> retrieve_cache_associated_data(URL::URL const&, ByteString const& method, Optional<HTTP::HeaderList const&> request_headers, Optional<u64> vary_key, HTTP::CacheEntryAssociatedData);
 
     Function<String(URL::URL const&)> on_retrieve_http_cookie;
     Function<void()> on_request_server_died;
@@ -51,7 +55,7 @@ private:
 
     virtual void request_started(u64 request_id, IPC::File) override;
     virtual void request_finished(u64 request_id, u64, RequestTimingInfo, Optional<NetworkError>) override;
-    virtual void headers_became_available(u64 request_id, Vector<HTTP::Header>, Optional<u32>, Optional<String>) override;
+    virtual void headers_became_available(u64 request_id, Vector<HTTP::Header>, Optional<u32>, Optional<String>, Optional<Core::AnonymousBuffer>, Optional<u64>) override;
 
     virtual void retrieve_http_cookie(int client_id, u64 request_id, RequestServer::RequestType request_type, URL::URL url) override;
 
