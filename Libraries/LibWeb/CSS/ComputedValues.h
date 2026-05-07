@@ -269,6 +269,7 @@ public:
     static UserSelect user_select() { return UserSelect::Auto; }
     static Isolation isolation() { return Isolation::Auto; }
     static Containment contain() { return {}; }
+    static Vector<FlyString> container_name() { return {}; }
     static ContainerType container_type() { return {}; }
     static MixBlendMode mix_blend_mode() { return MixBlendMode::Normal; }
     static Optional<int> z_index() { return OptionalNone(); }
@@ -656,6 +657,7 @@ public:
     UserSelect user_select() const { return m_noninherited.user_select; }
     Isolation isolation() const { return m_noninherited.isolation; }
     Containment const& contain() const { return m_noninherited.contain; }
+    Vector<FlyString> const& container_name() const { return m_noninherited.container_name; }
     ContainerType const& container_type() const { return m_noninherited.container_type; }
     MixBlendMode mix_blend_mode() const { return m_noninherited.mix_blend_mode; }
     Optional<FlyString> view_transition_name() const { return m_noninherited.view_transition_name; }
@@ -927,6 +929,7 @@ protected:
         UserSelect user_select { InitialValues::user_select() };
         Isolation isolation { InitialValues::isolation() };
         Containment contain { InitialValues::contain() };
+        Vector<FlyString> container_name { InitialValues::container_name() };
         ContainerType container_type { InitialValues::container_type() };
         MixBlendMode mix_blend_mode { InitialValues::mix_blend_mode() };
         WhiteSpaceTrimData white_space_trim;
@@ -1147,6 +1150,7 @@ public:
     void set_user_select(UserSelect value) { m_noninherited.user_select = value; }
     void set_isolation(Isolation value) { m_noninherited.isolation = value; }
     void set_contain(Containment value) { m_noninherited.contain = move(value); }
+    void set_container_name(Vector<FlyString> value) { m_noninherited.container_name = move(value); }
     void set_container_type(ContainerType value) { m_noninherited.container_type = move(value); }
     void set_mix_blend_mode(MixBlendMode value) { m_noninherited.mix_blend_mode = value; }
     void set_view_transition_name(Optional<FlyString> value) { m_noninherited.view_transition_name = move(value); }
