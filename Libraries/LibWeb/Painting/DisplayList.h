@@ -8,28 +8,76 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <AK/HashMap.h>
 #include <AK/NonnullRefPtr.h>
-#include <AK/SegmentedVector.h>
+#include <AK/Span.h>
+#include <AK/Vector.h>
 #include <LibGfx/Color.h>
+#include <LibGfx/DecodedImageFrame.h>
+#include <LibGfx/Filter.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/PaintStyle.h>
+#include <LibGfx/TextLayout.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Painting/AccumulatedVisualContext.h>
 #include <LibWeb/Painting/DisplayListCommand.h>
+#include <LibWeb/Painting/DisplayListResourceStorage.h>
+#include <LibWeb/Painting/ExternalContentSource.h>
+#include <LibWeb/Painting/PaintStyle.h>
 #include <LibWeb/Painting/ScrollState.h>
+#include <LibWeb/Painting/VideoFrameSource.h>
 
 namespace Web::Painting {
+
+class DisplayListCommandSequence {
+public:
+    static constexpr size_t command_alignment = 16;
+
+    ReadonlyBytes command_bytes() const { return m_command_bytes.span(); }
+
+    template<typename SpanType, typename Callback>
+    static void for_each_command_header(SpanType command_bytes, Callback callback)
+    {
+        static_assert(IsSame<SpanType, Bytes> || IsSame<SpanType, ReadonlyBytes>);
+        for (size_t offset = 0; offset < command_bytes.size();) {
+            VERIFY(offset + sizeof(DisplayListCommandHeader) <= command_bytes.size());
+            DisplayListCommandHeader header;
+            __builtin_memcpy(&header, command_bytes.data() + offset, sizeof(header));
+            offset += sizeof(header);
+            VERIFY(offset + header.payload_size <= command_bytes.size());
+            auto payload = SpanType { command_bytes.data() + offset, header.payload_size };
+            offset += header.payload_size;
+            callback(header, payload);
+        }
+    }
+
+    template<typename Callback>
+    void for_each_command_header(Callback callback) const
+    {
+        for_each_command_header(command_bytes(), move(callback));
+    }
+
+private:
+    friend class DisplayList;
+    DisplayListCommandSequence();
+
+    NonnullRefPtr<DisplayListResourceStorage> m_resource_storage;
+    Vector<u8> m_command_bytes;
+};
 
 class DisplayListPlayer {
 public:
     virtual ~DisplayListPlayer() = default;
 
-    void execute(DisplayList&, ScrollStateSnapshot const&, RefPtr<Gfx::PaintingSurface>);
+    void execute(DisplayList const&, ScrollStateSnapshot const&, RefPtr<Gfx::PaintingSurface>);
 
 protected:
     Gfx::PaintingSurface& surface() const { return *m_surface; }
-    void execute_impl(DisplayList&, ScrollStateSnapshot const& scroll_state);
-    void execute_display_list_into_surface(DisplayList&, Gfx::PaintingSurface&);
+    DisplayList const& active_display_list() const { return *m_active_display_list; }
+    void execute_impl(DisplayList const&, ScrollStateSnapshot const& scroll_state);
+    void execute_impl(DisplayList const&, ScrollStateSnapshot const& scroll_state, ReadonlyBytes command_bytes);
+    void execute_display_list_into_surface(DisplayList const&, Gfx::PaintingSurface&);
+    void execute_nested_display_list(DisplayList const&, ScrollStateSnapshot const&, ReadonlyBytes command_bytes);
 
 private:
     virtual void flush() = 0;
@@ -61,12 +109,13 @@ private:
     virtual void add_rounded_rect_clip(AddRoundedRectClip const&) = 0;
     virtual void paint_nested_display_list(PaintNestedDisplayList const&) = 0;
     virtual void paint_scrollbar(PaintScrollBar const&) = 0;
-    virtual void apply_effects(ApplyEffects const&) = 0;
+    virtual void apply_effects(ApplyEffects const&, Gfx::Filter const* = nullptr) = 0;
     virtual void apply_transform(Gfx::FloatPoint origin, Gfx::FloatMatrix4x4 const&) = 0;
     virtual bool would_be_fully_clipped_by_painter(Gfx::IntRect) const = 0;
 
     virtual void add_clip_path(Gfx::Path const&) = 0;
 
+    DisplayList const* m_active_display_list { nullptr };
     RefPtr<Gfx::PaintingSurface> m_surface;
 };
 
@@ -74,29 +123,99 @@ class DisplayList : public AtomicRefCounted<DisplayList> {
 public:
     static NonnullRefPtr<DisplayList> create(NonnullRefPtr<AccumulatedVisualContextTree const> visual_context_tree)
     {
-        return adopt_ref(*new DisplayList(move(visual_context_tree)));
+        return adopt_ref(*new DisplayList(move(visual_context_tree), DisplayListResourceStorage::create()));
     }
 
-    bool append(DisplayListCommand&& command, VisualContextIndex context_index);
+    static NonnullRefPtr<DisplayList> create(
+        NonnullRefPtr<AccumulatedVisualContextTree const> visual_context_tree,
+        NonnullRefPtr<DisplayListResourceStorage> resource_storage)
+    {
+        return adopt_ref(*new DisplayList(move(visual_context_tree), move(resource_storage)));
+    }
 
-    struct CommandListItem {
-        VisualContextIndex context_index {};
-        DisplayListCommand command;
-    };
+    template<DisplayListCommand Command>
+    bool append(Command const& command, VisualContextIndex context_index, ReadonlyBytes inline_data = {})
+    {
+        return append_bytes(
+            Command::command_type,
+            ReadonlyBytes { &command, sizeof(Command) },
+            inline_data,
+            context_index,
+            command_bounding_rectangle(command),
+            command_is_clip(command));
+    }
+
+    ReadonlyBytes inline_data(DisplayListDataSpan span) const
+    {
+        VERIFY(static_cast<size_t>(span.offset) + span.size <= m_command_bytes.size());
+        return { m_command_bytes.data() + span.offset, span.size };
+    }
+
+    template<typename T>
+    ReadonlySpan<T> inline_objects(DisplayListDataSpan span) const
+    {
+        VERIFY(span.size % sizeof(T) == 0);
+        VERIFY(span.offset % alignof(T) == 0);
+        auto bytes = inline_data(span);
+        return { reinterpret_cast<T const*>(bytes.data()), bytes.size() / sizeof(T) };
+    }
 
     AccumulatedVisualContextTree const& visual_context_tree() const { return *m_visual_context_tree; }
+    u64 id() const { return m_id; }
 
-    auto& commands(Badge<DisplayListRecorder>) { return m_commands; }
-    auto const& commands() const { return m_commands; }
+    ReadonlyBytes command_bytes() const { return m_command_bytes.span(); }
+    DisplayListResourceStorage& resource_storage() { return *m_resource_storage; }
+    DisplayListResourceStorage const& resource_storage() const { return *m_resource_storage; }
 
-private:
-    explicit DisplayList(NonnullRefPtr<AccumulatedVisualContextTree const> visual_context_tree)
-        : m_visual_context_tree(move(visual_context_tree))
+    template<typename Callback>
+    static void for_each_command_header(ReadonlyBytes command_bytes, Callback callback)
     {
+        DisplayListCommandSequence::for_each_command_header(command_bytes, move(callback));
     }
 
+    template<typename Callback>
+    void for_each_command_header(Callback callback) const
+    {
+        DisplayListCommandSequence::for_each_command_header(command_bytes(), move(callback));
+    }
+
+    void append_command_sequence(DisplayListCommandSequence const&, VisualContextIndex);
+    DisplayListCommandSequence copy_command_sequence_from(size_t command_start_offset) const;
+    size_t command_byte_size() const { return m_command_bytes.size(); }
+
+private:
+    explicit DisplayList(
+        NonnullRefPtr<AccumulatedVisualContextTree const> visual_context_tree,
+        NonnullRefPtr<DisplayListResourceStorage> resource_storage);
+
+    static Optional<Gfx::IntRect> command_bounding_rectangle(auto const& command)
+    {
+        if constexpr (requires { command.bounding_rect(); })
+            return command.bounding_rect();
+        else
+            return {};
+    }
+
+    static bool command_is_clip(auto const& command)
+    {
+        if constexpr (requires { command.is_clip(); })
+            return command.is_clip();
+        else
+            return false;
+    }
+
+    bool append_bytes(
+        DisplayListCommandType,
+        ReadonlyBytes payload,
+        ReadonlyBytes inline_data,
+        VisualContextIndex context_index,
+        Optional<Gfx::IntRect> bounding_rect,
+        bool is_clip);
+
     NonnullRefPtr<AccumulatedVisualContextTree const> const m_visual_context_tree;
-    AK::SegmentedVector<CommandListItem, 512> m_commands;
+    NonnullRefPtr<DisplayListResourceStorage> m_resource_storage;
+    u64 m_id { 0 };
+    Vector<u8> m_command_bytes;
 };
 
 }

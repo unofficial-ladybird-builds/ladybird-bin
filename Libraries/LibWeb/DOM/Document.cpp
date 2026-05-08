@@ -333,19 +333,17 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
 
     // 5. Let window be null.
     GC::Ptr<HTML::Window> window;
+    bool reused_initial_about_blank_window = false;
 
     // 6. If browsingContext's active document's is initial about:blank is true,
     //    and browsingContext's active document's origin is same origin-domain with navigationParams's origin,
     //    then set window to browsingContext's active window.
-    // FIXME: still_on_its_initial_about_blank_document() is not in the spec anymore.
-    //        However, replacing this with the spec-mandated is_initial_about_blank() results in the browsing context
-    //        holding an incorrect active document for the replace from initial about:blank to the real document.
-    //        See #22293 for more details.
-    if (false
-        && (browsing_context->active_document() && browsing_context->active_document()->origin().is_same_origin(navigation_params.origin))) {
+    VERIFY(browsing_context->active_document());
+    if (browsing_context->active_document()->is_initial_about_blank()
+        && browsing_context->active_document()->origin().is_same_origin_domain(navigation_params.origin)) {
         window = browsing_context->active_window();
+        reused_initial_about_blank_window = true;
     }
-
     // 7. Otherwise:
     else {
         // FIXME: 1. Let oacHeader be the result of getting a structured field value given `Origin-Agent-Cluster` and "item" from response's header list.
@@ -461,7 +459,11 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     }
 
     // 10. Set window's associated Document to document.
-    window->set_associated_document(*document);
+    // AD-HOC: When replacing the initial about:blank, defer swapping the associated document until activation so the browsing
+    //         context continues to expose the initial document as active until the new document is actually activated.
+    //         See spec issue: https://github.com/whatwg/html/issues/12415
+    if (!reused_initial_about_blank_window)
+        window->set_associated_document(*document);
 
     // 11. Run CSP initialization for a Document given document.
     document->run_csp_initialization();
@@ -5266,6 +5268,9 @@ void Document::make_active()
     // 1. Let window be document's relevant global object.
     auto& window = as<HTML::Window>(HTML::relevant_global_object(*this));
 
+    // AD-HOC: Deferred intialization from Document::create_and_initialize, see: https://github.com/whatwg/html/issues/12415
+    window.set_associated_document(*this);
+
     set_window(window);
 
     // 2. Set document's browsing context's WindowProxy's [[Window]] internal slot value to window.
@@ -8009,18 +8014,19 @@ String Document::dump_display_list()
     HashMap<size_t, Vector<size_t>> children;
     Vector<size_t> root_contexts;
 
-    for (auto const& item : display_list->commands()) {
-        if (!item.context_index.value())
-            continue;
-        for (size_t node_index = item.context_index.value(); node_index && !visited.contains(node_index); node_index = visual_context_tree.node_at(Painting::VisualContextIndex(node_index)).parent_index.value()) {
+    display_list->for_each_command_header([&](Painting::DisplayListCommandHeader const& header, ReadonlyBytes) {
+        if (!header.context_index.value())
+            return;
+        for (size_t node_index = header.context_index.value(); node_index && !visited.contains(node_index);) {
             visited.set(node_index);
             auto parent = visual_context_tree.node_at(Painting::VisualContextIndex(node_index)).parent_index.value();
             if (parent)
                 children.ensure(parent).append(node_index);
             else if (!root_contexts.contains_slow(node_index))
                 root_contexts.append(node_index);
+            node_index = parent;
         }
-    }
+    });
 
     Function<void(size_t, size_t)> dump_context = [&](size_t node_index, size_t indent) {
         builder.append_repeated(' ', indent * 2);
@@ -8041,31 +8047,30 @@ String Document::dump_display_list()
     Function<void(Painting::DisplayList const&, int)> dump_commands =
         [&](Painting::DisplayList const& list, int base_indent) {
             int indent = base_indent;
-            for (auto const& item : list.commands()) {
-                int nesting_change = item.command.visit([](auto const& cmd) {
-                    if constexpr (requires { cmd.nesting_level_change; })
-                        return cmd.nesting_level_change;
-                    return 0;
-                });
+            list.for_each_command_header([&](Painting::DisplayListCommandHeader const& header, ReadonlyBytes payload) {
+                auto nesting_change = Painting::display_list_command_nesting_level_change(header.type);
 
                 if (nesting_change < 0)
                     indent = max(base_indent, indent + nesting_change);
 
                 builder.append_repeated(' ', indent * 2);
-                item.command.visit([&](auto const& command) {
-                    builder.appendff("{}@{}", command.command_name, item.context_index.value());
+                Optional<Painting::DisplayListResourceId> nested_display_list_id;
+                Painting::visit_display_list_command(header.type, payload, [&]<typename Command>(Command const& command) {
+                    builder.appendff("{}@{}", command.command_name, header.context_index.value());
                     command.dump(builder);
+                    if constexpr (IsSame<Command, Painting::PaintNestedDisplayList>)
+                        nested_display_list_id = command.display_list_id;
                 });
                 builder.append('\n');
 
-                if (auto const* nested = item.command.get_pointer<Painting::PaintNestedDisplayList>()) {
-                    if (nested->display_list)
-                        dump_commands(*nested->display_list, indent + 1);
+                if (nested_display_list_id.has_value()) {
+                    auto& nested_display_list = list.resource_storage().display_list(*nested_display_list_id);
+                    dump_commands(nested_display_list, indent + 1);
                 }
 
                 if (nesting_change > 0)
                     indent += nesting_change;
-            }
+            });
         };
 
     dump_commands(*display_list, 0);
