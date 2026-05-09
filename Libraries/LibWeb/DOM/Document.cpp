@@ -333,17 +333,19 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
 
     // 5. Let window be null.
     GC::Ptr<HTML::Window> window;
-    bool reused_initial_about_blank_window = false;
 
     // 6. If browsingContext's active document's is initial about:blank is true,
     //    and browsingContext's active document's origin is same origin-domain with navigationParams's origin,
     //    then set window to browsingContext's active window.
-    VERIFY(browsing_context->active_document());
-    if (browsing_context->active_document()->is_initial_about_blank()
-        && browsing_context->active_document()->origin().is_same_origin_domain(navigation_params.origin)) {
+    // FIXME: still_on_its_initial_about_blank_document() is not in the spec anymore.
+    //        However, replacing this with the spec-mandated is_initial_about_blank() results in the browsing context
+    //        holding an incorrect active document for the replace from initial about:blank to the real document.
+    //        See #22293 for more details.
+    if (false
+        && (browsing_context->active_document() && browsing_context->active_document()->origin().is_same_origin(navigation_params.origin))) {
         window = browsing_context->active_window();
-        reused_initial_about_blank_window = true;
     }
+
     // 7. Otherwise:
     else {
         // FIXME: 1. Let oacHeader be the result of getting a structured field value given `Origin-Agent-Cluster` and "item" from response's header list.
@@ -459,11 +461,7 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     }
 
     // 10. Set window's associated Document to document.
-    // AD-HOC: When replacing the initial about:blank, defer swapping the associated document until activation so the browsing
-    //         context continues to expose the initial document as active until the new document is actually activated.
-    //         See spec issue: https://github.com/whatwg/html/issues/12415
-    if (!reused_initial_about_blank_window)
-        window->set_associated_document(*document);
+    window->set_associated_document(*document);
 
     // 11. Run CSP initialization for a Document given document.
     document->run_csp_initialization();
@@ -5268,9 +5266,6 @@ void Document::make_active()
     // 1. Let window be document's relevant global object.
     auto& window = as<HTML::Window>(HTML::relevant_global_object(*this));
 
-    // AD-HOC: Deferred intialization from Document::create_and_initialize, see: https://github.com/whatwg/html/issues/12415
-    window.set_associated_document(*this);
-
     set_window(window);
 
     // 2. Set document's browsing context's WindowProxy's [[Window]] internal slot value to window.
@@ -6100,24 +6095,8 @@ void Document::update_animations_and_send_events(double timestamp)
     {
         HTML::TemporaryExecutionContext temporary_execution_context { realm() };
         // 1. Update the current time of all timelines associated with doc passing now as the timestamp.
-        //
-        // Note: Due to the hierarchical nature of the timing model, updating the current time of a timeline also involves:
-        // - Updating the current time of any animations associated with the timeline.
-        // - Running the update an animation’s finished state procedure for any animations whose current time has been
-        //   updated.
-        // - Queueing animation events for any such animations.
-        for (auto const& timeline : timelines_to_update) {
+        for (auto const& timeline : timelines_to_update)
             timeline->update_current_time(timestamp);
-
-            for (auto& animation : timeline->associated_animations())
-                animation.update();
-
-            auto animations = GC::RootVector<GC::Ref<Animations::Animation>> { heap() };
-            for (auto& animation : timeline->associated_animations())
-                animations.append(animation);
-            for (auto& animation : animations)
-                dispatch_events_for_animation_if_necessary(animation);
-        }
 
         // 2. Remove replaced animations for doc.
         remove_replaced_animations();
