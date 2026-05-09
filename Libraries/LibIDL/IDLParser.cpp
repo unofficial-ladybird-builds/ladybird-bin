@@ -934,6 +934,9 @@ void Parser::parse_enumeration(HashMap<ByteString, ByteString> extended_attribut
     for (auto& entry : enumeration.values)
         enumeration.translated_cpp_names.set(entry, convert_enumeration_value_to_cpp_enum_member(entry, names_already_seen));
 
+    auto* module = interface.context.find_parsed_module(interface.module_own_path);
+    VERIFY(module);
+    module->own_enumerations.set(name);
     interface.own_enumerations.set(name);
     interface.context.enumerations.set(name, move(enumeration));
     consume_whitespace();
@@ -1043,6 +1046,9 @@ void Parser::parse_dictionary(HashMap<ByteString, ByteString> extended_attribute
         auto& it = interface.context.partial_dictionaries.ensure(name);
         it.append(move(dictionary));
     } else {
+        auto* module = interface.context.find_parsed_module(interface.module_own_path);
+        VERIFY(module);
+        module->own_dictionaries.set(name);
         interface.own_dictionaries.set(name);
         interface.context.dictionaries.set(name, move(dictionary));
     }
@@ -1387,6 +1393,7 @@ Module& Parser::parse()
 
     auto module_ptr = make<Module>();
     auto& module = *module_ptr;
+    module.context = &context;
     module.module_own_path = this_module;
     context.add_module(move(module_ptr));
 

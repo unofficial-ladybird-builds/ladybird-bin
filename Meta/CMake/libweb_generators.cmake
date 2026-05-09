@@ -246,7 +246,7 @@ function (generate_js_bindings target)
     set(LIBWEB_ALL_BINDINGS_SOURCES)
     set(LIBWEB_ALL_IDL_FILES)
     set(LIBWEB_ALL_PARSED_IDL_FILES)
-    function(libweb_js_bindings class)
+    macro(libweb_add_bindings_source class)
         get_filename_component(basename "${class}" NAME)
 
         set(BINDINGS_HEADER "${CMAKE_CURRENT_BINARY_DIR}/Bindings/${basename}.h")
@@ -263,6 +263,10 @@ function (generate_js_bindings target)
 
         list(APPEND LIBWEB_ALL_BINDINGS_SOURCES ${BINDINGS_SOURCES})
         set(LIBWEB_ALL_BINDINGS_SOURCES ${LIBWEB_ALL_BINDINGS_SOURCES} PARENT_SCOPE)
+    endmacro()
+
+    function(libweb_js_bindings class)
+        libweb_add_bindings_source(${class})
 
         list(APPEND LIBWEB_ALL_IDL_FILES "${LIBWEB_INPUT_FOLDER}/${class}.idl")
         set(LIBWEB_ALL_IDL_FILES ${LIBWEB_ALL_IDL_FILES} PARENT_SCOPE)
@@ -272,11 +276,15 @@ function (generate_js_bindings target)
     endfunction()
 
     function(libweb_support_idl class)
+        libweb_add_bindings_source(${class})
+
         list(APPEND LIBWEB_ALL_PARSED_IDL_FILES "${LIBWEB_INPUT_FOLDER}/${class}.idl")
         set(LIBWEB_ALL_PARSED_IDL_FILES ${LIBWEB_ALL_PARSED_IDL_FILES} PARENT_SCOPE)
     endfunction()
 
     function(libweb_generated_support_idl class)
+        libweb_add_bindings_source(${class})
+
         list(APPEND LIBWEB_ALL_PARSED_IDL_FILES "${CMAKE_CURRENT_BINARY_DIR}/${class}.idl")
         set(LIBWEB_ALL_PARSED_IDL_FILES ${LIBWEB_ALL_PARSED_IDL_FILES} PARENT_SCOPE)
     endfunction()
@@ -331,6 +339,7 @@ function (generate_js_bindings target)
 
     include("idl_files.cmake")
     list(REMOVE_DUPLICATES LIBWEB_ALL_PARSED_IDL_FILES)
+    list(APPEND LIBWEB_ALL_BINDINGS_SOURCES "Bindings/Forward.h")
 
     set(LIBWEB_ALL_IDL_FILES_ARGUMENT ${LIBWEB_ALL_IDL_FILES})
     set(LIBWEB_ALL_PARSED_IDL_FILES_ARGUMENT ${LIBWEB_ALL_PARSED_IDL_FILES})
@@ -362,5 +371,6 @@ function (generate_js_bindings target)
 
     generate_exposed_interface_files()
 
+    list(APPEND LIBWEB_ALL_GENERATED_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/Bindings/Forward.h")
     set(LIBWEB_ALL_GENERATED_HEADERS ${LIBWEB_ALL_GENERATED_HEADERS} PARENT_SCOPE)
 endfunction()

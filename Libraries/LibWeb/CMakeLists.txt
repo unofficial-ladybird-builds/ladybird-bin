@@ -20,6 +20,7 @@ set(SOURCES
     Bindings/AudioConstructor.cpp
     Bindings/HostDefined.cpp
     Bindings/ImageConstructor.cpp
+    Bindings/InterfaceObject.cpp
     Bindings/Intrinsics.cpp
     Bindings/MainThreadVM.cpp
     Bindings/OptionConstructor.cpp
@@ -472,7 +473,6 @@ set(SOURCES
     HTML/Canvas/CanvasDrawImage.cpp
     HTML/Canvas/CanvasFillStrokeStyles.cpp
     HTML/Canvas/CanvasPath.cpp
-    HTML/Canvas/CanvasSettings.cpp
     HTML/Canvas/CanvasState.cpp
     HTML/Canvas/CanvasTextDrawingStyles.cpp
     HTML/Canvas/SerializeBitmap.cpp
@@ -961,12 +961,9 @@ set(SOURCES
     Streams/ReadableStreamOperations.cpp
     Streams/ReadableStreamPipeTo.cpp
     Streams/ReadableStreamTee.cpp
-    Streams/Transformer.cpp
     Streams/TransformStream.cpp
     Streams/TransformStreamDefaultController.cpp
     Streams/TransformStreamOperations.cpp
-    Streams/UnderlyingSink.cpp
-    Streams/UnderlyingSource.cpp
     Streams/WritableStream.cpp
     Streams/WritableStreamDefaultController.cpp
     Streams/WritableStreamDefaultWriter.cpp

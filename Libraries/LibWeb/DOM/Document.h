@@ -25,6 +25,7 @@
 #include <LibURL/Origin.h>
 #include <LibURL/URL.h>
 #include <LibUnicode/Forward.h>
+#include <LibWeb/Bindings/NavigationType.h>
 #include <LibWeb/CSS/CustomPropertyRegistration.h>
 #include <LibWeb/CSS/EnvironmentVariable.h>
 #include <LibWeb/CSS/StyleScope.h>
@@ -36,7 +37,6 @@
 #include <LibWeb/HTML/CrossOrigin/OpenerPolicy.h>
 #include <LibWeb/HTML/DocumentReadyState.h>
 #include <LibWeb/HTML/Focus.h>
-#include <LibWeb/HTML/NavigationType.h>
 #include <LibWeb/HTML/PaintConfig.h>
 #include <LibWeb/HTML/PreloadEntry.h>
 #include <LibWeb/HTML/SandboxingFlagSet.h>
@@ -163,18 +163,6 @@ struct DocumentUnloadTimingInfo {
     double unload_event_start_time { 0 };
     // https://html.spec.whatwg.org/multipage/dom.html#unload-event-end-time
     double unload_event_end_time { 0 };
-};
-
-// https://dom.spec.whatwg.org/#dictdef-elementcreationoptions
-struct ElementCreationOptions {
-    Optional<GC::Ptr<HTML::CustomElementRegistry>> custom_element_registry;
-    Optional<String> is;
-};
-
-// https://dom.spec.whatwg.org/#dictdef-importnodeoptions
-struct ImportNodeOptions {
-    GC::Ptr<HTML::CustomElementRegistry> custom_element_registry;
-    bool self_only = false;
 };
 
 enum class PolicyControlledFeature : u8 {
@@ -430,8 +418,8 @@ public:
 
     HTML::EnvironmentSettingsObject& relevant_settings_object() const;
 
-    WebIDL::ExceptionOr<GC::Ref<Element>> create_element(String const& local_name, Variant<String, ElementCreationOptions> const& options);
-    WebIDL::ExceptionOr<GC::Ref<Element>> create_element_ns(Optional<FlyString> const& namespace_, String const& qualified_name, Variant<String, ElementCreationOptions> const& options);
+    WebIDL::ExceptionOr<GC::Ref<Element>> create_element(String const& local_name, Variant<String, Bindings::ElementCreationOptions> const& options);
+    WebIDL::ExceptionOr<GC::Ref<Element>> create_element_ns(Optional<FlyString> const& namespace_, String const& qualified_name, Variant<String, Bindings::ElementCreationOptions> const& options);
     GC::Ref<DocumentFragment> create_document_fragment();
     GC::Ref<Text> create_text_node(Utf16String data);
     WebIDL::ExceptionOr<GC::Ref<CDATASection>> create_cdata_section(Utf16String data);
@@ -485,7 +473,7 @@ public:
     // https://dom.spec.whatwg.org/#xml-document
     bool is_xml_document() const { return m_type == Type::XML; }
 
-    WebIDL::ExceptionOr<GC::Ref<Node>> import_node(GC::Ref<Node> node, Variant<bool, ImportNodeOptions>);
+    WebIDL::ExceptionOr<GC::Ref<Node>> import_node(GC::Ref<Node> node, Variant<bool, Bindings::ImportNodeOptions>);
     void adopt_node(Node&);
     WebIDL::ExceptionOr<GC::Ref<Node>> adopt_node_binding(GC::Ref<Node>);
 
@@ -1175,7 +1163,7 @@ private:
         GC::Ptr<HTML::CustomElementRegistry> registry;
         Optional<String> is;
     };
-    WebIDL::ExceptionOr<RegistryAndIs> flatten_element_creation_options(Variant<String, ElementCreationOptions> const&) const;
+    WebIDL::ExceptionOr<RegistryAndIs> flatten_element_creation_options(Variant<String, Bindings::ElementCreationOptions> const&) const;
 
     GC::Ref<Page> m_page;
     GC::Ptr<CSS::StyleComputer> m_style_computer;
