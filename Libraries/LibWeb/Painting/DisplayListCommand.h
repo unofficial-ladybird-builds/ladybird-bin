@@ -7,10 +7,14 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <AK/Optional.h>
+#include <AK/Span.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
+#include <LibGfx/AffineTransform.h>
 #include <LibGfx/Color.h>
 #include <LibGfx/CompositingAndBlendingOperator.h>
+#include <LibGfx/InterpolationColorSpace.h>
 #include <LibGfx/LineStyle.h>
 #include <LibGfx/Path.h>
 #include <LibGfx/Point.h>
@@ -67,6 +71,7 @@ enum class DisplayListCommandType : u8 {
 };
 
 struct DisplayListDataSpan {
+    // Offset into the command payload containing this span.
     u32 offset { 0 };
     u32 size { 0 };
 
@@ -309,6 +314,40 @@ enum class PathPaintKind : u8 {
     PaintStyle,
 };
 
+enum class DisplayListPaintStyleType : u8 {
+    None,
+    LinearGradient,
+    RadialGradient,
+    Pattern,
+};
+
+enum class DisplayListGradientSpreadMethod : u8 {
+    Pad,
+    Repeat,
+    Reflect,
+};
+
+struct DisplayListGradientPaintStyle {
+    Optional<Gfx::AffineTransform> gradient_transform;
+    DisplayListGradientSpreadMethod spread_method { DisplayListGradientSpreadMethod::Pad };
+    Gfx::InterpolationColorSpace color_space { Gfx::InterpolationColorSpace::SRGB };
+    DisplayListGradientColorStops color_stops;
+};
+
+struct DisplayListPaintStyle {
+    DisplayListPaintStyleType type { DisplayListPaintStyleType::None };
+    DisplayListGradientPaintStyle gradient;
+    Gfx::FloatPoint linear_gradient_start_point;
+    Gfx::FloatPoint linear_gradient_end_point;
+    Gfx::FloatPoint radial_gradient_start_center;
+    float radial_gradient_start_radius { 0.0f };
+    Gfx::FloatPoint radial_gradient_end_center;
+    float radial_gradient_end_radius { 0.0f };
+    DisplayListResourceId pattern_tile_display_list_id;
+    Gfx::FloatRect pattern_tile_rect;
+    Optional<Gfx::AffineTransform> pattern_transform;
+};
+
 struct FillPath {
     static constexpr StringView command_name = "FillPath"sv;
     static constexpr DisplayListCommandType command_type = DisplayListCommandType::FillPath;
@@ -318,7 +357,7 @@ struct FillPath {
     float opacity { 1.0f };
     PathPaintKind paint_kind { PathPaintKind::Color };
     Color color;
-    PaintStyleResourceId paint_style_id;
+    DisplayListPaintStyle paint_style;
     Gfx::WindingRule winding_rule;
     ShouldAntiAlias should_anti_alias { ShouldAntiAlias::Yes };
 
@@ -341,7 +380,7 @@ struct StrokePath {
     float opacity;
     PathPaintKind paint_kind { PathPaintKind::Color };
     Color color;
-    PaintStyleResourceId paint_style_id;
+    DisplayListPaintStyle paint_style;
     float thickness;
     ShouldAntiAlias should_anti_alias { ShouldAntiAlias::Yes };
 
@@ -509,13 +548,35 @@ concept DisplayListCommand = requires {
     Command::command_type;
 };
 
+template<typename T>
+requires(IsTriviallyCopyable<T>)
+ReadonlyBytes display_list_object_bytes(T const& object)
+{
+    return { &object, sizeof(T) };
+}
+
+template<typename T>
+requires(IsTriviallyCopyable<T>)
+T read_display_list_object(ReadonlyBytes bytes)
+{
+    VERIFY(bytes.size() >= sizeof(T));
+    T object;
+    __builtin_memcpy(&object, bytes.data(), sizeof(T));
+    return object;
+}
+
+template<typename T>
+requires(IsTriviallyCopyable<T>)
+void write_display_list_object(Bytes bytes, T const& object)
+{
+    VERIFY(bytes.size() >= sizeof(T));
+    __builtin_memcpy(bytes.data(), &object, sizeof(T));
+}
+
 template<DisplayListCommand Command>
 Command read_display_list_command_payload(ReadonlyBytes payload)
 {
-    VERIFY(payload.size() >= sizeof(Command));
-    Command command;
-    __builtin_memcpy(&command, payload.data(), sizeof(Command));
-    return command;
+    return read_display_list_object<Command>(payload);
 }
 
 template<typename Callback>
@@ -557,9 +618,9 @@ inline int display_list_command_nesting_level_change(DisplayListCommandType comm
     });
 }
 
-static_assert(__is_trivially_copyable(DisplayListCommandHeader));
+static_assert(IsTriviallyCopyable<DisplayListCommandHeader>);
 
-#define VERIFY_DISPLAY_LIST_COMMAND(command, player_method) static_assert(IsTriviallyDestructible<command>);
+#define VERIFY_DISPLAY_LIST_COMMAND(command, player_method) static_assert(IsTriviallyCopyable<command>);
 ENUMERATE_DISPLAY_LIST_COMMANDS(VERIFY_DISPLAY_LIST_COMMAND)
 #undef VERIFY_DISPLAY_LIST_COMMAND
 
