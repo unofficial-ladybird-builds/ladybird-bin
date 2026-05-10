@@ -5,6 +5,8 @@
  */
 
 #include <AK/BinarySearch.h>
+#include <LibGC/Heap.h>
+#include <LibGC/HeapBlock.h>
 #include <LibJS/Bytecode/BasicBlock.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Bytecode/FormatOperand.h>
@@ -339,15 +341,23 @@ StaticPropertyLookupCache::StaticPropertyLookupCache()
     static_property_lookup_caches().append(this);
 }
 
+static bool cell_is_dead(Cell const* cell)
+{
+    auto* block = GC::HeapBlock::from_cell(cell);
+    if (!GC::Heap::the().is_live_heap_block(block))
+        return true;
+    return cell->state() != Cell::State::Live || !cell->is_marked();
+}
+
 static void clear_cache_entry_if_dead(PropertyLookupCache::Entry& entry)
 {
-    if (entry.from_shape && entry.from_shape->state() != Cell::State::Live)
+    if (entry.from_shape && cell_is_dead(entry.from_shape))
         entry.from_shape = nullptr;
-    if (entry.shape && entry.shape->state() != Cell::State::Live)
+    if (entry.shape && cell_is_dead(entry.shape))
         entry.shape = nullptr;
-    if (entry.prototype && entry.prototype->state() != Cell::State::Live)
+    if (entry.prototype && cell_is_dead(entry.prototype))
         entry.prototype = nullptr;
-    if (entry.prototype_chain_validity && entry.prototype_chain_validity->state() != Cell::State::Live)
+    if (entry.prototype_chain_validity && cell_is_dead(entry.prototype_chain_validity))
         entry.prototype_chain_validity = nullptr;
 }
 
@@ -370,7 +380,8 @@ void Executable::remove_dead_cells(Badge<GC::Heap>)
             clear_cache_entry_if_dead(entry);
     }
     for (auto& cache : object_shape_caches) {
-        if (cache.shape && cache.shape->state() != Cell::State::Live)
+        auto* shape = cache.shape.ptr();
+        if (shape && cell_is_dead(shape))
             cache.shape = nullptr;
     }
 }
