@@ -12,6 +12,7 @@
 #include <AK/Tuple.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/Bindings/Navigation.h>
+#include <LibWeb/Compositor/CompositorThread.h>
 #include <LibWeb/DOM/DocumentLoadEventDelayer.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
@@ -23,7 +24,6 @@
 #include <LibWeb/HTML/NavigationParams.h>
 #include <LibWeb/HTML/POSTResource.h>
 #include <LibWeb/HTML/PaintConfig.h>
-#include <LibWeb/HTML/RenderingThread.h>
 #include <LibWeb/HTML/SandboxingFlagSet.h>
 #include <LibWeb/HTML/SourceSnapshotParams.h>
 #include <LibWeb/HTML/StructuredSerializeTypes.h>
@@ -229,7 +229,6 @@ public:
     bool has_pending_navigations() const { return !m_pending_navigations.is_empty(); }
     void clear_pending_navigations() { m_pending_navigations.clear(); }
 
-    void ready_to_paint();
     void record_display_list_and_scroll_state(PaintConfig);
     void paint_next_frame();
     void render_screenshot(Gfx::PaintingSurface&, PaintConfig, Function<void()>&& callback);
@@ -240,7 +239,7 @@ public:
 
     [[nodiscard]] bool has_inclusive_ancestor_with_visibility_hidden() const;
 
-    RenderingThread& rendering_thread() { return m_rendering_thread; }
+    Compositor::CompositorThread& rendering_thread() { return m_rendering_thread; }
 
     NonnullRefPtr<Painting::ExternalContentSource> external_content_source() const;
 
@@ -259,7 +258,10 @@ public:
     void reset_zoom();
 
 protected:
-    explicit Navigable(GC::Ref<Page>, bool is_svg_page);
+    explicit Navigable(
+        GC::Ref<Page>,
+        bool is_svg_page,
+        Compositor::CompositorThread::PagePresentationRegistration = Compositor::CompositorThread::PagePresentationRegistration::No);
 
     virtual void visit_edges(Cell::Visitor&) override;
     virtual void finalize() override;
@@ -328,7 +330,7 @@ private:
     bool m_should_show_line_box_borders { false };
     Optional<PaintConfig> m_rendering_thread_display_list_paint_config;
     GC::Ref<Painting::BackingStoreManager> m_backing_store_manager;
-    RenderingThread m_rendering_thread;
+    Compositor::CompositorThread m_rendering_thread;
     RefPtr<Painting::ExternalContentSource> m_external_content_source;
 };
 
