@@ -35,8 +35,11 @@ TestRunCapture::TestRunCapture()
     };
     m_previous_on_process_exited = move(process_manager.on_process_exited);
     process_manager.on_process_exited = [this](WebView::Process&& process, Optional<int> exit_status) {
-        outln("test-web: observed {} process {} exit: {}", WebView::process_name_from_type(process.type()), process.pid(), format_exit_status(exit_status));
         consume_helper_capture(process.pid());
+        log_helper_message(
+            { process.type(), process.pid() },
+            m_stderr_capture.original_fd.value_or(STDERR_FILENO),
+            ByteString::formatted("test-web: process exited: {}\n", format_exit_status(exit_status)));
         m_previous_on_process_exited(move(process), exit_status);
     };
 
