@@ -71,6 +71,7 @@
 #include <LibWeb/CSS/SystemColor.h>
 #include <LibWeb/CSS/TransitionEvent.h>
 #include <LibWeb/CSS/VisualViewport.h>
+#include <LibWeb/Compositor/AsyncScrollingState.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/ContentSecurityPolicy/PolicyList.h>
@@ -1844,8 +1845,11 @@ bool Document::layout_is_up_to_date() const
             || (recompute_elements_depending_on_custom_properties && (element.style_uses_var_css_function() || element.style_uses_inherit_css_function()))
             || needs_style_update_due_to_if_media) {
             node_invalidation = element.recompute_style(did_change_custom_properties);
-        } else if (needs_inherited_style_update) {
-            node_invalidation = element.recompute_inherited_style();
+        } else {
+            if (needs_inherited_style_update)
+                node_invalidation = element.recompute_inherited_style();
+            if (recompute_elements_depending_on_custom_properties && element.refresh_inherited_custom_property_data())
+                did_change_custom_properties = true;
         }
         is_display_none = static_cast<Element&>(node).computed_properties()->display().is_none();
 
@@ -7666,8 +7670,11 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
     context.set_should_paint_overlay(config.paint_overlay);
 
     auto& viewport_paintable = *paintable();
+    viewport_paintable.refresh_scroll_state();
+    Compositor::initialize_async_scrolling_metadata_recording(context, viewport_paintable);
 
     viewport_paintable.paint_all_phases(context);
+    Compositor::finalize_async_scrolling_metadata_recording(context, *navigable(), viewport_rect.to_type<int>());
 
     if (highlighted_node() && highlighted_node()->paintable()) {
         highlighted_node()->paintable()->paint_inspector_overlay(context);
