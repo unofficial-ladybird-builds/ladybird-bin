@@ -31,6 +31,7 @@ class ResizeHandle;
 class Scrollbar;
 
 WEB_API void set_paint_viewport_scrollbars(bool enabled);
+bool should_paint_viewport_scrollbars();
 ResolvedCSSFilter resolve_css_filter(CSS::Filter const& computed_filter, PaintableBox const& paintable_box);
 
 class WEB_API PaintableBox : public Paintable {
@@ -78,7 +79,7 @@ public:
 
     CSSPixelPoint scroll_offset() const;
     ScrollHandled set_scroll_offset(CSSPixelPoint);
-    ScrollHandled scroll_by(int delta_x, int delta_y);
+    ScrollHandled scroll_by(double delta_x, double delta_y);
     void scroll_into_view(CSSPixelRect);
 
     void set_offset(CSSPixelPoint);
@@ -156,7 +157,7 @@ public:
     [[nodiscard]] virtual TraversalDecision hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const override;
     Optional<HitTestResult> hit_test(CSSPixelPoint, HitTestType) const;
 
-    virtual bool handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned buttons, unsigned modifiers, int wheel_delta_x, int wheel_delta_y) override;
+    virtual bool handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned buttons, unsigned modifiers, double wheel_delta_x, double wheel_delta_y) override;
 
     struct ScrollbarData {
         CSSPixelRect gutter_rect;
@@ -167,11 +168,17 @@ public:
         Horizontal,
         Vertical,
     };
+    enum class ScrollbarSizing {
+        Current,
+        Regular,
+        Enlarged,
+    };
 
     Optional<ScrollbarData> compute_scrollbar_data(
         ScrollDirection direction,
         ChromeMetrics const& chrome_metrics,
-        ScrollStateSnapshot const* = nullptr) const;
+        ScrollStateSnapshot const* = nullptr,
+        ScrollbarSizing = ScrollbarSizing::Current) const;
     Optional<CSSPixelRect> absolute_scrollbar_rect(ScrollDirection direction, bool with_gutter, ChromeMetrics const& chrome_metrics) const;
 
     RefPtr<Scrollbar> scrollbar(ScrollDirection) const;

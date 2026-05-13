@@ -43,6 +43,11 @@ void set_paint_viewport_scrollbars(bool const enabled)
     g_paint_viewport_scrollbars = enabled;
 }
 
+bool should_paint_viewport_scrollbars()
+{
+    return g_paint_viewport_scrollbars;
+}
+
 ResolvedCSSFilter resolve_css_filter(CSS::Filter const& computed_filter, PaintableBox const& paintable_box)
 {
     auto const& computed_values = paintable_box.computed_values();
@@ -253,9 +258,9 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     return ScrollHandled::Yes;
 }
 
-PaintableBox::ScrollHandled PaintableBox::scroll_by(int delta_x, int delta_y)
+PaintableBox::ScrollHandled PaintableBox::scroll_by(double delta_x, double delta_y)
 {
-    return set_scroll_offset(scroll_offset().translated(delta_x, delta_y));
+    return set_scroll_offset(scroll_offset().translated(CSSPixels::nearest_value_for(delta_x), CSSPixels::nearest_value_for(delta_y)));
 }
 
 void PaintableBox::scroll_into_view(CSSPixelRect rect)
@@ -562,7 +567,7 @@ Optional<CSSPixelRect> PaintableBox::absolute_scrollbar_rect(ScrollDirection dir
     return scrollbar_rect;
 }
 
-Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(ScrollDirection direction, ChromeMetrics const& metrics, ScrollStateSnapshot const* scroll_state_snapshot) const
+Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(ScrollDirection direction, ChromeMetrics const& metrics, ScrollStateSnapshot const* scroll_state_snapshot, ScrollbarSizing scrollbar_sizing) const
 {
     bool is_horizontal = direction == ScrollDirection::Horizontal;
     auto orientation = is_horizontal ? Gfx::Orientation::Horizontal : Gfx::Orientation::Vertical;
@@ -580,7 +585,17 @@ Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(Scrol
         return {};
 
     auto const& scrollbar = is_horizontal ? m_horizontal_scrollbar : m_vertical_scrollbar;
-    bool with_gutter = scrollbar && scrollbar->is_enlarged();
+    bool with_gutter = [&] {
+        switch (scrollbar_sizing) {
+        case ScrollbarSizing::Current:
+            return scrollbar && scrollbar->is_enlarged();
+        case ScrollbarSizing::Regular:
+            return false;
+        case ScrollbarSizing::Enlarged:
+            return true;
+        }
+        VERIFY_NOT_REACHED();
+    }();
     auto scrollbar_rect = absolute_scrollbar_rect(direction, with_gutter, metrics);
     if (!scrollbar_rect.has_value())
         return {};
@@ -674,7 +689,7 @@ void PaintableBox::paint(DisplayListRecordingContext& context, PaintPhase phase)
     if (phase == PaintPhase::Overlay) {
         ChromeMetrics const& metrics = context.chrome_metrics();
 
-        if ((g_paint_viewport_scrollbars || !is_viewport_paintable())
+        if (((g_paint_viewport_scrollbars && !document().page().async_scrolling_enabled()) || !is_viewport_paintable())
             && computed_values().scrollbar_width() != CSS::ScrollbarWidth::None) {
             auto scrollbar_colors = computed_values().scrollbar_color();
 
@@ -1047,10 +1062,10 @@ NonnullRefPtr<ResizeHandle> PaintableBox::ensure_resize_handle()
     return *m_resize_handle;
 }
 
-bool PaintableBox::handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned, unsigned, int wheel_delta_x, int wheel_delta_y)
+bool PaintableBox::handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned, unsigned, double wheel_delta_x, double wheel_delta_y)
 {
     // if none of the axes we scrolled with can be accepted by this element, don't handle scroll.
-    if ((!wheel_delta_x || !could_be_scrolled_by_wheel_event(ScrollDirection::Horizontal)) && (!wheel_delta_y || !could_be_scrolled_by_wheel_event(ScrollDirection::Vertical))) {
+    if ((wheel_delta_x == 0 || !could_be_scrolled_by_wheel_event(ScrollDirection::Horizontal)) && (wheel_delta_y == 0 || !could_be_scrolled_by_wheel_event(ScrollDirection::Vertical))) {
         return false;
     }
 
