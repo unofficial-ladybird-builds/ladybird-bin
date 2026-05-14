@@ -399,7 +399,8 @@ static inline bool matches_indeterminate_pseudo_class(DOM::Element const& elemen
     return false;
 }
 
-static inline void for_each_matching_attribute(CSS::Selector::SimpleSelector::Attribute const& attribute_selector, GC::Ptr<CSS::CSSStyleSheet const> style_sheet_for_rule, DOM::Element const& element, Function<IterationDecision(DOM::Attr const&)> const& process_attribute)
+template<typename Callback>
+static inline void for_each_matching_attribute(CSS::Selector::SimpleSelector::Attribute const& attribute_selector, GC::Ptr<CSS::CSSStyleSheet const> style_sheet_for_rule, DOM::Element const& element, Callback&& process_attribute)
 {
     auto const& qualified_name = attribute_selector.qualified_name;
     auto const& attribute_name = qualified_name.name.name;

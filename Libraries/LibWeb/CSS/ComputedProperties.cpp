@@ -215,7 +215,8 @@ StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnima
     VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
 
     // Important properties override animated but not transitioned properties
-    if ((!is_property_important(property_id) || is_animated_property_result_of_transition(property_id)) && return_animated_value == WithAnimationsApplied::Yes) {
+    if (!m_animated_property_values.is_empty() && return_animated_value == WithAnimationsApplied::Yes
+        && (!is_property_important(property_id) || is_animated_property_result_of_transition(property_id))) {
         if (auto animated_value = m_animated_property_values.get(property_id); animated_value.has_value())
             return *animated_value.value();
     }
