@@ -40,16 +40,12 @@ pub struct FFIExceptionHandler {
     pub handler_offset: u32,
 }
 
-/// Source map entry mapping bytecode offset to source range.
+/// Source map entry mapping bytecode offset to source position.
 #[repr(C)]
 pub struct FFISourceMapEntry {
     pub bytecode_offset: u32,
     pub source_start_line: u32,
     pub source_start_column: u32,
-    pub source_start_offset: u32,
-    pub source_end_line: u32,
-    pub source_end_column: u32,
-    pub source_end_offset: u32,
 }
 
 /// A borrowed UTF-16 string slice for passing across FFI.
@@ -258,6 +254,28 @@ unsafe extern "C" {
         contains_direct_call_to_eval: bool,
     );
 
+    pub fn rust_sfd_set_cached_bytecode_executable(
+        sfd_ptr: *mut c_void,
+        cached_executable_ptr: *mut c_void,
+        uses_this: bool,
+        this_value_needs_environment_resolution: bool,
+        function_environment_needed: bool,
+        function_environment_bindings_count: usize,
+        might_need_arguments_object: bool,
+        contains_direct_call_to_eval: bool,
+    );
+
+    pub fn rust_sfd_set_precompiled_bytecode_executable(
+        sfd_ptr: *mut c_void,
+        precompiled_executable_ptr: *mut c_void,
+        uses_this: bool,
+        this_value_needs_environment_resolution: bool,
+        function_environment_needed: bool,
+        function_environment_bindings_count: usize,
+        might_need_arguments_object: bool,
+        contains_direct_call_to_eval: bool,
+    );
+
     pub fn rust_create_class_blueprint(
         vm_ptr: *mut c_void,
         source_code_ptr: *const c_void,
@@ -447,28 +465,24 @@ unsafe fn materialize_shared_function_data(
             if let Some((name, is_private)) = &pending.class_field_initializer_name {
                 rust_sfd_set_class_field_initializer_name(sfd_ptr, name.as_ptr(), name.len(), *is_private);
             }
-            if let Some(precompiled) = pending.precompiled_function.as_mut() {
-                precompiled.generator.vm_ptr = vm_ptr;
-                precompiled.generator.source_code_ptr = source_code_ptr;
-                let executable_ptr = create_executable(
-                    &mut precompiled.generator,
-                    &precompiled.assembled,
-                    vm_ptr,
-                    source_code_ptr,
-                );
-                assert!(
-                    !executable_ptr.is_null(),
-                    "materialize_shared_function_data: eager function executable materialization failed"
-                );
-                rust_sfd_set_precompiled_executable(
+            if let Some(precompiled) = pending.precompiled_function.take() {
+                let uses_this = precompiled.metadata.uses_this;
+                let this_value_needs_environment_resolution =
+                    precompiled.metadata.this_value_needs_environment_resolution;
+                let function_environment_needed = precompiled.metadata.function_environment_needed;
+                let function_environment_bindings_count = precompiled.metadata.function_environment_bindings_count;
+                let might_need_arguments = precompiled.metadata.might_need_arguments;
+                let contains_eval = precompiled.metadata.contains_eval;
+                let precompiled_ptr = Box::into_raw(precompiled) as *mut c_void;
+                rust_sfd_set_precompiled_bytecode_executable(
                     sfd_ptr,
-                    executable_ptr,
-                    precompiled.metadata.uses_this,
-                    precompiled.metadata.this_value_needs_environment_resolution,
-                    precompiled.metadata.function_environment_needed,
-                    precompiled.metadata.function_environment_bindings_count,
-                    precompiled.metadata.might_need_arguments,
-                    precompiled.metadata.contains_eval,
+                    precompiled_ptr,
+                    uses_this,
+                    this_value_needs_environment_resolution,
+                    function_environment_needed,
+                    function_environment_bindings_count,
+                    might_need_arguments,
+                    contains_eval,
                 );
             }
             sfd_ptrs.push(sfd_ptr as *const c_void);
@@ -684,12 +698,8 @@ pub unsafe fn create_executable_with_dependencies(
             .iter()
             .map(|e| FFISourceMapEntry {
                 bytecode_offset: e.bytecode_offset,
-                source_start_line: e.source_start.line,
-                source_start_column: e.source_start.column,
-                source_start_offset: e.source_start.offset,
-                source_end_line: e.source_end.line,
-                source_end_column: e.source_end.column,
-                source_end_offset: e.source_end.offset,
+                source_start_line: e.line,
+                source_start_column: e.column,
             })
             .collect();
 
