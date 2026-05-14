@@ -17,16 +17,12 @@
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
+#include <LibJS/Runtime/DescriptorArray.h>
 #include <LibJS/Runtime/PropertyAttributes.h>
 #include <LibJS/Runtime/PropertyKey.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
-
-struct PropertyMetadata {
-    u32 offset { 0 };
-    PropertyAttributes attributes { 0 };
-};
 
 struct TransitionKey {
     PropertyKey property_key;
@@ -61,17 +57,10 @@ class JS_API Shape final : public Cell {
     GC_DECLARE_ALLOCATOR(Shape);
 
 public:
-    virtual ~Shape() override;
+    static constexpr bool OVERRIDES_FINALIZE = true;
 
-    enum class TransitionType : u8 {
-        Invalid,
-        Put,
-        Configure,
-        Prototype,
-        Delete,
-        CacheableDictionary,
-        UncacheableDictionary,
-    };
+    virtual ~Shape() override;
+    virtual void finalize() override;
 
     [[nodiscard]] GC::Ref<Shape> create_put_transition(PropertyKey const&, PropertyAttributes attributes);
     [[nodiscard]] GC::Ref<Shape> create_configure_transition(PropertyKey const&, PropertyAttributes attributes);
@@ -91,7 +80,7 @@ public:
 
     [[nodiscard]] u32 dictionary_generation() const { return m_dictionary_generation; }
 
-    [[nodiscard]] bool is_prototype_shape() const { return m_is_prototype_shape; }
+    [[nodiscard]] bool is_prototype_shape() const { return m_prototype_chain_validity; }
     void set_prototype_shape();
 
     GC::Ptr<PrototypeChainValidity> prototype_chain_validity() const { return m_prototype_chain_validity; }
@@ -102,15 +91,20 @@ public:
     Object const* prototype() const { return m_prototype; }
 
     Optional<PropertyMetadata> lookup(PropertyKey const&) const;
-    OrderedHashMap<PropertyKey, PropertyMetadata> const& property_table() const;
+    void for_each_property_in_insertion_order(Function<void(PropertyKey const&, PropertyMetadata const&)> const&) const;
     u32 property_count() const { return m_property_count; }
 
     void set_prototype_without_transition(Object* new_prototype);
 
 private:
+    enum class PropertyCountChange : u8 {
+        Preserve,
+        Increment,
+        Decrement,
+    };
+
     explicit Shape(Realm&);
-    Shape(Shape& previous_shape, PropertyKey const& property_key, PropertyAttributes attributes, TransitionType);
-    Shape(Shape& previous_shape, PropertyKey const& property_key, TransitionType);
+    Shape(Shape& previous_shape, PropertyCountChange);
     Shape(Shape& previous_shape, Object* new_prototype);
 
     void invalidate_prototype_if_needed_for_new_prototype(GC::Ref<Shape> new_prototype_shape);
@@ -126,29 +120,47 @@ private:
     [[nodiscard]] GC::Ptr<Shape> get_or_prune_cached_prototype_transition(Object* prototype);
     [[nodiscard]] GC::Ptr<Shape> get_or_prune_cached_delete_transition(PropertyKey const&);
 
-    void ensure_property_table() const;
+    void ensure_descriptor_array();
+    [[nodiscard]] GC::Ref<DescriptorArray> copy_descriptors() const;
+    void copy_properties_to_dictionary_shape(Shape&) const;
 
-    PropertyAttributes m_attributes { 0 };
-    TransitionType m_transition_type { TransitionType::Invalid };
+    using PropertyTable = OrderedHashMap<PropertyKey, PropertyMetadata>;
+    using PropertyTablePtr = OwnPtr<PropertyTable>;
+
+    static_assert(IsTriviallyDestructible<GC::Ptr<DescriptorArray>>);
+
+    GC::Ptr<DescriptorArray> descriptors() const;
+    void set_descriptors(GC::Ptr<DescriptorArray>);
+    PropertyTable& property_table();
+    PropertyTable const& property_table() const;
+    void become_dictionary_shape();
+
+    union PropertyStorage {
+        PropertyStorage()
+            : descriptors(nullptr)
+        {
+        }
+
+        ~PropertyStorage() { }
+
+        GC::Ptr<DescriptorArray> descriptors;
+        PropertyTablePtr property_table;
+    };
 
     bool m_dictionary : 1 { false };
-    bool m_is_prototype_shape : 1 { false };
     bool m_has_parameter_map : 1 { false };
 
     GC::Ref<Realm> m_realm;
 
-    mutable OwnPtr<OrderedHashMap<PropertyKey, PropertyMetadata>> m_property_table;
+    PropertyStorage m_property_storage;
 
     OwnPtr<HashMap<TransitionKey, GC::Weak<Shape>>> m_forward_transitions;
     OwnPtr<HashMap<GC::Ptr<Object>, GC::Weak<Shape>>> m_prototype_transitions;
     OwnPtr<HashMap<PropertyKey, GC::Weak<Shape>>> m_delete_transitions;
-    GC::Ptr<Shape> m_previous;
-    Optional<PropertyKey> m_property_key;
     GC::Ptr<Object> m_prototype;
 
-    // The following two are only populated for prototype shapes.
+    // A non-null validity cell marks this as a prototype shape. Child shape references only exist for prototype shapes.
     GC::Ptr<PrototypeChainValidity> m_prototype_chain_validity;
-    // Prototype shapes whose immediate [[Prototype]] is the object that owns this shape.
     OwnPtr<Vector<GC::Weak<Shape>>> m_child_prototype_shapes;
 
     u32 m_property_count { 0 };
@@ -156,7 +168,7 @@ private:
 };
 
 #if !defined(AK_OS_WINDOWS)
-static_assert(sizeof(Shape) == 104, "Keep the size of JS::Shape down!");
+static_assert(sizeof(Shape) == 88, "Keep the size of JS::Shape down!");
 #endif
 
 }
