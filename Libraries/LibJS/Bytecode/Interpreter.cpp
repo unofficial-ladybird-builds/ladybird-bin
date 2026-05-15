@@ -284,7 +284,9 @@ ExecutionContext* VM::push_inline_frame(
     callee_context->script_or_module = callee_function.m_script_or_module;
     if (callee_function.function_environment_needed()) {
         auto local_environment = new_function_environment(callee_function, new_target);
-        local_environment->ensure_capacity(callee_function.shared_data().m_function_environment_bindings_count);
+        auto function_environment_bindings_count = callee_function.shared_data().m_function_environment_bindings_count;
+        local_environment->set_environment_shape_cache(callee_function.shared_data().m_function_environment_shape, function_environment_bindings_count);
+        local_environment->ensure_capacity(function_environment_bindings_count);
         callee_context->lexical_environment = local_environment;
         callee_context->variable_environment = local_environment;
     } else {
@@ -2490,6 +2492,8 @@ void CreateVariableEnvironment::execute_impl(VM& vm) const
 {
     auto& running_execution_context = vm.running_execution_context();
     auto var_environment = new_declarative_environment(*running_execution_context.lexical_environment);
+    if (auto* shared_data = vm.active_shared_function_data(); shared_data && m_capacity == shared_data->m_var_environment_bindings_count)
+        var_environment->set_environment_shape_cache(shared_data->m_var_environment_shape, m_capacity);
     var_environment->ensure_capacity(m_capacity);
     running_execution_context.variable_environment = var_environment;
     running_execution_context.lexical_environment = var_environment;
