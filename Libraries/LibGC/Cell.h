@@ -19,6 +19,9 @@
 
 namespace GC {
 
+template<typename T>
+struct IsVisitable;
+
 // This instrumentation tells analysis tooling to ignore a potentially mis-wrapped GC-allocated member variable
 // It should only be used when the lifetime of the GC-allocated member is always longer than the object
 #if defined(AK_COMPILER_CLANG)
@@ -104,6 +107,7 @@ public:
 
         template<typename T>
         void visit(ReadonlySpan<T> span)
+        requires(!IsBaseOf<NanBoxedValue, T> && IsVisitable<T>::value)
         {
             for (auto& value : span)
                 visit(value);
@@ -118,6 +122,7 @@ public:
 
         template<typename T>
         void visit(Span<T> span)
+        requires(!IsBaseOf<NanBoxedValue, T> && IsVisitable<T>::value)
         {
             for (auto& value : span)
                 visit(value);
@@ -132,6 +137,7 @@ public:
 
         template<typename T, size_t inline_capacity>
         void visit(Vector<T, inline_capacity> const& vector)
+        requires(!IsBaseOf<NanBoxedValue, T> && IsVisitable<T>::value)
         {
             for (auto& value : vector)
                 visit(value);
@@ -146,6 +152,7 @@ public:
 
         template<typename T>
         void visit(HashTable<T> const& table)
+        requires(IsVisitable<T>::value)
         {
             for (auto& value : table)
                 visit(value);
@@ -153,6 +160,7 @@ public:
 
         template<typename T>
         void visit(OrderedHashTable<T> const& table)
+        requires(IsVisitable<T>::value)
         {
             for (auto& value : table)
                 visit(value);
@@ -182,12 +190,23 @@ public:
 
         template<typename T>
         void visit(Optional<T> const& optional)
+        requires(IsVisitable<T>::value)
         {
             if (optional.has_value())
                 visit(optional.value());
         }
 
         void visit(NanBoxedValue const& value);
+
+        template<typename... Ts>
+        void visit(Variant<Ts...> const& variant)
+        requires((IsVisitable<Ts>::value || ...))
+        {
+            variant.visit([&](auto const& value) {
+                if constexpr (requires { visit(value); })
+                    visit(value);
+            });
+        }
 
         // Allow explicitly ignoring a GC-allocated member in a visit_edges implementation instead
         // of just not using it.
@@ -224,6 +243,11 @@ protected:
 private:
     bool m_mark { false };
     State m_state { State::Live };
+};
+
+template<typename T>
+struct IsVisitable {
+    static constexpr bool value = requires(Cell::Visitor& visitor, T const& value) { visitor.visit(value); };
 };
 
 }

@@ -51,6 +51,15 @@ bool FinalizationRegistry::remove_by_token(Cell& unregister_token)
     return removed;
 }
 
+bool FinalizationRegistry::has_empty_cells() const
+{
+    for (auto& record : m_records) {
+        if (!record.target)
+            return true;
+    }
+    return false;
+}
+
 void FinalizationRegistry::remove_dead_cells(Badge<GC::Heap>)
 {
     auto any_cells_were_removed = false;
@@ -62,7 +71,6 @@ void FinalizationRegistry::remove_dead_cells(Badge<GC::Heap>)
             continue;
         record.target = nullptr;
         any_cells_were_removed = true;
-        break;
     }
     if (any_cells_were_removed) {
         // NOTE: We make a GC::Root here to ensure that the FinalizationRegistry stays alive
