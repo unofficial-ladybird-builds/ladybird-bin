@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/NeverDestroyed.h>
 #include <LibGC/Cell.h>
 #include <LibGC/CellAllocator.h>
 #include <LibGC/ConservativeVector.h>
@@ -27,8 +28,8 @@ GC_DEFINE_ALLOCATOR(TestCell);
 
 static GC::Heap& test_heap()
 {
-    static GC::Heap heap([](auto&) { });
-    return heap;
+    static AK::NeverDestroyed<GC::Heap> heap([](auto&) { });
+    return *heap;
 }
 
 class TestVisitor : public GC::Cell::Visitor {

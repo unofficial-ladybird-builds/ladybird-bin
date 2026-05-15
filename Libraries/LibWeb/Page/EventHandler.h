@@ -16,6 +16,7 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibUnicode/Forward.h>
 #include <LibWeb/CSS/Enums.h>
+#include <LibWeb/Compositor/AsyncScrollingState.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Gamepad/SDLGamepadForward.h>
@@ -26,6 +27,11 @@
 #include <LibWeb/UIEvents/KeyCode.h>
 
 namespace Web {
+
+struct AsyncScrollOperation {
+    GC::Ptr<HTML::Navigable> navigable;
+    Compositor::AsyncScrollOperationID operation_id { 0 };
+};
 
 class WEB_API EventHandler {
     friend class AutoScrollHandler;
@@ -39,7 +45,7 @@ public:
     EventResult handle_mousedown(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, int click_count);
     EventResult handle_mousemove(CSSPixelPoint, CSSPixelPoint screen_position, unsigned buttons, unsigned modifiers);
     EventResult handle_mouseup(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers);
-    EventResult handle_mousewheel(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, double wheel_delta_x, double wheel_delta_y, bool async_scroll_performed_default_action = false);
+    EventResult handle_mousewheel(CSSPixelPoint, CSSPixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, double wheel_delta_x, double wheel_delta_y, bool async_scroll_performed_default_action = false, Optional<AsyncScrollOperation>* async_scroll_operation = nullptr);
     EventResult handle_mouseleave();
 
     EventResult handle_keydown(UIEvents::KeyCode, unsigned modifiers, u32 code_point, bool repeat);
@@ -100,7 +106,9 @@ private:
 
     void run_mousedown_default_actions(DOM::Document&, CSSPixelPoint visual_viewport_position, CSSPixelPoint viewport_position, unsigned button, unsigned modifiers, int click_count);
     void run_activation_behavior(GC::Ref<DOM::Node>, unsigned button, unsigned modifiers);
+
     void maybe_show_context_menu(GC::Ref<DOM::Node>, MouseEventCoordinates const&, CSSPixelPoint screen_position, CSSPixelPoint viewport_position, unsigned buttons, unsigned modifiers);
+    bool maybe_request_paste_for_middle_click(DOM::Document&, CSSPixelPoint visual_viewport_position);
 
     bool initiate_character_selection(DOM::Document&, Painting::HitTestResult const&, CSS::UserSelect, bool shift_held);
     bool initiate_word_selection(DOM::Document&, Painting::HitTestResult const&, CSS::UserSelect);

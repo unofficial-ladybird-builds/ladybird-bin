@@ -7,6 +7,7 @@
 #include <AK/BitCast.h>
 #include <AK/HashMap.h>
 #include <AK/HashTable.h>
+#include <AK/NeverDestroyed.h>
 #include <AK/Optional.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
@@ -28,8 +29,8 @@ GC_DEFINE_ALLOCATOR(TestCell);
 
 static GC::Heap& test_heap()
 {
-    static GC::Heap heap([](auto&) { });
-    return heap;
+    static AK::NeverDestroyed<GC::Heap> heap([](auto&) { });
+    return *heap;
 }
 
 class TestVisitor : public GC::Cell::Visitor {

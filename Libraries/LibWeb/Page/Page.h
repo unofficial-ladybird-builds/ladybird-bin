@@ -106,7 +106,7 @@ public:
     EventResult handle_mousedown(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, int click_count);
     EventResult handle_mousemove(DevicePixelPoint, DevicePixelPoint screen_position, unsigned buttons, unsigned modifiers);
     EventResult handle_mouseleave();
-    EventResult handle_mousewheel(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, double wheel_delta_x, double wheel_delta_y, bool async_scroll_performed_default_action = false);
+    EventResult handle_mousewheel(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, double wheel_delta_x, double wheel_delta_y, bool async_scroll_performed_default_action = false, Optional<AsyncScrollOperation>* async_scroll_operation = nullptr);
 
     EventResult handle_drag_and_drop_event(DragEvent::Type, DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, Vector<HTML::SelectedFile> files);
     EventResult handle_pinch_event(DevicePixelPoint point, double scale);
@@ -131,6 +131,9 @@ public:
 
     bool enable_autoscroll() const { return m_enable_autoscroll; }
     void set_enable_autoscroll(bool b) { m_enable_autoscroll = b; }
+
+    bool enable_primary_paste() const { return m_enable_primary_paste; }
+    void set_enable_primary_paste(bool b) { m_enable_primary_paste = b; }
 
     bool async_scrolling_enabled() const { return m_async_scrolling_enabled; }
     void set_async_scrolling_enabled(bool b) { m_async_scrolling_enabled = b; }
@@ -295,6 +298,7 @@ private:
     bool m_is_scripting_enabled { true };
     bool m_should_block_pop_ups { true };
     bool m_enable_autoscroll { true };
+    bool m_enable_primary_paste { true };
     bool m_async_scrolling_enabled { false };
     u64 m_wheel_event_listener_state_generation { 0 };
 
@@ -476,6 +480,7 @@ public:
 
     virtual void page_did_insert_clipboard_entry(Clipboard::SystemClipboardRepresentation const&, [[maybe_unused]] StringView presentation_style) { }
     virtual void page_did_request_clipboard_entries([[maybe_unused]] u64 request_id) { }
+    virtual void page_did_request_paste() { }
 
     virtual void page_did_change_audio_play_state(HTML::AudioPlayState) { }
 

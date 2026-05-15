@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/DocumentState.h>
+#include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/History.h>
@@ -61,6 +62,7 @@
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Selection/Selection.h>
 #include <LibWeb/UIEvents/InputTypes.h>
+#include <LibWeb/WebIDL/Promise.h>
 #include <LibWeb/XHR/FormData.h>
 
 #include <AK/Debug.h>
@@ -297,10 +299,13 @@ Navigable::~Navigable() = default;
 void Navigable::set_has_been_destroyed()
 {
     m_has_been_destroyed = true;
+    resolve_all_pending_async_scroll_operations();
 }
 
 void Navigable::remove_from_all_navigables()
 {
+    resolve_all_pending_async_scroll_operations();
+
     if (m_active_document)
         m_active_document->set_navigable(nullptr);
     all_navigables().remove(*this);
@@ -325,6 +330,9 @@ void Navigable::visit_edges(Cell::Visitor& visitor)
     for (auto& navigation_params : m_pending_navigations) {
         navigation_params.visit_edges(visitor);
     }
+
+    for (auto& async_scroll_operation : m_pending_async_scroll_operations)
+        visitor.visit(async_scroll_operation.promise);
 }
 
 void Navigable::NavigateParams::visit_edges(Cell::Visitor& visitor)
@@ -2929,7 +2937,7 @@ static DOM::Element* element_for_async_scroll_node_stable_id(DOM::Document& docu
     return element;
 }
 
-static bool adopt_async_element_scroll_offset(DOM::Document& document, Compositor::AsyncScrollNodeStableID const& stable_id, CSSPixelPoint scroll_offset)
+static bool adopt_async_element_scroll_delta(DOM::Document& document, Compositor::AsyncScrollNodeStableID const& stable_id, CSSPixelPoint scroll_delta)
 {
     auto* element = element_for_async_scroll_node_stable_id(document, stable_id);
     if (!element)
@@ -2950,6 +2958,8 @@ static bool adopt_async_element_scroll_offset(DOM::Document& document, Composito
         break;
     }
 
+    auto scroll_offset = element->scroll_offset(pseudo_element);
+    scroll_offset.translate_by(scroll_delta);
     if (element->scroll_offset(pseudo_element) == scroll_offset)
         return false;
 
@@ -2959,6 +2969,58 @@ static bool adopt_async_element_scroll_offset(DOM::Document& document, Composito
     if (!document.pending_scroll_events().contains_slow(DOM::Document::PendingScrollEvent { *element, EventNames::scroll }))
         document.pending_scroll_events().append({ *element, EventNames::scroll });
     element->set_needs_repaint(InvalidateDisplayList::No);
+    return true;
+}
+
+static void queue_async_scroll_operation_promise_resolution(GC::Ref<WebIDL::Promise> promise)
+{
+    auto& realm = promise->promise()->shape().realm();
+    HTML::queue_a_microtask(nullptr, GC::create_function(realm.heap(), [promise] {
+        auto& realm = promise->promise()->shape().realm();
+        HTML::TemporaryExecutionContext execution_context {
+            realm,
+            HTML::TemporaryExecutionContext::CallbacksEnabled::Yes
+        };
+        WebIDL::resolve_promise(realm, promise);
+    }));
+}
+
+void Navigable::wait_for_async_scroll_operation(Compositor::AsyncScrollOperationID operation_id, GC::Ref<WebIDL::Promise> promise)
+{
+    if (has_been_destroyed() || !all_navigables().contains(*this)) {
+        queue_async_scroll_operation_promise_resolution(promise);
+        return;
+    }
+
+    m_pending_async_scroll_operations.append({ operation_id, promise });
+}
+
+void Navigable::resolve_async_scroll_operation(Compositor::AsyncScrollOperationID operation_id)
+{
+    m_pending_async_scroll_operations.remove_first_matching([&](auto const& pending) {
+        if (pending.operation_id != operation_id)
+            return false;
+
+        queue_async_scroll_operation_promise_resolution(pending.promise);
+        return true;
+    });
+}
+
+void Navigable::resolve_all_pending_async_scroll_operations()
+{
+    while (!m_pending_async_scroll_operations.is_empty()) {
+        auto pending = m_pending_async_scroll_operations.take_last();
+        queue_async_scroll_operation_promise_resolution(pending.promise);
+    }
+}
+
+static bool adopt_async_viewport_scroll_delta(Navigable& navigable, CSSPixelPoint scroll_delta)
+{
+    auto scroll_offset = navigable.viewport_scroll_offset();
+    scroll_offset.translate_by(scroll_delta);
+    if (scroll_offset == navigable.viewport_scroll_offset())
+        return false;
+    navigable.perform_scroll_of_viewport_scrolling_box(scroll_offset);
     return true;
 }
 
@@ -2974,31 +3036,38 @@ void Navigable::adopt_pending_async_scroll_offsets()
         return;
     }
 
-    auto async_scroll_offsets = m_rendering_thread.take_pending_async_scroll_offsets();
-    if (async_scroll_offsets.is_empty())
+    auto async_scroll_updates = m_rendering_thread.take_pending_async_scroll_updates();
+    if (async_scroll_updates.scroll_offsets.is_empty() && async_scroll_updates.completed_operation_ids.is_empty())
         return;
 
     auto document = active_document();
-    if (!document)
+    if (!document) {
+        for (auto operation_id : async_scroll_updates.completed_operation_ids)
+            resolve_async_scroll_operation(operation_id);
         return;
+    }
 
     auto device_pixels_per_css_pixel = page().client().device_pixels_per_css_pixel();
-    for (auto const& async_scroll_offset : async_scroll_offsets) {
-        auto css_scroll_offset = async_scroll_offset_to_css_pixels(async_scroll_offset.scroll_offset, device_pixels_per_css_pixel);
+    for (auto const& async_scroll_offset : async_scroll_updates.scroll_offsets) {
+        auto css_scroll_delta = async_scroll_offset_to_css_pixels(async_scroll_offset.unadopted_scroll_delta, device_pixels_per_css_pixel);
         if (async_scroll_offset.stable_node_id.kind == Compositor::AsyncScrollNodeKind::Viewport) {
             if (async_scroll_offset.stable_node_id.node_id != document->unique_id())
                 continue;
-            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Main thread adopting async viewport offset {},{}",
-                async_scroll_offset.scroll_offset.x(), async_scroll_offset.scroll_offset.y());
-            perform_scroll_of_viewport_scrolling_box(css_scroll_offset);
+            if (adopt_async_viewport_scroll_delta(*this, css_scroll_delta)) {
+                dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Main thread adopting async viewport delta {},{}",
+                    async_scroll_offset.unadopted_scroll_delta.x(), async_scroll_offset.unadopted_scroll_delta.y());
+            }
             continue;
         }
 
-        if (adopt_async_element_scroll_offset(*document, async_scroll_offset.stable_node_id, css_scroll_offset)) {
-            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Main thread adopting async element offset {},{}",
-                async_scroll_offset.scroll_offset.x(), async_scroll_offset.scroll_offset.y());
+        if (adopt_async_element_scroll_delta(*document, async_scroll_offset.stable_node_id, css_scroll_delta)) {
+            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Main thread adopting async element delta {},{}",
+                async_scroll_offset.unadopted_scroll_delta.x(), async_scroll_offset.unadopted_scroll_delta.y());
         }
     }
+
+    for (auto operation_id : async_scroll_updates.completed_operation_ids)
+        resolve_async_scroll_operation(operation_id);
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#rendering-opportunity
