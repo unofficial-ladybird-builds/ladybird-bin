@@ -2188,7 +2188,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
     stream->set_up_with_byte_reading_support(pull_algorithm, cancel_algorithm);
 
-    auto on_headers_received = GC::create_function(vm.heap(), [&vm, pending_response, stream, request, fetched_data_receiver](HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::AnonymousBuffer> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key) {
+    auto on_headers_received = GC::create_function(vm.heap(), [&vm, pending_response, stream, request, fetched_data_receiver](HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::ImmutableBytes> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key) {
         if (pending_response->is_resolved()) {
             // RequestServer will send us the response headers twice, the second time being for HTTP trailers. This
             // fetch algorithm is not interested in trailers, so just drop them here.
@@ -2229,8 +2229,12 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
 
     // 16. Run these steps in parallel:
     //     FIXME: 1. Run these steps, but abort when fetchParams is canceled:
-    auto on_data_received = GC::create_function(vm.heap(), [fetched_data_receiver](ReadonlyBytes bytes) {
-        fetched_data_receiver->handle_network_bytes(bytes, FetchedDataReceiver::NetworkState::Ongoing);
+    auto on_data_received = GC::create_function(vm.heap(), [fetched_data_receiver](Requests::ResponseData data) {
+        fetched_data_receiver->handle_network_data(move(data), FetchedDataReceiver::NetworkState::Ongoing);
+    });
+
+    auto on_cached_body_available = GC::create_function(vm.heap(), [fetched_data_receiver](Core::ImmutableBytes data) {
+        fetched_data_receiver->set_cached_response_body(move(data));
     });
 
     auto on_complete = GC::create_function(vm.heap(), [&vm, &realm, pending_response, stream, fetched_data_receiver](bool success, Requests::RequestTimingInfo const&, Optional<StringView> error_message) {
@@ -2238,7 +2242,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
         if (success) {
-            fetched_data_receiver->handle_network_bytes({}, FetchedDataReceiver::NetworkState::Complete);
+            fetched_data_receiver->handle_network_data(Requests::ResponseData::from_bytes({}), FetchedDataReceiver::NetworkState::Complete);
         } else {
             // 16.1.2.2. Otherwise, if stream is readable, error stream with a TypeError.
             auto error = MUST(String::formatted("Load failed: {}", error_message.value_or("Unknown error"sv)));
@@ -2251,7 +2255,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         }
     });
 
-    auto network_request = ResourceLoader::the().load(load_request, on_headers_received, on_data_received, on_complete);
+    auto network_request = ResourceLoader::the().load(load_request, on_headers_received, on_data_received, on_cached_body_available, on_complete);
     fetch_params.controller()->set_pending_request(network_request);
 
     return pending_response;

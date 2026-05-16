@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
 #include <AK/Utf16String.h>
 #include <LibCore/EventLoop.h>
 #include <LibCrypto/Hash/SHA2.h>
@@ -59,6 +60,23 @@ struct BytecodeCacheContext {
 
 static ::Crypto::Hash::Digest<::Crypto::Hash::SHA256::DigestSize * 8> bytecode_cache_source_hash(JS::SourceCode const& source_code)
 {
+    if (source_code.code_view().has_ascii_storage()) {
+        auto hasher = ::Crypto::Hash::SHA256::create();
+        auto ascii = source_code.code_view().ascii_span();
+
+        constexpr size_t chunk_size = 4096;
+        Array<u16, chunk_size> utf16_data;
+        for (size_t offset = 0; offset < ascii.size(); offset += chunk_size) {
+            auto current_chunk_size = min(chunk_size, ascii.size() - offset);
+            for (size_t i = 0; i < current_chunk_size; ++i)
+                utf16_data[i] = static_cast<u16>(ascii[offset + i]);
+
+            hasher->update(reinterpret_cast<u8 const*>(utf16_data.data()), current_chunk_size * sizeof(u16));
+        }
+
+        return hasher->digest();
+    }
+
     return ::Crypto::Hash::SHA256::hash(reinterpret_cast<u8 const*>(source_code.utf16_data()), source_code.length_in_code_units() * sizeof(u16));
 }
 
@@ -612,7 +630,7 @@ void fetch_classic_script(GC::Ref<HTMLScriptElement> element, URL::URL const& ur
             // so the fallback compile path below can reuse them if decode or materialization is rejected.
             if (auto const& bytecode = response->javascript_bytecode_cache(); bytecode.has_value()) {
                 auto source_hash = bytecode_cache_source_hash(*source_code);
-                if (auto* bytecode_cache = JS::RustIntegration::decode_bytecode_cache_blob(bytecode->bytes(), JS::RustIntegration::ProgramType::Script, source_hash.bytes())) {
+                if (auto* bytecode_cache = JS::RustIntegration::decode_bytecode_cache_blob(*bytecode, JS::RustIntegration::ProgramType::Script, source_hash.bytes())) {
                     auto script = ClassicScript::create_from_bytecode_cache(response_url_string, source_code, settings_object, response_url, bytecode_cache, muted_errors);
                     // Bytecode validation runs during materialization and may reject a structurally valid blob whose
                     // bytecode is corrupt. Treat that as a cache miss and fall through to off-thread source compile.
@@ -998,7 +1016,7 @@ void fetch_single_module_script(JS::Realm& realm,
                     auto bytecode_cache_context = bytecode_cache_context_for_request(*request, *internal_response, response_url);
                     if (auto const& bytecode = internal_response->javascript_bytecode_cache(); bytecode.has_value()) {
                         auto source_hash = bytecode_cache_source_hash(*source_code);
-                        if (auto* bytecode_cache = JS::RustIntegration::decode_bytecode_cache_blob(bytecode->bytes(), JS::RustIntegration::ProgramType::Module, source_hash.bytes())) {
+                        if (auto* bytecode_cache = JS::RustIntegration::decode_bytecode_cache_blob(*bytecode, JS::RustIntegration::ProgramType::Module, source_hash.bytes())) {
                             auto module_script = ModuleScript::create_from_bytecode_cache(url_string, source_code, settings_object, response_url, bytecode_cache).release_value_but_fixme_should_propagate_errors();
                             if (module_script && module_script->parse_error().is_null()) {
                                 settings_object.module_map().set(url, module_type_string, { ModuleMap::EntryType::ModuleScript, module_script });
