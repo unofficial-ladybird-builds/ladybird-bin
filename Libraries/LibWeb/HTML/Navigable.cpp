@@ -281,7 +281,6 @@ Navigable::Navigable(
     : m_page(page)
     , m_event_handler({}, *this)
     , m_is_svg_page(is_svg_page)
-    , m_backing_store_manager(heap().allocate<Painting::BackingStoreManager>(*this))
     , m_rendering_thread(
           is_svg_page ? 0 : page->client().id(),
           is_svg_page ? Compositor::CompositorThread::PagePresentationRegistration::No : page_presentation_registration)
@@ -324,7 +323,6 @@ void Navigable::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_parent);
     visitor.visit(m_active_document);
     visitor.visit(m_container);
-    visitor.visit(m_backing_store_manager);
     m_event_handler.visit_edges(visitor);
 
     for (auto& navigation_params : m_pending_navigations) {
@@ -2849,8 +2847,10 @@ void Navigable::set_viewport_size(CSSPixelSize size, InvalidateDisplayList inval
     m_viewport_size = size;
 
     if (!m_is_svg_page) {
-        m_backing_store_manager->restart_resize_timer();
-        m_backing_store_manager->resize_backing_stores_if_needed(Web::Painting::BackingStoreManager::WindowResizingInProgress::Yes);
+        m_rendering_thread.viewport_size_updated(
+            page().css_to_device_rect(viewport_rect()).size().to_type<int>(),
+            is_top_level_traversable(),
+            Compositor::WindowResizingInProgress::Yes);
         m_pending_set_browser_zoom_request = false;
     }
 
@@ -3303,10 +3303,17 @@ void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
         || !(m_rendering_thread_display_list_paint_config.value() == paint_config);
 
     RefPtr<Painting::DisplayList> display_list;
+    Painting::DisplayListResourceTransaction resource_transaction;
     if (should_record_display_list) {
-        display_list = document->record_display_list(paint_config);
+        display_list = document->record_display_list(paint_config, m_display_list_resource_storage);
         if (!display_list)
             return;
+        auto display_list_resources = m_display_list_resource_storage.collect_referenced_resources(*display_list);
+        resource_transaction = m_display_list_resource_storage.create_transaction(
+            m_rendering_thread_display_list_resources,
+            display_list_resources);
+        m_display_list_resource_storage.retain_only(display_list_resources);
+        m_rendering_thread_display_list_resources = move(display_list_resources);
     }
 
     auto document_paintable = document->paintable();
@@ -3315,7 +3322,7 @@ void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
 
     Painting::ScrollStateSnapshot scroll_state_snapshot { document_paintable->scroll_state_snapshot() };
     if (should_record_display_list) {
-        m_rendering_thread.update_display_list(*display_list, move(scroll_state_snapshot));
+        m_rendering_thread.update_display_list(*display_list, move(resource_transaction), move(scroll_state_snapshot));
         m_needs_to_record_display_list = false;
         m_rendering_thread_display_list_paint_config = paint_config;
     } else {

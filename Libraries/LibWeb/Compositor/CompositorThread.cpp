@@ -5,15 +5,16 @@
  */
 
 #include <LibCore/EventLoop.h>
+#include <LibCore/Timer.h>
 #include <LibGfx/DecodedImageFrame.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibGfx/SharedImage.h>
-#include <LibGfx/SharedImageBuffer.h>
 #include <LibGfx/SkiaBackendContext.h>
 #include <LibGfx/SkiaUtils.h>
 #include <LibThreading/Thread.h>
 #include <LibWeb/Compositor/AsyncScrollTree.h>
 #include <LibWeb/Compositor/AsyncScrollingState.h>
+#include <LibWeb/Compositor/BackingStoreManager.h>
 #include <LibWeb/Compositor/CompositorThread.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/Page/InputEvent.h>
@@ -26,38 +27,25 @@
 #include <AK/Queue.h>
 #include <AK/Time.h>
 
-#ifdef USE_VULKAN_DMABUF_IMAGES
-#    include <AK/Array.h>
-#    include <LibGfx/VulkanImage.h>
-#    include <libdrm/drm_fourcc.h>
-#endif
-
 #include <core/SkCanvas.h>
 #include <core/SkColor.h>
 #include <core/SkPaint.h>
 #include <core/SkRRect.h>
+#include <gpu/ganesh/GrDirectContext.h>
 
 #include <LibCore/Platform/ScopedAutoreleasePool.h>
 
 namespace Web::Compositor {
 
-struct BackingStoreState {
-    RefPtr<Gfx::PaintingSurface> front_store;
-    RefPtr<Gfx::PaintingSurface> back_store;
-    i32 front_bitmap_id { -1 };
-    i32 back_bitmap_id { -1 };
-
-    void swap()
-    {
-        AK::swap(front_store, back_store);
-        AK::swap(front_bitmap_id, back_bitmap_id);
-    }
-
-    bool is_valid() const { return front_store && back_store; }
-};
+static constexpr auto skia_deferred_cleanup_interval = AK::Duration::from_seconds(1);
+static constexpr auto skia_aggressive_cleanup_interval = AK::Duration::from_seconds(5);
+static constexpr auto skia_deferred_cleanup_resource_age = std::chrono::seconds(5);
+static constexpr auto skia_resource_cache_high_watermark = 384 * MiB;
+static constexpr auto skia_resource_cache_critical_watermark = 512 * MiB;
 
 struct UpdateDisplayListCommand {
     NonnullRefPtr<Painting::DisplayList> display_list;
+    Painting::DisplayListResourceTransaction resource_transaction;
     Painting::ScrollStateSnapshot scroll_state_snapshot;
 };
 
@@ -79,10 +67,10 @@ struct UpdateScrollStateCommand {
     Painting::ScrollStateSnapshot scroll_state_snapshot;
 };
 
-struct UpdateBackingStoresCommand {
-    Gfx::IntSize size;
-    i32 front_bitmap_id;
-    i32 back_bitmap_id;
+struct ViewportSizeUpdatedCommand {
+    Gfx::IntSize viewport_size;
+    bool is_top_level_traversable { false };
+    WindowResizingInProgress window_resize_in_progress { WindowResizingInProgress::No };
 };
 
 struct ScreenshotCommand {
@@ -90,7 +78,8 @@ struct ScreenshotCommand {
     Function<void()> callback;
 };
 
-using CompositorCommand = Variant<UpdateDisplayListCommand, AsyncScrollByCommand, ViewportScrollbarDragCommand, UpdateScrollStateCommand, UpdateBackingStoresCommand, ScreenshotCommand>;
+using CompositorCommand = Variant<UpdateDisplayListCommand, AsyncScrollByCommand, ViewportScrollbarDragCommand,
+    UpdateScrollStateCommand, ViewportSizeUpdatedCommand, ScreenshotCommand>;
 
 static SkRect to_skia_rect(Gfx::IntRect const& rect)
 {
@@ -215,81 +204,31 @@ static void paint_viewport_scrollbars(Gfx::PaintingSurface& surface, ReadonlySpa
 
 static void flush_surface(Gfx::PaintingSurface& surface)
 {
-    if (auto context = surface.skia_backend_context())
+    if (auto context = surface.skia_backend_context()) {
         context->flush_and_submit(&surface.sk_surface());
+        auto* skia_context = context->sk_context();
+
+        static thread_local Optional<MonotonicTime> s_last_deferred_cleanup;
+        static thread_local Optional<MonotonicTime> s_last_aggressive_cleanup;
+
+        auto const now = MonotonicTime::now();
+        if (!s_last_deferred_cleanup.has_value() || now - *s_last_deferred_cleanup >= skia_deferred_cleanup_interval) {
+            s_last_deferred_cleanup = now;
+            skia_context->performDeferredCleanup(skia_deferred_cleanup_resource_age);
+
+            size_t resource_bytes = 0;
+            skia_context->getResourceCacheUsage(nullptr, &resource_bytes);
+            if (resource_bytes >= skia_resource_cache_high_watermark && (!s_last_aggressive_cleanup.has_value() || now - *s_last_aggressive_cleanup >= skia_aggressive_cleanup_interval)) {
+                s_last_aggressive_cleanup = now;
+                skia_context->performDeferredCleanup(std::chrono::milliseconds(0));
+                skia_context->getResourceCacheUsage(nullptr, &resource_bytes);
+                if (resource_bytes >= skia_resource_cache_critical_watermark)
+                    skia_context->purgeUnlockedResources(GrPurgeResourceOptions::kScratchResourcesOnly);
+            }
+        }
+    }
     surface.flush();
 }
-
-struct BackingStorePair {
-    RefPtr<Gfx::PaintingSurface> front;
-    RefPtr<Gfx::PaintingSurface> back;
-};
-
-#ifdef USE_VULKAN
-static NonnullRefPtr<Gfx::PaintingSurface> create_gpu_painting_surface_with_bitmap_flush(Gfx::IntSize size, Gfx::SharedImageBuffer& buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
-{
-    auto surface = Gfx::PaintingSurface::create_with_size(size, Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, skia_backend_context);
-    auto bitmap = buffer.bitmap();
-    surface->on_flush = [bitmap = move(bitmap)](auto& surface) {
-        surface.read_into_bitmap(*bitmap);
-    };
-    return surface;
-}
-#endif
-
-static BackingStorePair create_shareable_bitmap_backing_stores([[maybe_unused]] Gfx::IntSize size, Gfx::SharedImageBuffer& front_buffer, Gfx::SharedImageBuffer& back_buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
-{
-#ifdef AK_OS_MACOS
-    if (skia_backend_context) {
-        return {
-            .front = Gfx::PaintingSurface::create_from_shared_image_buffer(front_buffer, *skia_backend_context),
-            .back = Gfx::PaintingSurface::create_from_shared_image_buffer(back_buffer, *skia_backend_context),
-        };
-    }
-#else
-#    ifdef USE_VULKAN
-    if (skia_backend_context) {
-        return {
-            .front = create_gpu_painting_surface_with_bitmap_flush(size, front_buffer, skia_backend_context),
-            .back = create_gpu_painting_surface_with_bitmap_flush(size, back_buffer, skia_backend_context),
-        };
-    }
-#    else
-    (void)skia_backend_context;
-#    endif
-#endif
-
-    return {
-        .front = Gfx::PaintingSurface::wrap_bitmap(*front_buffer.bitmap()),
-        .back = Gfx::PaintingSurface::wrap_bitmap(*back_buffer.bitmap()),
-    };
-}
-
-#ifdef USE_VULKAN_DMABUF_IMAGES
-struct DMABufBackingStorePair {
-    RefPtr<Gfx::PaintingSurface> front;
-    RefPtr<Gfx::PaintingSurface> back;
-    Gfx::SharedImage front_shared_image;
-    Gfx::SharedImage back_shared_image;
-};
-
-static ErrorOr<DMABufBackingStorePair> create_linear_dmabuf_backing_stores(Gfx::IntSize size, Gfx::SkiaBackendContext& skia_backend_context)
-{
-    auto const& vulkan_context = skia_backend_context.vulkan_context();
-    static constexpr Array<uint64_t, 1> linear_modifiers = { DRM_FORMAT_MOD_LINEAR };
-    auto front_image = TRY(Gfx::create_shared_vulkan_image(vulkan_context, size.width(), size.height(), VK_FORMAT_B8G8R8A8_UNORM, linear_modifiers.span()));
-    auto back_image = TRY(Gfx::create_shared_vulkan_image(vulkan_context, size.width(), size.height(), VK_FORMAT_B8G8R8A8_UNORM, linear_modifiers.span()));
-    auto front_shared_image = Gfx::duplicate_shared_image(*front_image);
-    auto back_shared_image = Gfx::duplicate_shared_image(*back_image);
-
-    return DMABufBackingStorePair {
-        .front = Gfx::PaintingSurface::create_from_vkimage(skia_backend_context, move(front_image), Gfx::PaintingSurface::Origin::TopLeft),
-        .back = Gfx::PaintingSurface::create_from_vkimage(skia_backend_context, move(back_image), Gfx::PaintingSurface::Origin::TopLeft),
-        .front_shared_image = move(front_shared_image),
-        .back_shared_image = move(back_shared_image),
-    };
-}
-#endif
 
 class CompositorThread::ThreadData final : public AtomicRefCounted<ThreadData> {
 public:
@@ -656,6 +595,7 @@ public:
                     [this](UpdateDisplayListCommand& cmd) {
                         dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Compositor processing display list update (deferred_async_present={})",
                             m_has_deferred_async_scroll_present);
+                        m_display_list_resource_storage.apply_transaction(move(cmd.resource_transaction));
                         m_cached_display_list = move(cmd.display_list);
                         m_cached_scroll_state_snapshot = move(cmd.scroll_state_snapshot);
                         auto async_scrolling_state = async_scrolling_state_from_display_list(*m_cached_display_list);
@@ -774,19 +714,23 @@ public:
                             }
                         }
                     },
-                    [this](UpdateBackingStoresCommand& cmd) {
+                    [this](ViewportSizeUpdatedCommand& cmd) {
+                        auto allocation = m_backing_store_manager.resize_backing_stores_if_needed(
+                            cmd.viewport_size, cmd.is_top_level_traversable, cmd.window_resize_in_progress);
+                        if (!allocation.has_value())
+                            return;
+
                         if (m_has_async_scrolling_state) {
-                            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Compositor received backing stores front={} back={} size={}x{}",
-                                cmd.front_bitmap_id, cmd.back_bitmap_id, cmd.size.width(), cmd.size.height());
+                            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Compositor resizing backing stores front={} back={} size={}x{}",
+                                allocation->front_bitmap_id, allocation->back_bitmap_id, allocation->size.width(), allocation->size.height());
                         }
-                        allocate_backing_stores(cmd);
-                        m_backing_stores.front_bitmap_id = cmd.front_bitmap_id;
-                        m_backing_stores.back_bitmap_id = cmd.back_bitmap_id;
+                        if (auto publication = m_backing_store_manager.allocate_backing_stores(*allocation, m_skia_backend_context, m_presents_to_client); publication.has_value())
+                            publish_backing_store_pair(publication.release_value());
                     },
                     [this](ScreenshotCommand& cmd) {
                         if (!m_cached_display_list)
                             return;
-                        m_skia_player->execute(*m_cached_display_list, m_cached_scroll_state_snapshot, *cmd.target_surface);
+                        m_skia_player->execute(*m_cached_display_list, m_display_list_resource_storage, m_cached_scroll_state_snapshot, *cmd.target_surface);
                         paint_viewport_scrollbar_overlay(*cmd.target_surface);
                         flush_surface(*cmd.target_surface);
                         if (cmd.callback) {
@@ -1060,20 +1004,21 @@ private:
             return m_presentation_mode;
         }();
 
-        if (m_cached_display_list && m_backing_stores.is_valid()) {
+        if (m_cached_display_list && m_backing_store_manager.is_valid()) {
             auto should_clear_back_store = presentation_mode.visit(
                 [](CompositorThread::PresentToUI) { return false; },
                 [](CompositorThread::PublishToExternalContent const&) { return true; });
+            auto& back_store = m_backing_store_manager.back_store();
             if (should_clear_back_store) {
                 // Embedded navigables leave their PaintConfig canvas unfilled, so double-buffered back stores must be
                 // cleared before repainting.
-                m_backing_stores.back_store->canvas().clear(SK_ColorTRANSPARENT);
+                back_store.canvas().clear(SK_ColorTRANSPARENT);
             }
-            m_skia_player->execute(*m_cached_display_list, m_cached_scroll_state_snapshot, *m_backing_stores.back_store);
-            paint_viewport_scrollbar_overlay(*m_backing_stores.back_store);
-            flush_surface(*m_backing_stores.back_store);
-            i32 rendered_bitmap_id = m_backing_stores.back_bitmap_id;
-            m_backing_stores.swap();
+            m_skia_player->execute(*m_cached_display_list, m_display_list_resource_storage, m_cached_scroll_state_snapshot, back_store);
+            paint_viewport_scrollbar_overlay(back_store);
+            flush_surface(back_store);
+            i32 rendered_bitmap_id = m_backing_store_manager.back_bitmap_id();
+            m_backing_store_manager.swap();
             dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Finished {} display-list replay into bitmap {}",
                 delivery_name, rendered_bitmap_id);
 
@@ -1098,7 +1043,7 @@ private:
                     }
                     if (m_has_async_scrolling_state)
                         dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Publishing present to external content source");
-                    auto snapshot = Gfx::DecodedImageFrame { *m_backing_stores.front_store->snapshot_bitmap() };
+                    auto snapshot = Gfx::DecodedImageFrame { *m_backing_store_manager.front_store().snapshot_bitmap() };
                     mode.source->update(move(snapshot));
                 });
         } else {
@@ -1108,7 +1053,7 @@ private:
             }
             if (m_has_async_scrolling_state) {
                 dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Skipping {} present: cached_display_list={}, backing_stores_valid={}",
-                    delivery_name, !!m_cached_display_list, m_backing_stores.is_valid());
+                    delivery_name, !!m_cached_display_list, m_backing_store_manager.is_valid());
             }
         }
 
@@ -1130,41 +1075,13 @@ private:
         m_skia_player = make<Painting::DisplayListPlayerSkia>(m_skia_backend_context);
     }
 
-    void publish_backing_store_pair(UpdateBackingStoresCommand& cmd, Gfx::SharedImage front_shared_image, Gfx::SharedImage back_shared_image)
+    void publish_backing_store_pair(BackingStoreManager::Publication&& publication)
     {
         if (!m_presents_to_client)
             return;
 
-        VERIFY(CompositorThread::present_backing_stores_to_client(m_page_id, cmd.front_bitmap_id, move(front_shared_image), cmd.back_bitmap_id, move(back_shared_image)));
-    }
-
-    void allocate_backing_stores(UpdateBackingStoresCommand& cmd)
-    {
-#ifdef USE_VULKAN_DMABUF_IMAGES
-        if (m_skia_backend_context && m_presents_to_client) {
-            auto backing_stores = create_linear_dmabuf_backing_stores(cmd.size, *m_skia_backend_context);
-            if (!backing_stores.is_error()) {
-                auto backing_store_pair = backing_stores.release_value();
-                m_backing_stores.front_store = move(backing_store_pair.front);
-                m_backing_stores.back_store = move(backing_store_pair.back);
-                publish_backing_store_pair(cmd, move(backing_store_pair.front_shared_image), move(backing_store_pair.back_shared_image));
-                return;
-            }
-        }
-#endif
-
-        auto front_buffer = Gfx::SharedImageBuffer::create(cmd.size);
-        auto back_buffer = Gfx::SharedImageBuffer::create(cmd.size);
-        auto front_shared_image = front_buffer.export_shared_image();
-        auto back_shared_image = back_buffer.export_shared_image();
-        auto backing_store_pair = create_shareable_bitmap_backing_stores(cmd.size, front_buffer, back_buffer, m_skia_backend_context);
-        m_backing_stores.front_store = move(backing_store_pair.front);
-        m_backing_stores.back_store = move(backing_store_pair.back);
-        publish_backing_store_pair(cmd, move(front_shared_image), move(back_shared_image));
-        if (m_has_async_scrolling_state) {
-            dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Allocated bitmap backing stores front={} back={} size={}x{}",
-                cmd.front_bitmap_id, cmd.back_bitmap_id, cmd.size.width(), cmd.size.height());
-        }
+        VERIFY(CompositorThread::present_backing_stores_to_client(
+            m_page_id, publication.front_bitmap_id, move(publication.front_shared_image), publication.back_bitmap_id, move(publication.back_shared_image)));
     }
 
     template<typename Invokee>
@@ -1192,6 +1109,7 @@ private:
 
     OwnPtr<Painting::DisplayListPlayerSkia> m_skia_player;
     RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
+    Painting::DisplayListResourceStorage m_display_list_resource_storage;
     RefPtr<Painting::DisplayList> m_cached_display_list;
     Painting::ScrollStateSnapshot m_cached_scroll_state_snapshot;
     Vector<ViewportScrollbar> m_viewport_scrollbars;
@@ -1200,7 +1118,7 @@ private:
     float m_viewport_scrollbar_thumb_grab_position { 0 };
     mutable Sync::Mutex m_async_scroll_tree_mutex;
     AsyncScrollTree m_async_scroll_tree;
-    BackingStoreState m_backing_stores;
+    BackingStoreManager m_backing_store_manager;
     CompositorThread::PresentationMode m_presentation_mode { CompositorThread::PresentToUI {} };
 
     Optional<i32> m_presented_bitmap_id_awaiting_ack;
@@ -1277,12 +1195,20 @@ static FramePresentationState& frame_presentation_state()
 CompositorThread::CompositorThread(u64 page_id, PagePresentationRegistration page_presentation_registration)
     : m_thread_data(adopt_ref(*new ThreadData(page_id, Core::EventLoop::current_weak(), page_presentation_registration)))
 {
+    m_backing_store_shrink_timer = Core::Timer::create_single_shot(3000, [this] {
+        enqueue_viewport_size_updated(m_last_viewport_size, m_last_viewport_size_is_top_level_traversable, WindowResizingInProgress::No);
+    });
+
     if (page_presentation_registration == PagePresentationRegistration::Yes)
         register_page_compositor(page_id, m_thread_data);
 }
 
 CompositorThread::~CompositorThread()
 {
+    m_backing_store_shrink_timer->on_timeout = {};
+    m_backing_store_shrink_timer->stop();
+    m_backing_store_shrink_timer.clear();
+
     unregister_page_compositor(m_thread_data->page_id(), *m_thread_data);
     m_thread_data->exit();
 }
@@ -1509,9 +1435,12 @@ void CompositorThread::stop_presenting_to_client()
     unregister_page_compositor(m_thread_data->page_id(), *m_thread_data);
 }
 
-void CompositorThread::update_display_list(NonnullRefPtr<Painting::DisplayList> display_list, Painting::ScrollStateSnapshot&& scroll_state_snapshot)
+void CompositorThread::update_display_list(
+    NonnullRefPtr<Painting::DisplayList> display_list,
+    Painting::DisplayListResourceTransaction&& resource_transaction,
+    Painting::ScrollStateSnapshot&& scroll_state_snapshot)
 {
-    m_thread_data->enqueue_command(UpdateDisplayListCommand { move(display_list), move(scroll_state_snapshot) });
+    m_thread_data->enqueue_command(UpdateDisplayListCommand { move(display_list), move(resource_transaction), move(scroll_state_snapshot) });
 }
 
 void CompositorThread::invalidate_wheel_event_listener_state(u64 generation)
@@ -1545,9 +1474,21 @@ void CompositorThread::update_scroll_state(Painting::ScrollStateSnapshot&& scrol
     m_thread_data->enqueue_command(UpdateScrollStateCommand { move(scroll_state_snapshot) });
 }
 
-void CompositorThread::update_backing_stores(Gfx::IntSize size, i32 front_id, i32 back_id)
+void CompositorThread::viewport_size_updated(
+    Gfx::IntSize viewport_size, bool is_top_level_traversable, WindowResizingInProgress window_resize_in_progress)
 {
-    m_thread_data->enqueue_command(UpdateBackingStoresCommand { size, front_id, back_id });
+    m_last_viewport_size = viewport_size;
+    m_last_viewport_size_is_top_level_traversable = is_top_level_traversable;
+    if (window_resize_in_progress == WindowResizingInProgress::Yes)
+        m_backing_store_shrink_timer->restart();
+    enqueue_viewport_size_updated(viewport_size, is_top_level_traversable, window_resize_in_progress);
+}
+
+void CompositorThread::enqueue_viewport_size_updated(
+    Gfx::IntSize viewport_size, bool is_top_level_traversable, WindowResizingInProgress window_resize_in_progress)
+{
+    m_thread_data->enqueue_command(
+        ViewportSizeUpdatedCommand { viewport_size, is_top_level_traversable, window_resize_in_progress });
 }
 
 u64 CompositorThread::present_frame(Gfx::IntRect viewport_rect)

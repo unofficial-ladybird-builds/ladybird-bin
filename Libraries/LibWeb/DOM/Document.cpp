@@ -6725,24 +6725,33 @@ void Document::gather_active_observations_at_depth(size_t depth)
     // 1. Let depth be the depth passed in.
 
     // 2. For each observer in [[resizeObservers]] run these steps:
-    for (auto& observer : m_resize_observers) {
+    auto resize_observers = GC::RootVector<GC::Ref<ResizeObserver::ResizeObserver>> { heap() };
+    for (auto& observer : m_resize_observers)
+        resize_observers.append(observer);
+
+    for (auto const& observer : resize_observers) {
+        observer->remove_dead_observations();
+
         // 1. Clear observer’s [[activeTargets]], and [[skippedTargets]].
-        observer.active_targets().clear();
-        observer.skipped_targets().clear();
+        observer->active_targets().clear();
+        observer->skipped_targets().clear();
 
         // 2. For each observation in observer.[[observationTargets]] run this step:
-        for (auto& observation : observer.observation_targets()) {
+        for (auto& observation : observer->observation_targets()) {
             // 1. If observation.isActive() is true
             if (observation->is_active()) {
+                auto target = observation->target();
+                VERIFY(target);
+
                 // 1. Let targetDepth be result of calculate depth for node for observation.target.
-                auto target_depth = calculate_depth_for_node(*observation->target());
+                auto target_depth = calculate_depth_for_node(*target);
 
                 // 2. If targetDepth is greater than depth then add observation to [[activeTargets]].
                 if (target_depth > depth) {
-                    observer.active_targets().append(observation);
+                    observer->active_targets().append(observation);
                 } else {
                     // 3. Else add observation to [[skippedTargets]].
-                    observer.skipped_targets().append(observation);
+                    observer->skipped_targets().append(observation);
                 }
             }
         }
@@ -6762,6 +6771,15 @@ size_t Document::broadcast_active_resize_observations()
     for (auto& observer : m_resize_observers)
         resize_observers.append(observer);
 
+    // Keep all gathered targets alive while resize observer callbacks run.
+    auto active_targets = GC::RootVector<GC::Ref<Element>> { heap() };
+    for (auto const& observer : resize_observers) {
+        for (auto const& observation : observer->active_targets()) {
+            if (auto target = observation->target())
+                active_targets.append(*target);
+        }
+    }
+
     for (auto const& observer : resize_observers) {
         // 1. If observer.[[activeTargets]] slot is empty, continue.
         if (observer->active_targets().is_empty()) {
@@ -6773,8 +6791,12 @@ size_t Document::broadcast_active_resize_observations()
 
         // 3. For each observation in [[activeTargets]] perform these steps:
         for (auto const& observation : observer->active_targets()) {
+            auto target = observation->target();
+            if (!target)
+                continue;
+
             // 1. Let entry be the result of running create and populate a ResizeObserverEntry given observation.target.
-            auto entry = ResizeObserver::ResizeObserverEntry::create_and_populate(realm(), *observation->target()).release_value_but_fixme_should_propagate_errors();
+            auto entry = ResizeObserver::ResizeObserverEntry::create_and_populate(realm(), *target).release_value_but_fixme_should_propagate_errors();
 
             // 2. Add entry to entries.
             entries.append(entry);
@@ -6798,11 +6820,16 @@ size_t Document::broadcast_active_resize_observations()
             }
 
             // 4. Set targetDepth to the result of calculate depth for node for observation.target.
-            auto target_depth = calculate_depth_for_node(*observation->target());
+            auto target_depth = calculate_depth_for_node(*target);
 
             // 5. Set shallowestTargetDepth to targetDepth if targetDepth < shallowestTargetDepth
             if (target_depth < shallowest_target_depth)
                 shallowest_target_depth = target_depth;
+        }
+
+        if (entries.is_empty()) {
+            observer->active_targets().clear();
+            continue;
         }
 
         // 4. Invoke observer.[[callback]] with entries.
@@ -7621,13 +7648,13 @@ void Document::set_needs_to_record_display_list()
         navigable->set_needs_to_record_display_list();
 }
 
-RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig config)
+RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig config, Painting::DisplayListResourceStorage& resource_storage)
 {
     update_paint_and_hit_testing_properties_if_needed();
     VERIFY(paintable());
 
     auto display_list = Painting::DisplayList::create(paintable()->visual_context_tree());
-    Painting::DisplayListRecorder display_list_recorder(display_list);
+    Painting::DisplayListRecorder display_list_recorder(display_list, resource_storage);
 
     // https://drafts.csswg.org/css-color-adjust-1/#color-scheme-effect
     // On the root element, the used color scheme additionally must affect the surface color of the canvas, and the viewport’s scrollbars.
@@ -8016,7 +8043,8 @@ String Document::dump_display_list()
     if (!viewport_paintable)
         return "No paintable"_string;
 
-    auto display_list = record_display_list(HTML::PaintConfig {});
+    Painting::DisplayListResourceStorage resource_storage;
+    auto display_list = record_display_list(HTML::PaintConfig {}, resource_storage);
     if (!display_list)
         return "No display list"_string;
 
@@ -8086,7 +8114,7 @@ String Document::dump_display_list()
                 builder.append('\n');
 
                 if (nested_display_list_id.has_value()) {
-                    auto& nested_display_list = list.resource_storage().display_list(*nested_display_list_id);
+                    auto& nested_display_list = resource_storage.display_list(*nested_display_list_id);
                     dump_commands(nested_display_list, indent + 1);
                 }
 

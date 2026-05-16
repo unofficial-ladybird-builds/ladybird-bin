@@ -31,7 +31,7 @@
 #include <LibWeb/HTML/WindowType.h>
 #include <LibWeb/InvalidateDisplayList.h>
 #include <LibWeb/Page/EventHandler.h>
-#include <LibWeb/Painting/BackingStoreManager.h>
+#include <LibWeb/Painting/DisplayListResourceStorage.h>
 #include <LibWeb/PixelUnits.h>
 #include <LibWeb/XHR/FormDataEntry.h>
 
@@ -200,8 +200,6 @@ public:
     void wait_for_async_scroll_operation(Compositor::AsyncScrollOperationID, GC::Ref<WebIDL::Promise>);
     void clamp_viewport_scroll_offset();
 
-    Painting::BackingStoreManager& backing_store_manager() { return *m_backing_store_manager; }
-
     // https://html.spec.whatwg.org/multipage/webappapis.html#rendering-opportunity
     [[nodiscard]] bool has_a_rendering_opportunity() const;
 
@@ -333,7 +331,8 @@ private:
     bool m_pending_set_browser_zoom_request { false };
     bool m_should_show_line_box_borders { false };
     Optional<PaintConfig> m_rendering_thread_display_list_paint_config;
-    GC::Ref<Painting::BackingStoreManager> m_backing_store_manager;
+    Painting::DisplayListResourceStorage m_display_list_resource_storage;
+    Painting::DisplayListResourceSet m_rendering_thread_display_list_resources;
     Compositor::CompositorThread m_rendering_thread;
     RefPtr<Painting::ExternalContentSource> m_external_content_source;
 
