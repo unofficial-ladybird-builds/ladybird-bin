@@ -6,6 +6,7 @@
 
 pub mod entities;
 pub mod interned_names;
+pub mod parser;
 pub mod token;
 pub mod tokenizer;
 
@@ -15,7 +16,7 @@ use tokenizer::{HtmlTokenizer, State};
 
 /// Opaque handle for the Rust tokenizer, passed across the FFI boundary.
 pub struct RustFfiTokenizerHandle {
-    tokenizer: HtmlTokenizer,
+    pub(crate) tokenizer: HtmlTokenizer,
     /// Temporary storage for the last token's string data, kept alive
     /// so that pointers in RustFfiToken remain valid until the next call.
     last_tag_name: Vec<u8>,
@@ -41,6 +42,7 @@ pub struct RustFfiToken {
     pub token_type: u8,
     pub code_point: u32,
     pub self_closing: bool,
+    pub had_duplicate_attribute: bool,
 
     /// If nonzero, an interned tag-name id (1-based index into
     /// `interned_names::INTERNED_TAG_NAMES`). When set, `tag_name_ptr` /
@@ -100,6 +102,7 @@ impl Default for RustFfiToken {
             token_type: TokenType::Invalid as u8,
             code_point: 0,
             self_closing: false,
+            had_duplicate_attribute: false,
             tag_name_id: 0,
             tag_name_ptr: ptr::null(),
             tag_name_len: 0,
@@ -303,9 +306,11 @@ fn next_token_slow(
             tag_name,
             tag_name_id,
             self_closing,
+            had_duplicate_attribute,
             attributes,
         } => {
             out.self_closing = self_closing;
+            out.had_duplicate_attribute = had_duplicate_attribute;
             // Tokenizer already resolved intern ids, so we trust tag_name_id.
             out.tag_name_id = tag_name_id;
             if tag_name_id == 0 {
@@ -403,14 +408,9 @@ pub unsafe extern "C" fn rust_html_tokenizer_switch_state(handle: *mut RustFfiTo
         return;
     }
     let handle = unsafe { &mut *handle };
-    // The state values must match the State enum order. Bound-checked against
-    // the last known variant so an out-of-range value is rejected instead of
-    // producing UB via transmute to an invalid discriminant.
-    const STATE_COUNT: u8 = State::NumericCharacterReferenceEnd as u8 + 1;
-    if state >= STATE_COUNT {
+    let Some(state) = State::from_ffi(state) else {
         return;
-    }
-    let state: State = unsafe { std::mem::transmute(state) };
+    };
     handle.tokenizer.switch_to(state);
 }
 
@@ -561,28 +561,6 @@ pub unsafe extern "C" fn rust_html_tokenizer_is_insertion_point_reached(handle: 
 /// # Safety
 /// `handle` must be a valid pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rust_html_tokenizer_set_blocked(handle: *mut RustFfiTokenizerHandle, blocked: bool) {
-    if handle.is_null() {
-        return;
-    }
-    let handle = unsafe { &mut *handle };
-    handle.tokenizer.set_blocked(blocked);
-}
-
-/// # Safety
-/// `handle` must be a valid pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rust_html_tokenizer_is_blocked(handle: *mut RustFfiTokenizerHandle) -> bool {
-    if handle.is_null() {
-        return false;
-    }
-    let handle = unsafe { &mut *handle };
-    handle.tokenizer.is_blocked()
-}
-
-/// # Safety
-/// `handle` must be a valid pointer.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_html_tokenizer_set_input_stream_closed(
     handle: *mut RustFfiTokenizerHandle,
     closed: bool,
@@ -603,17 +581,6 @@ pub unsafe extern "C" fn rust_html_tokenizer_insert_eof(handle: *mut RustFfiToke
     }
     let handle = unsafe { &mut *handle };
     handle.tokenizer.insert_eof();
-}
-
-/// # Safety
-/// `handle` must be a valid pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rust_html_tokenizer_is_eof_inserted(handle: *mut RustFfiTokenizerHandle) -> bool {
-    if handle.is_null() {
-        return false;
-    }
-    let handle = unsafe { &mut *handle };
-    handle.tokenizer.is_eof_inserted()
 }
 
 /// # Safety

@@ -540,6 +540,14 @@ Document::Document(JS::Realm& realm, URL::URL const& url, TemporaryDocumentForFr
     , m_style_invalidator(realm.heap().allocate<CSS::Invalidation::StyleInvalidator>())
     , m_style_scope(*this)
 {
+    // https://html.spec.whatwg.org/multipage/parsing.html#html-fragment-parsing-algorithm
+    // AD-HOC: The HTML fragment parsing algorithm stages nodes in a temporary document before returning them.
+    // Treat that document as disconnected so post-connection steps happen only after the fragment is inserted
+    // into the context document.
+    // Spec issue: https://github.com/whatwg/html/issues/11023
+    if (is_temporary_document_for_fragment_parsing())
+        set_is_connected(false);
+
     m_legacy_platform_object_flags = PlatformObject::LegacyPlatformObjectFlags {
         .supports_named_properties = true,
         .has_legacy_override_built_ins_interface_extended_attribute = true,
@@ -984,9 +992,18 @@ WebIDL::ExceptionOr<void> Document::close()
     // 4. Insert an explicit "EOF" character at the end of the parser's input stream.
     m_parser->tokenizer().insert_eof();
 
+    auto parser = m_parser;
+    auto finish_script_created_parser = [parser] {
+        parser->tokenizer().undefine_insertion_point();
+        parser->pop_all_open_elements();
+
+        // AD-HOC: This ensures that a load event is fired if the node navigable's container is an iframe.
+        parser->document().completely_finish_loading();
+    };
+
     // 5. If there is a pending parsing-blocking script, then return.
     if (has_pending_parsing_blocking_script()) {
-        m_parser->set_post_parse_action([this] { completely_finish_loading(); });
+        m_parser->set_post_parse_action(move(finish_script_created_parser));
         return {};
     }
 
@@ -995,12 +1012,11 @@ WebIDL::ExceptionOr<void> Document::close()
 
     // run() may have paused on a blocking script (e.g. from document.write inside an inline script).
     if (has_pending_parsing_blocking_script()) {
-        m_parser->set_post_parse_action([this] { completely_finish_loading(); });
+        m_parser->set_post_parse_action(move(finish_script_created_parser));
         return {};
     }
 
-    // AD-HOC: This ensures that a load event is fired if the node navigable's container is an iframe.
-    completely_finish_loading();
+    finish_script_created_parser();
 
     return {};
 }
