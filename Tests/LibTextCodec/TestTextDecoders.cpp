@@ -64,8 +64,8 @@ TEST_CASE(test_utf8_process_code_points_replaces_surrogates)
     auto utf8_encoded_surrogate = StringView(bytes(utf8_encoded_surrogate_bytes));
 
     EXPECT(!decoder.validate(utf8_encoded_surrogate));
-    EXPECT_EQ(MUST(decoder.to_utf8(utf8_encoded_surrogate)), "\xef\xbf\xbd"sv);
-    EXPECT_EQ(process_code_points(decoder, utf8_encoded_surrogate), (Vector<u32> { 0xfffd }));
+    EXPECT_EQ(MUST(decoder.to_utf8(utf8_encoded_surrogate)), "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"sv);
+    EXPECT_EQ(process_code_points(decoder, utf8_encoded_surrogate), (Vector<u32> { 0xfffd, 0xfffd, 0xfffd }));
 }
 
 TEST_CASE(test_utf8_process_code_points_replaces_truncated_tail_as_single_error)
@@ -90,6 +90,23 @@ TEST_CASE(test_utf8_process_code_points_replaces_overlong_sequences)
     EXPECT_EQ(process_code_points(decoder, overlong_null), (Vector<u32> { 0xfffd, 0xfffd }));
 }
 
+TEST_CASE(test_utf8_process_code_points_restores_invalid_second_byte)
+{
+    auto decoder = TextCodec::UTF8Decoder();
+    auto overlong_three_byte_sequence_bytes = Vector<u8> { 0xe0, 0x80, 0x80 };
+    auto overlong_three_byte_sequence = StringView(bytes(overlong_three_byte_sequence_bytes));
+    auto out_of_range_four_byte_sequence_bytes = Vector<u8> { 0xf4, 0x90, 0x80, 0x80 };
+    auto out_of_range_four_byte_sequence = StringView(bytes(out_of_range_four_byte_sequence_bytes));
+
+    EXPECT(!decoder.validate(overlong_three_byte_sequence));
+    EXPECT_EQ(MUST(decoder.to_utf8(overlong_three_byte_sequence)), "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"sv);
+    EXPECT_EQ(process_code_points(decoder, overlong_three_byte_sequence), (Vector<u32> { 0xfffd, 0xfffd, 0xfffd }));
+
+    EXPECT(!decoder.validate(out_of_range_four_byte_sequence));
+    EXPECT_EQ(MUST(decoder.to_utf8(out_of_range_four_byte_sequence)), "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd"sv);
+    EXPECT_EQ(process_code_points(decoder, out_of_range_four_byte_sequence), (Vector<u32> { 0xfffd, 0xfffd, 0xfffd, 0xfffd }));
+}
+
 TEST_CASE(test_utf16be_decode)
 {
     auto decoder = TextCodec::UTF16BEDecoder();
@@ -107,6 +124,8 @@ TEST_CASE(test_utf16be_process_code_points)
 
     EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 0xfe, 0xff, 0x00, 'A', 0xd8, 0x3d, 0xde, 0x00 }))), (Vector<u32> { 0x41, 0x1F600 }));
     EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 0xd8, 0x3d, 0x00, 'A', 0xde, 0x00 }))), (Vector<u32> { 0xfffd, 0x41, 0xfffd }));
+    EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 0x00, 'A', 0xff }))), (Vector<u32> { 0x41, 0xfffd }));
+    EXPECT_EQ(MUST(decoder.to_utf8(StringView(bytes({ 0x00, 'A', 0xff })))), "A\xef\xbf\xbd"sv);
 }
 
 TEST_CASE(test_streaming_decoder_utf8_mid_sequence)
@@ -127,6 +146,29 @@ TEST_CASE(test_streaming_decoder_finishes_incomplete_sequence)
     auto incomplete_sequence = Vector<u8> { 0xc3 };
     EXPECT_EQ(MUST(streaming_decoder.to_utf8(bytes(incomplete_sequence))), ""sv);
     EXPECT_EQ(MUST(streaming_decoder.finish()), MUST(decoder.to_utf8(StringView(bytes(incomplete_sequence)))));
+}
+
+TEST_CASE(test_streaming_decoder_utf8_invalid_second_byte_tail)
+{
+    auto& decoder = decoder_for("UTF-8"sv);
+
+    auto streaming_decoder_for_overlong_three_byte_sequence = TextCodec::StreamingDecoder { decoder };
+    EXPECT_EQ(MUST(streaming_decoder_for_overlong_three_byte_sequence.to_utf8(bytes({ 0xe0, 0x80 }))), "\xef\xbf\xbd\xef\xbf\xbd"sv);
+    EXPECT_EQ(MUST(streaming_decoder_for_overlong_three_byte_sequence.finish()), ""sv);
+
+    auto streaming_decoder_for_out_of_range_four_byte_sequence = TextCodec::StreamingDecoder { decoder };
+    EXPECT_EQ(MUST(streaming_decoder_for_out_of_range_four_byte_sequence.to_utf8(bytes({ 0xf4, 0x90 }))), "\xef\xbf\xbd\xef\xbf\xbd"sv);
+    EXPECT_EQ(MUST(streaming_decoder_for_out_of_range_four_byte_sequence.finish()), ""sv);
+}
+
+TEST_CASE(test_streaming_decoder_utf8_valid_second_byte_tail)
+{
+    auto& decoder = decoder_for("UTF-8"sv);
+    auto streaming_decoder = TextCodec::StreamingDecoder { decoder };
+
+    EXPECT_EQ(MUST(streaming_decoder.to_utf8(bytes({ 0xe0, 0xa0 }))), ""sv);
+    EXPECT_EQ(MUST(streaming_decoder.to_utf8(bytes({ 0x80 }))), "\xe0\xa0\x80"sv);
+    EXPECT_EQ(MUST(streaming_decoder.finish()), ""sv);
 }
 
 TEST_CASE(test_streaming_decoder_utf16_odd_byte)
@@ -214,4 +256,6 @@ TEST_CASE(test_utf16le_process_code_points)
 
     EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 0xff, 0xfe, 'A', 0x00, 0x3d, 0xd8, 0x00, 0xde }))), (Vector<u32> { 0x41, 0x1F600 }));
     EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 0x3d, 0xd8, 'A', 0x00, 0x00, 0xde }))), (Vector<u32> { 0xfffd, 0x41, 0xfffd }));
+    EXPECT_EQ(process_code_points(decoder, StringView(bytes({ 'A', 0x00, 0xff }))), (Vector<u32> { 0x41, 0xfffd }));
+    EXPECT_EQ(MUST(decoder.to_utf8(StringView(bytes({ 'A', 0x00, 0xff })))), "A\xef\xbf\xbd"sv);
 }
