@@ -354,6 +354,11 @@ ErrorOr<String> Decoder::to_utf8(StringView input)
     return builder.to_string_without_validation();
 }
 
+ErrorOr<void> Decoder::process_code_points(StringView input, Function<ErrorOr<void>(u32)> on_code_point)
+{
+    return process(input, move(on_code_point));
+}
+
 // Tail-length helpers for chunked decoding. Each returns the number of trailing bytes that must
 // be buffered until more input arrives, because they form an incomplete trailing sequence per the
 // Encoding Standard's decoder handler byte ranges.
@@ -689,27 +694,153 @@ ErrorOr<String> StreamingDecoder::finish()
     return decoded;
 }
 
+static ErrorOr<void> process_utf8_with_replacement_character(StringView input, Function<ErrorOr<void>(u32)> on_code_point)
+{
+    auto bytes = input.bytes();
+
+    for (size_t i = 0; i < bytes.size();) {
+        auto byte = bytes[i];
+        if (byte <= 0x7f) {
+            TRY(on_code_point(byte));
+            ++i;
+            continue;
+        }
+
+        size_t sequence_length = 0;
+        u32 code_point = 0;
+        u32 minimum_code_point = 0;
+
+        if (byte >= 0xc2 && byte <= 0xdf) {
+            sequence_length = 2;
+            code_point = byte & 0x1f;
+            minimum_code_point = 0x80;
+        } else if (byte >= 0xe0 && byte <= 0xef) {
+            sequence_length = 3;
+            code_point = byte & 0x0f;
+            minimum_code_point = 0x800;
+        } else if (byte >= 0xf0 && byte <= 0xf4) {
+            sequence_length = 4;
+            code_point = byte & 0x07;
+            minimum_code_point = 0x10000;
+        } else {
+            TRY(on_code_point(replacement_code_point));
+            ++i;
+            continue;
+        }
+
+        if (i + sequence_length > bytes.size()) {
+            TRY(on_code_point(replacement_code_point));
+            i = bytes.size();
+            continue;
+        }
+
+        Optional<size_t> invalid_continuation_offset;
+        for (size_t offset = 1; offset < sequence_length; ++offset) {
+            auto continuation_byte = bytes[i + offset];
+            if (!is_utf8_continuation_byte(continuation_byte)) {
+                invalid_continuation_offset = offset;
+                break;
+            }
+            code_point <<= 6;
+            code_point |= continuation_byte & 0x3f;
+        }
+
+        if (invalid_continuation_offset.has_value()) {
+            TRY(on_code_point(replacement_code_point));
+            i += *invalid_continuation_offset;
+            continue;
+        }
+
+        if (code_point < minimum_code_point || code_point > 0x10ffff) {
+            TRY(on_code_point(replacement_code_point));
+            ++i;
+            continue;
+        }
+
+        if (is_unicode_surrogate(code_point)) {
+            TRY(on_code_point(replacement_code_point));
+            i += sequence_length;
+            continue;
+        }
+
+        TRY(on_code_point(code_point));
+        i += sequence_length;
+    }
+
+    return {};
+}
+
 ErrorOr<void> UTF8Decoder::process(StringView input, Function<ErrorOr<void>(u32)> on_code_point)
 {
-    for (auto c : Utf8View(input)) {
-        TRY(on_code_point(c));
-    }
-    return {};
+    return process_utf8_with_replacement_character(input, move(on_code_point));
 }
 
 bool UTF8Decoder::validate(StringView input)
 {
-    return Utf8View(input).validate();
+    return Utf8View(input).validate(AllowLonelySurrogates::No);
 }
 
 ErrorOr<String> UTF8Decoder::to_utf8(StringView input)
 {
-    return String::from_utf8_with_replacement_character(input);
+    if (auto bytes = input.bytes(); bytes.starts_with({ { 0xEF, 0xBB, 0xBF } }))
+        input = input.substring_view(3);
+
+    StringBuilder builder(input.length());
+    TRY(process_utf8_with_replacement_character(input, [&](auto code_point) {
+        return builder.try_append_code_point(code_point);
+    }));
+    return builder.to_string_without_validation();
 }
 
 bool UTF16BEDecoder::validate(StringView input)
 {
     return AK::validate_utf16_be(input.bytes());
+}
+
+static ErrorOr<void> process_utf16(StringView input, bool big_endian, Function<ErrorOr<void>(u32)> on_code_point)
+{
+    auto bytes = input.bytes();
+    if (bytes.size() >= 2) {
+        if ((big_endian && bytes[0] == 0xFE && bytes[1] == 0xFF)
+            || (!big_endian && bytes[0] == 0xFF && bytes[1] == 0xFE))
+            bytes = bytes.slice(2);
+    }
+
+    auto read_code_unit = [&](size_t offset) {
+        return big_endian
+            ? (static_cast<u16>(bytes[offset]) << 8) | bytes[offset + 1]
+            : (static_cast<u16>(bytes[offset + 1]) << 8) | bytes[offset];
+    };
+
+    for (size_t i = 0; i + 1 < bytes.size(); i += 2) {
+        auto code_unit = read_code_unit(i);
+        if (AK::UnicodeUtils::is_utf16_high_surrogate(code_unit)) {
+            if (i + 3 < bytes.size()) {
+                auto low_surrogate = read_code_unit(i + 2);
+                if (AK::UnicodeUtils::is_utf16_low_surrogate(low_surrogate)) {
+                    TRY(on_code_point(AK::UnicodeUtils::decode_utf16_surrogate_pair(code_unit, low_surrogate)));
+                    i += 2;
+                    continue;
+                }
+            }
+            TRY(on_code_point(replacement_code_point));
+            continue;
+        }
+
+        if (AK::UnicodeUtils::is_utf16_low_surrogate(code_unit)) {
+            TRY(on_code_point(replacement_code_point));
+            continue;
+        }
+
+        TRY(on_code_point(code_unit));
+    }
+
+    return {};
+}
+
+ErrorOr<void> UTF16BEDecoder::process(StringView input, Function<ErrorOr<void>(u32)> on_code_point)
+{
+    return process_utf16(input, true, move(on_code_point));
 }
 
 ErrorOr<String> UTF16BEDecoder::to_utf8(StringView input)
@@ -724,6 +855,11 @@ ErrorOr<String> UTF16BEDecoder::to_utf8(StringView input)
 bool UTF16LEDecoder::validate(StringView input)
 {
     return AK::validate_utf16_le(input.bytes());
+}
+
+ErrorOr<void> UTF16LEDecoder::process(StringView input, Function<ErrorOr<void>(u32)> on_code_point)
+{
+    return process_utf16(input, false, move(on_code_point));
 }
 
 ErrorOr<String> UTF16LEDecoder::to_utf8(StringView input)
