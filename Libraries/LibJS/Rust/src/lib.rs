@@ -875,6 +875,7 @@ pub unsafe extern "C" fn rust_decode_bytecode_cache_blob(
 /// # Safety
 /// - `data` must point to `length` readable bytes.
 /// - `owner` must keep `data` alive until `free_owner` is called.
+/// - `clone_owner` must return a new owner that keeps the same bytes alive.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_decode_bytecode_cache_blob_with_owner(
     data: *const u8,
@@ -883,6 +884,7 @@ pub unsafe extern "C" fn rust_decode_bytecode_cache_blob_with_owner(
     expected_source_hash: *const u8,
     expected_source_hash_len: usize,
     owner: *mut c_void,
+    clone_owner: bytecode_cache::CloneBytecodeCacheBlobOwner,
     free_owner: bytecode_cache::FreeBytecodeCacheBlobOwner,
 ) -> *mut DecodedBytecodeCacheBlob {
     unsafe {
@@ -909,7 +911,11 @@ pub unsafe extern "C" fn rust_decode_bytecode_cache_blob_with_owner(
                 std::slice::from_raw_parts(data, length),
                 expected_program_type,
                 expected_source_hash,
-                bytecode_cache::ForeignBytecodeCacheBlobOwner { owner, free_owner },
+                bytecode_cache::ForeignBytecodeCacheBlobOwner {
+                    owner,
+                    clone_owner,
+                    free_owner,
+                },
             ) else {
                 return std::ptr::null_mut();
             };
@@ -2848,6 +2854,7 @@ pub unsafe extern "C" fn rust_materialize_compiled_function(
             let this_value_needs_environment_resolution = precompiled.metadata.this_value_needs_environment_resolution;
             let function_environment_needed = precompiled.metadata.function_environment_needed;
             let function_environment_bindings_count = precompiled.metadata.function_environment_bindings_count;
+            let var_environment_bindings_count = precompiled.metadata.var_environment_bindings_count;
             let might_need_arguments = precompiled.metadata.might_need_arguments;
             let contains_eval = precompiled.metadata.contains_eval;
             let precompiled_ptr = Box::into_raw(precompiled) as *mut c_void;
@@ -2858,6 +2865,7 @@ pub unsafe extern "C" fn rust_materialize_compiled_function(
                 this_value_needs_environment_resolution,
                 function_environment_needed,
                 function_environment_bindings_count,
+                var_environment_bindings_count,
                 might_need_arguments,
                 contains_eval,
             );
@@ -2930,7 +2938,7 @@ fn compile_function_payload_to_bytecode(
         generator.switch_to_basic_block(start_block);
     }
 
-    generator.capture_saved_lexical_environment();
+    generator.capture_saved_lexical_environment_with_coordinates();
 
     if let Some(scope_id) = body_scope {
         let arena_clone = generator.arena.clone();
@@ -3209,6 +3217,7 @@ unsafe fn write_sfd_metadata(sfd_ptr: *mut c_void, metadata: &bytecode::generato
             metadata.this_value_needs_environment_resolution,
             metadata.function_environment_needed,
             metadata.function_environment_bindings_count,
+            metadata.var_environment_bindings_count,
             metadata.might_need_arguments,
             metadata.contains_eval,
         );
@@ -3313,6 +3322,7 @@ unsafe extern "C" {
         this_value_needs_environment_resolution: bool,
         function_environment_needed: bool,
         function_environment_bindings_count: usize,
+        var_environment_bindings_count: usize,
         might_need_arguments_object: bool,
         contains_direct_call_to_eval: bool,
     );
@@ -3469,6 +3479,11 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn clone_foreign_owner(owner: *const c_void) -> *mut c_void {
+        let value = unsafe { *owner.cast::<u8>() };
+        Box::into_raw(Box::new(value)).cast()
+    }
+
     fn new_foreign_owner() -> *mut c_void {
         Box::into_raw(Box::new(0u8)).cast()
     }
@@ -3486,6 +3501,7 @@ mod tests {
                 source_hash.as_ptr(),
                 source_hash.len(),
                 new_foreign_owner(),
+                clone_foreign_owner,
                 count_freed_foreign_owner,
             )
         };
@@ -3501,6 +3517,7 @@ mod tests {
                 source_hash.as_ptr(),
                 source_hash.len(),
                 new_foreign_owner(),
+                clone_foreign_owner,
                 count_freed_foreign_owner,
             )
         };

@@ -411,6 +411,12 @@ i64 asm_fallback_handler(VM* vm, u32 pc)
         return execute_throwing<Op::EnterObjectEnvironment>(*vm, pc);
     case Instruction::Type::Exp:
         return execute_throwing<Op::Exp>(*vm, pc);
+    case Instruction::Type::DynamicGetCalleeAndThisFromEnvironment:
+        return execute_throwing<Op::DynamicGetCalleeAndThisFromEnvironment>(*vm, pc);
+    case Instruction::Type::DynamicGetBinding:
+        return execute_throwing<Op::DynamicGetBinding>(*vm, pc);
+    case Instruction::Type::DynamicGetInitializedBinding:
+        return execute_throwing<Op::DynamicGetInitializedBinding>(*vm, pc);
     case Instruction::Type::GetByIdWithThis:
         return execute_throwing<Op::GetByIdWithThis>(*vm, pc);
     case Instruction::Type::GetByValueWithThis:
@@ -431,6 +437,10 @@ i64 asm_fallback_handler(VM* vm, u32 pc)
         return execute_throwing<Op::ImportCall>(*vm, pc);
     case Instruction::Type::In:
         return execute_throwing<Op::In>(*vm, pc);
+    case Instruction::Type::DynamicInitializeLexicalBinding:
+        return execute_throwing<Op::DynamicInitializeLexicalBinding>(*vm, pc);
+    case Instruction::Type::DynamicInitializeVariableBinding:
+        return execute_throwing<Op::DynamicInitializeVariableBinding>(*vm, pc);
     case Instruction::Type::InitializeVariableBinding:
         return execute_throwing<Op::InitializeVariableBinding>(*vm, pc);
     case Instruction::Type::IteratorClose:
@@ -453,6 +463,10 @@ i64 asm_fallback_handler(VM* vm, u32 pc)
         return execute_throwing<Op::PutByValueWithThis>(*vm, pc);
     case Instruction::Type::ResolveSuperBase:
         return execute_throwing<Op::ResolveSuperBase>(*vm, pc);
+    case Instruction::Type::DynamicSetLexicalBinding:
+        return execute_throwing<Op::DynamicSetLexicalBinding>(*vm, pc);
+    case Instruction::Type::DynamicSetVariableBinding:
+        return execute_throwing<Op::DynamicSetVariableBinding>(*vm, pc);
     case Instruction::Type::SetVariableBinding:
         return execute_throwing<Op::SetVariableBinding>(*vm, pc);
     case Instruction::Type::SuperCallWithArgumentArray:
@@ -465,6 +479,8 @@ i64 asm_fallback_handler(VM* vm, u32 pc)
         return execute_throwing<Op::ToObject>(*vm, pc);
     case Instruction::Type::TypeofBinding:
         return execute_throwing<Op::TypeofBinding>(*vm, pc);
+    case Instruction::Type::DynamicTypeofBinding:
+        return execute_throwing<Op::DynamicTypeofBinding>(*vm, pc);
 
     default:
         VERIFY_NOT_REACHED();
@@ -647,7 +663,7 @@ i64 asm_try_get_global_env_binding(VM* vm, u32 pc)
 {
     auto* bytecode = vm->current_executable().bytecode.data();
     auto& insn = *reinterpret_cast<Op::GetGlobal const*>(&bytecode[pc]);
-    auto& cache = *bit_cast<GlobalVariableCache*>(insn.cache());
+    auto& cache = vm->current_executable().global_variable_caches[insn.cache()];
 
     if (!cache.has_environment_binding_index) [[unlikely]]
         return 1;
@@ -677,7 +693,7 @@ i64 asm_try_set_global_env_binding(VM* vm, u32 pc)
 {
     auto* bytecode = vm->current_executable().bytecode.data();
     auto& insn = *reinterpret_cast<Op::SetGlobal const*>(&bytecode[pc]);
-    auto& cache = *bit_cast<GlobalVariableCache*>(insn.cache());
+    auto& cache = vm->current_executable().global_variable_caches[insn.cache()];
 
     if (!cache.has_environment_binding_index) [[unlikely]]
         return 1;
@@ -897,7 +913,7 @@ i64 asm_try_put_by_id_cache(VM* vm, u32 pc)
         return 1;
     auto& object = base.as_object();
     auto value = vm->get(insn.src());
-    auto& cache = *bit_cast<PropertyLookupCache*>(insn.cache());
+    auto& cache = vm->current_executable().property_lookup_caches[insn.cache()];
 
     for (size_t i = 0; i < cache.entries.size(); ++i) {
         auto& entry = cache.entries[i];
@@ -952,7 +968,7 @@ i64 asm_try_get_by_id_cache(VM* vm, u32 pc)
         return 1;
     auto& object = base.as_object();
     auto& shape = object.shape();
-    auto& cache = *bit_cast<PropertyLookupCache*>(insn.cache());
+    auto& cache = vm->current_executable().property_lookup_caches[insn.cache()];
 
     for (auto& entry : cache.entries) {
         auto cached_prototype = entry.prototype.ptr();

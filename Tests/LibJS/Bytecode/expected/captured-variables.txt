@@ -1,4 +1,4 @@
-$c7fd0018 captured-variables.js:12:1
+$546ebce0 captured-variables.js:12:1
   Registers: 7
   Blocks:    1
   Constants:
@@ -6,8 +6,8 @@ $c7fd0018 captured-variables.js:12:1
 
 block0:
   [   0] GetGlobal dst:reg6, `outer`
-  [  18] Call dst:reg5, callee:reg6, this_value:Undefined, outer
-  [  38] End value:reg5
+  [  10] Call dst:reg5, callee:reg6, this_value:Undefined, outer
+  [  30] End value:reg5
 
 
 outer$65f64384 captured-variables.js:5:5
@@ -29,10 +29,10 @@ block0:
   [  90] Return value:reg6
 
 
-inner$e471f8e5 captured-variables.js:7:9
+inner$6897e27d captured-variables.js:7:9
   Registers: 6
   Blocks:    1
 
 block0:
-  [   0] GetBinding dst:reg5, `captured`
-  [  18] Return value:reg5
+  [   0] DynamicGetBinding dst:reg5, `captured`
+  [  10] Return value:reg5

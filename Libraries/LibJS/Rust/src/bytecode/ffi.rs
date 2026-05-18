@@ -191,6 +191,7 @@ pub struct FFISharedFunctionData {
 pub struct FFIExecutableData {
     pub bytecode: *const u8,
     pub bytecode_length: usize,
+    pub bytecode_owner: *mut c_void,
     pub identifier_table: *const FFIUtf16Slice,
     pub identifier_count: usize,
     pub property_key_table: *const FFIUtf16Slice,
@@ -252,6 +253,7 @@ unsafe extern "C" {
         this_value_needs_environment_resolution: bool,
         function_environment_needed: bool,
         function_environment_bindings_count: usize,
+        var_environment_bindings_count: usize,
         might_need_arguments_object: bool,
         contains_direct_call_to_eval: bool,
     );
@@ -263,6 +265,7 @@ unsafe extern "C" {
         this_value_needs_environment_resolution: bool,
         function_environment_needed: bool,
         function_environment_bindings_count: usize,
+        var_environment_bindings_count: usize,
         might_need_arguments_object: bool,
         contains_direct_call_to_eval: bool,
     );
@@ -274,6 +277,7 @@ unsafe extern "C" {
         this_value_needs_environment_resolution: bool,
         function_environment_needed: bool,
         function_environment_bindings_count: usize,
+        var_environment_bindings_count: usize,
         might_need_arguments_object: bool,
         contains_direct_call_to_eval: bool,
     );
@@ -473,6 +477,7 @@ unsafe fn materialize_shared_function_data(
                     precompiled.metadata.this_value_needs_environment_resolution;
                 let function_environment_needed = precompiled.metadata.function_environment_needed;
                 let function_environment_bindings_count = precompiled.metadata.function_environment_bindings_count;
+                let var_environment_bindings_count = precompiled.metadata.var_environment_bindings_count;
                 let might_need_arguments = precompiled.metadata.might_need_arguments;
                 let contains_eval = precompiled.metadata.contains_eval;
                 let precompiled_ptr = Box::into_raw(precompiled) as *mut c_void;
@@ -483,6 +488,7 @@ unsafe fn materialize_shared_function_data(
                     this_value_needs_environment_resolution,
                     function_environment_needed,
                     function_environment_bindings_count,
+                    var_environment_bindings_count,
                     might_need_arguments,
                     contains_eval,
                 );
@@ -663,6 +669,7 @@ pub unsafe fn create_executable_with_dependencies(
     unsafe {
         let parts = ExecutableParts {
             bytecode: &assembled.bytecode,
+            bytecode_owner: std::ptr::null_mut(),
             exception_handlers: &assembled.exception_handlers,
             source_map: &assembled.source_map,
             basic_block_start_offsets: &assembled.basic_block_start_offsets,
@@ -675,6 +682,7 @@ pub unsafe fn create_executable_with_dependencies(
 
 pub struct ExecutableParts<'a> {
     pub bytecode: &'a [u8],
+    pub bytecode_owner: *mut c_void,
     pub exception_handlers: &'a [ExceptionHandler],
     pub source_map: &'a [SourceMapEntry],
     pub basic_block_start_offsets: &'a [usize],
@@ -754,6 +762,7 @@ pub unsafe fn create_executable_with_dependencies_from_parts(
         let ffi_data = FFIExecutableData {
             bytecode: parts.bytecode.as_ptr(),
             bytecode_length: parts.bytecode.len(),
+            bytecode_owner: parts.bytecode_owner,
             identifier_table: ident_slices.as_ptr(),
             identifier_count: ident_slices.len(),
             property_key_table: property_key_slices.as_ptr(),

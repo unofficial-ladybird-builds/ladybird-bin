@@ -437,33 +437,27 @@ macro dispatch_current()
     goto_handler pc
 end
 
-# Walk the environment chain using a cached EnvironmentCoordinate.
+# Walk the environment chain using a statically computed EnvironmentCoordinate.
 # Input: m_cache_field is the offset of the EnvironmentCoordinate inside
 # the bytecode instruction.
 # Output: target_env points at the resolved environment, bind_index holds
 # the binding index within it.
-# On failure (invalid cache, screwed by eval): jumps to fail_label.
+# On failure (the caller's binding operation fails): jumps to fail_label.
 macro walk_env_chain(m_cache_field, target_env, bind_index, fail_label)
-    temp coord_addr, hops, sentinel, screw
+    temp coord_addr, hops
     lea coord_addr, [pb, pc]
     add coord_addr, m_cache_field
     load_pair32 hops, bind_index, [coord_addr, ENVIRONMENT_COORDINATE_HOPS], [coord_addr, ENVIRONMENT_COORDINATE_INDEX]
-    mov sentinel, ENVIRONMENT_COORDINATE_INVALID
-    branch_eq hops, sentinel, fail_label
     load64 target_env, [exec_ctx, EXECUTION_CONTEXT_LEXICAL_ENVIRONMENT]
     assert_nonzero target_env
     branch_zero hops, .walk_done
 .walk_loop:
-    load8 screw, [target_env, ENVIRONMENT_SCREWED_BY_EVAL]
-    branch_nonzero screw, fail_label
     load64 target_env, [target_env, ENVIRONMENT_OUTER]
     assert_nonzero target_env
     sub hops, 1
     branch_nonzero hops, .walk_loop
 .walk_done:
     assert_nonzero target_env
-    load8 screw, [target_env, ENVIRONMENT_SCREWED_BY_EVAL]
-    branch_nonzero screw, fail_label
 end
 
 # Pop an inline frame and resume the caller without bouncing through C++.
@@ -503,6 +497,24 @@ macro pop_inline_frame_and_resume(caller_frame, value_reg)
     lea values, [exec_ctx, SIZEOF_EXECUTION_CONTEXT]
     mov pc, ret_pc
     dispatch_current
+end
+
+macro load_property_lookup_cache(cache)
+    temp exe, caches
+    load32 cache, [pb, pc, m_cache]
+    mul cache, cache, PROPERTY_LOOKUP_CACHE_SIZE
+    load64 exe, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
+    load64 caches, [exe, EXECUTABLE_PROPERTY_LOOKUP_CACHES_DATA]
+    add cache, caches
+end
+
+macro load_global_variable_cache(cache)
+    temp exe, caches
+    load32 cache, [pb, pc, m_cache]
+    mul cache, cache, GLOBAL_VARIABLE_CACHE_SIZE
+    load64 exe, [exec_ctx, EXECUTION_CONTEXT_EXECUTABLE]
+    load64 caches, [exe, EXECUTABLE_GLOBAL_VARIABLE_CACHES_DATA]
+    add cache, caches
 end
 
 # ============================================================================
@@ -1673,8 +1685,7 @@ handler GetById
     unbox_object obj, base
     load64 shape, [obj, OBJECT_SHAPE]
     assert_nonzero shape
-    # Get PropertyLookupCache* (direct pointer from instruction stream)
-    load64 plc, [pb, pc, m_cache]
+    load_property_lookup_cache plc
     assert_nonzero plc
     load_pair64 cache_shape, cache_proto, [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE], [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
     branch_ne cache_shape, shape, .try_cache
@@ -1727,7 +1738,7 @@ handler PutById
     unbox_object obj, base
     load64 shape, [obj, OBJECT_SHAPE]
     assert_nonzero shape
-    load64 plc, [pb, pc, m_cache]
+    load_property_lookup_cache plc
     assert_nonzero plc
     load_pair64 cache_shape, cache_proto, [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE], [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
     branch_ne cache_shape, shape, .try_cache
@@ -1905,7 +1916,7 @@ handler GetLength
     # Non-magical length: IC fast path (same as GetById)
     load64 shape, [obj, OBJECT_SHAPE]
     assert_nonzero shape
-    load64 plc, [pb, pc, m_cache]
+    load_property_lookup_cache plc
     assert_nonzero plc
     load_pair64 cache_shape, cache_proto, [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_SHAPE], [plc, PROPERTY_LOOKUP_CACHE_ENTRY0_PROTOTYPE]
     branch_ne cache_shape, shape, .slow
@@ -1947,7 +1958,7 @@ handler GetGlobal
     load_pair64 global_object, env, [realm, REALM_GLOBAL_OBJECT], [realm, REALM_GLOBAL_DECLARATIVE_ENVIRONMENT]
     assert_nonzero global_object
     assert_nonzero env
-    load64 gvc, [pb, pc, m_cache]
+    load_global_variable_cache gvc
     assert_nonzero gvc
     load64 cache_serial, [gvc, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_SERIAL]
     load_environment_serial env, env_serial
@@ -1995,7 +2006,7 @@ handler SetGlobal
     load_pair64 global_object, env, [realm, REALM_GLOBAL_OBJECT], [realm, REALM_GLOBAL_DECLARATIVE_ENVIRONMENT]
     assert_nonzero global_object
     assert_nonzero env
-    load64 gvc, [pb, pc, m_cache]
+    load_global_variable_cache gvc
     assert_nonzero gvc
     load64 cache_serial, [gvc, GLOBAL_VARIABLE_CACHE_ENVIRONMENT_SERIAL]
     load_environment_serial env, env_serial

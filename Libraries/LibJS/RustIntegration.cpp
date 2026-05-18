@@ -414,10 +414,15 @@ static void free_bytecode_cache_blob_owner(void* owner)
     delete static_cast<Core::ImmutableBytes*>(owner);
 }
 
+static void* clone_bytecode_cache_blob_owner(void const* owner)
+{
+    return new Core::ImmutableBytes(*static_cast<Core::ImmutableBytes const*>(owner));
+}
+
 DecodedBytecodeCacheBlob* decode_bytecode_cache_blob(Core::ImmutableBytes bytes, ProgramType expected_type, ReadonlyBytes source_hash)
 {
     auto* owner = new Core::ImmutableBytes(move(bytes));
-    return rust_decode_bytecode_cache_blob_with_owner(owner->bytes().data(), owner->bytes().size(), static_cast<u8>(expected_type), source_hash.data(), source_hash.size(), owner, free_bytecode_cache_blob_owner);
+    return rust_decode_bytecode_cache_blob_with_owner(owner->bytes().data(), owner->bytes().size(), static_cast<u8>(expected_type), source_hash.data(), source_hash.size(), owner, clone_bytecode_cache_blob_owner, free_bytecode_cache_blob_owner);
 }
 
 void free_decoded_bytecode_cache_blob(DecodedBytecodeCacheBlob* blob)
@@ -981,9 +986,25 @@ extern "C" void* rust_create_executable(
     auto& vm = *static_cast<JS::VM*>(vm_ptr);
     auto& source_code = *static_cast<JS::SourceCode const*>(source_code_ptr);
 
-    // Build bytecode vector
-    Vector<u8> bytecode_vec;
-    bytecode_vec.append(data->bytecode, data->bytecode_length);
+    auto bytecode = [&] {
+        if (data->bytecode_owner) {
+            auto bytecode_owner = adopt_own_if_nonnull(static_cast<Core::ImmutableBytes*>(data->bytecode_owner));
+            VERIFY(bytecode_owner);
+            auto bytes = bytecode_owner->bytes();
+            size_t offset = 0;
+            if (!bytes.is_empty()) {
+                VERIFY(data->bytecode >= bytes.data());
+                offset = static_cast<size_t>(data->bytecode - bytes.data());
+            }
+            VERIFY(data->bytecode_length <= bytes.size());
+            VERIFY(offset <= bytes.size() - data->bytecode_length);
+            return JS::Bytecode::InstructionStream { move(*bytecode_owner), offset, data->bytecode_length };
+        }
+
+        Vector<u8> bytecode_vec;
+        bytecode_vec.append(data->bytecode, data->bytecode_length);
+        return JS::Bytecode::InstructionStream { move(bytecode_vec) };
+    }();
 
     // Build identifier table
     auto ident_table = make<JS::Bytecode::IdentifierTable>();
@@ -1024,7 +1045,7 @@ extern "C" void* rust_create_executable(
 
     // Create executable
     auto executable = vm.heap().allocate<JS::Bytecode::Executable>(
-        move(bytecode_vec),
+        move(bytecode),
         move(ident_table),
         move(prop_key_table),
         move(str_table),
@@ -1106,7 +1127,7 @@ extern "C" void* rust_create_executable(
     auto const should_validate_bytecode = is_materializing_bytecode_cache;
 #endif
     if (should_validate_bytecode) {
-        if (auto validation = JS::Bytecode::validate_bytecode(*executable, basic_block_offsets.span(), JS::Bytecode::CacheState::BeforeFixup); validation.is_error()) {
+        if (auto validation = JS::Bytecode::validate_bytecode(*executable, basic_block_offsets.span()); validation.is_error()) {
             if (is_materializing_bytecode_cache)
                 return nullptr;
 #if !defined(NDEBUG) || defined(HAS_ADDRESS_SANITIZER)
@@ -1116,8 +1137,6 @@ extern "C" void* rust_create_executable(
 #endif
         }
     }
-
-    executable->fixup_cache_pointers();
 
     return executable.ptr();
 }
@@ -1171,6 +1190,7 @@ extern "C" void rust_sfd_set_metadata(
     bool this_value_needs_environment_resolution,
     bool function_environment_needed,
     size_t function_environment_bindings_count,
+    size_t var_environment_bindings_count,
     bool might_need_arguments_object,
     bool contains_direct_call_to_eval)
 {
@@ -1180,6 +1200,7 @@ extern "C" void rust_sfd_set_metadata(
     shared.m_function_environment_needed = function_environment_needed;
     shared.update_asm_call_metadata();
     shared.m_function_environment_bindings_count = function_environment_bindings_count;
+    shared.m_var_environment_bindings_count = var_environment_bindings_count;
     shared.m_might_need_arguments_object = might_need_arguments_object;
     shared.m_contains_direct_call_to_eval = contains_direct_call_to_eval;
 }
@@ -1206,6 +1227,7 @@ extern "C" void rust_sfd_set_precompiled_executable(
     bool this_value_needs_environment_resolution,
     bool function_environment_needed,
     size_t function_environment_bindings_count,
+    size_t var_environment_bindings_count,
     bool might_need_arguments_object,
     bool contains_direct_call_to_eval)
 {
@@ -1216,6 +1238,7 @@ extern "C" void rust_sfd_set_precompiled_executable(
     shared.m_this_value_needs_environment_resolution = this_value_needs_environment_resolution;
     shared.m_function_environment_needed = function_environment_needed;
     shared.m_function_environment_bindings_count = function_environment_bindings_count;
+    shared.m_var_environment_bindings_count = var_environment_bindings_count;
     shared.m_might_need_arguments_object = might_need_arguments_object;
     shared.m_contains_direct_call_to_eval = contains_direct_call_to_eval;
     shared.set_executable(executable);
@@ -1232,6 +1255,7 @@ extern "C" void rust_sfd_set_cached_bytecode_executable(
     bool this_value_needs_environment_resolution,
     bool function_environment_needed,
     size_t function_environment_bindings_count,
+    size_t var_environment_bindings_count,
     bool might_need_arguments_object,
     bool contains_direct_call_to_eval)
 {
@@ -1241,6 +1265,7 @@ extern "C" void rust_sfd_set_cached_bytecode_executable(
     shared.m_this_value_needs_environment_resolution = this_value_needs_environment_resolution;
     shared.m_function_environment_needed = function_environment_needed;
     shared.m_function_environment_bindings_count = function_environment_bindings_count;
+    shared.m_var_environment_bindings_count = var_environment_bindings_count;
     shared.m_might_need_arguments_object = might_need_arguments_object;
     shared.m_contains_direct_call_to_eval = contains_direct_call_to_eval;
     shared.m_cached_bytecode_executable = cached_executable_ptr;
@@ -1254,6 +1279,7 @@ extern "C" void rust_sfd_set_precompiled_bytecode_executable(
     bool this_value_needs_environment_resolution,
     bool function_environment_needed,
     size_t function_environment_bindings_count,
+    size_t var_environment_bindings_count,
     bool might_need_arguments_object,
     bool contains_direct_call_to_eval)
 {
@@ -1263,6 +1289,7 @@ extern "C" void rust_sfd_set_precompiled_bytecode_executable(
     shared.m_this_value_needs_environment_resolution = this_value_needs_environment_resolution;
     shared.m_function_environment_needed = function_environment_needed;
     shared.m_function_environment_bindings_count = function_environment_bindings_count;
+    shared.m_var_environment_bindings_count = var_environment_bindings_count;
     shared.m_might_need_arguments_object = might_need_arguments_object;
     shared.m_contains_direct_call_to_eval = contains_direct_call_to_eval;
     shared.m_precompiled_bytecode_executable = precompiled_executable_ptr;
