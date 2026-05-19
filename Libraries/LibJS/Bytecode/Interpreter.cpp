@@ -10,6 +10,7 @@
 #include <AK/NumericLimits.h>
 #include <AK/TemporaryChange.h>
 #include <LibGC/RootHashMap.h>
+#include <LibGC/RootHashTable.h>
 #include <LibJS/Bytecode/AsmInterpreter/AsmInterpreter.h>
 #include <LibJS/Bytecode/BasicBlock.h>
 #include <LibJS/Bytecode/Builtins.h>
@@ -1571,7 +1572,7 @@ static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_pr
     result.receiver_has_magical_length_property = object.has_magical_length_property();
     result.shape = &object.shape();
 
-    HashTable<GC::Ref<Object>> seen_objects;
+    GC::RootHashTable<GC::Ref<Object>> seen_objects(vm.heap());
     size_t estimated_properties_count = 0;
     bool prototype_chain_has_enumerable_named_properties = false;
     for (auto object_to_check = GC::Ptr { &object }; object_to_check && !seen_objects.contains(*object_to_check); object_to_check = TRY(object_to_check->internal_get_prototype_of())) {
@@ -1725,7 +1726,7 @@ inline ThrowCompletionOr<GC::Ref<PropertyNameIterator>> get_object_property_iter
     }
 
     size_t estimated_properties_count = 0;
-    HashTable<GC::Ref<Object>> seen_objects;
+    GC::RootHashTable<GC::Ref<Object>> seen_objects(vm.heap());
     for (auto object_to_check = GC::Ptr { object.ptr() }; object_to_check && !seen_objects.contains(*object_to_check); object_to_check = TRY(object_to_check->internal_get_prototype_of())) {
         seen_objects.set(*object_to_check);
         estimated_properties_count += object_to_check->own_properties_count();
@@ -3479,7 +3480,7 @@ NEVER_INLINE ThrowCompletionOr<void> NewClass::execute_impl(VM& vm) const
     Value super_class;
     if (m_super_class.has_value())
         super_class = vm.get(m_super_class.value());
-    Vector<Value> element_keys;
+    GC::RootVector<Value> element_keys(vm.heap());
     element_keys.ensure_capacity(m_element_keys_count);
     for (size_t i = 0; i < m_element_keys_count; ++i) {
         Value element_key;

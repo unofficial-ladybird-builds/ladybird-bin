@@ -37,6 +37,17 @@ private:
     SourceCode(String filename, size_t length_in_code_units, String source_encoding, Core::ImmutableBytes source_bytes);
     void ensure_code() const;
     Utf16String decode_source_range(size_t start_offset, size_t length) const;
+    bool source_bytes_can_be_sliced_by_code_unit_offsets() const;
+    Optional<Utf16String> source_text_from_utf8_source_bytes(size_t start_offset, size_t length) const;
+    bool ensure_utf8_source_byte_spans() const;
+    Optional<size_t> byte_offset_for_utf8_code_unit_offset(size_t code_unit_offset) const;
+
+    struct Utf8SourceByteSpan {
+        size_t code_unit_offset { 0 };
+        size_t code_unit_length { 0 };
+        size_t byte_offset { 0 };
+        size_t byte_length { 0 };
+    };
 
     String m_filename;
     Optional<Utf16String> mutable m_code;
@@ -58,6 +69,11 @@ private:
     // Cached UTF-16 widening of ASCII source data, lazily populated by
     // utf16_data() for use by the Rust compilation pipeline.
     Vector<u16> mutable m_utf16_data_cache;
+    Optional<bool> mutable m_source_bytes_can_be_sliced_by_code_unit_offsets;
+    Vector<Utf8SourceByteSpan> mutable m_utf8_source_byte_spans;
+    size_t mutable m_utf8_source_byte_span_initial_byte_offset { 0 };
+    bool mutable m_tried_to_build_utf8_source_byte_spans { false };
+    bool mutable m_can_use_utf8_source_byte_spans { false };
 };
 
 }
