@@ -97,6 +97,7 @@ public:
     void load(URL::URL const&);
 
     void load_html(StringView);
+    void load_html(StringView, URL::URL const&);
 
     void reload();
 
@@ -251,10 +252,15 @@ public:
         Yes,
         No,
     };
+    enum class ClearSelectionOnNoMatch {
+        Yes,
+        No,
+    };
     struct FindInPageQuery {
         String string {};
         CaseSensitivity case_sensitivity { CaseSensitivity::CaseInsensitive };
         WrapAround wrap_around { WrapAround::Yes };
+        ClearSelectionOnNoMatch clear_selection_on_no_match { ClearSelectionOnNoMatch::Yes };
     };
     struct FindInPageResult {
         size_t current_match_index { 0 };
@@ -294,7 +300,7 @@ private:
         Backward,
     };
     FindInPageResult perform_find_in_page_query(FindInPageQuery const&, Optional<SearchDirection> = {});
-    void update_find_in_page_selection(Vector<GC::Root<DOM::Range>> matches);
+    void update_find_in_page_selection(Vector<GC::Root<DOM::Range>> matches, ClearSelectionOnNoMatch);
 
     void on_pending_dialog_closed();
 

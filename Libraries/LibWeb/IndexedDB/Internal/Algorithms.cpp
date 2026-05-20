@@ -2027,7 +2027,7 @@ GC::Ref<JS::Array> retrieve_multiple_items_from_an_object_store(JS::Realm& realm
         count = OptionalNone();
 
     // 2. Let records an empty list.
-    GC::ConservativeVector<ObjectStoreRecord> records(realm.heap());
+    GC::ConservativeVector<ObjectStoreRecord> records;
 
     // 3. If direction is "next" or "nextunique", set records to the first count of store’s list of records whose key is in range.
     if (direction == Bindings::IDBCursorDirection::Next || direction == Bindings::IDBCursorDirection::Nextunique) {
@@ -2221,7 +2221,7 @@ bool cleanup_indexed_database_transactions(GC::Ref<HTML::EventLoop> event_loop)
     bool has_matching_event_loop = false;
 
     Database::for_each_database([&has_matching_event_loop, event_loop](Database& database) {
-        for (auto const& connection : database.associated_connections_as_root_vector(event_loop->heap())) {
+        for (auto const& connection : database.associated_connections_as_root_vector()) {
             for (auto const& transaction : connection->transactions()) {
                 // 2. For each transaction transaction with cleanup event loop matching the current event loop:
                 if (transaction->cleanup_event_loop() == event_loop) {
@@ -2293,7 +2293,7 @@ GC::Ref<JS::Array> retrieve_multiple_items_from_an_index(JS::Realm& target_realm
         count = OptionalNone();
 
     // 2. Let records be a an empty list.
-    GC::ConservativeVector<IndexRecord> records(target_realm.heap());
+    GC::ConservativeVector<IndexRecord> records;
 
     // 3. Switching on direction:
     switch (direction) {

@@ -16,6 +16,8 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Range.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
@@ -126,6 +128,31 @@ void Page::load_html(StringView html)
         .source_document = *top_level_traversable()->active_document(),
         .document_resource = String::from_utf8(html).release_value_but_fixme_should_propagate_errors(),
         .user_involvement = HTML::UserNavigationInvolvement::BrowserUI });
+}
+
+void Page::load_html(StringView html, URL::URL const& url)
+{
+    // FIXME: #23909 Figure out why GC threshold does not stay low when repeatedly loading html from the WebView
+    heap().collect_garbage();
+
+    auto document = top_level_traversable()->active_document();
+    auto& realm = document->realm();
+    auto html_string = String::from_utf8(html).release_value_but_fixme_should_propagate_errors();
+
+    auto response = Fetch::Infrastructure::Response::create(realm.vm());
+    response->url_list().append(url);
+    response->header_list()->append({ "Content-Type"sv, "text/html"sv });
+    response->set_body(Fetch::Infrastructure::byte_sequence_as_body(realm, html_string.bytes()));
+
+    HTML::Navigable::NavigateParams params { .url = url,
+        .source_document = *document,
+        .response = response,
+        .user_involvement = HTML::UserNavigationInvolvement::BrowserUI };
+
+    if (url == URL::about_srcdoc())
+        params.document_resource = move(html_string);
+
+    (void)top_level_traversable()->navigate(move(params));
 }
 
 void Page::reload()
@@ -834,7 +861,7 @@ Page::FindInPageResult Page::perform_find_in_page_query(FindInPageQuery const& q
         }
     }
 
-    update_find_in_page_selection(all_matches);
+    update_find_in_page_selection(all_matches, query.clear_selection_on_no_match);
 
     return Page::FindInPageResult {
         .current_match_index = m_find_in_page_match_index,
@@ -879,10 +906,13 @@ Page::FindInPageResult Page::find_in_page_previous_match()
     return result;
 }
 
-void Page::update_find_in_page_selection(Vector<GC::Root<DOM::Range>> matches)
+void Page::update_find_in_page_selection(Vector<GC::Root<DOM::Range>> matches, ClearSelectionOnNoMatch clear_selection_on_no_match)
 {
-    if (matches.is_empty())
+    if (matches.is_empty()) {
+        if (clear_selection_on_no_match == ClearSelectionOnNoMatch::Yes)
+            clear_selection();
         return;
+    }
 
     clear_selection();
 

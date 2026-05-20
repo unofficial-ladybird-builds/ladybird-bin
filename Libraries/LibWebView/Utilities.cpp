@@ -17,6 +17,7 @@
 #include <LibCore/ResourceImplementationFile.h>
 #include <LibCore/System.h>
 #include <LibFileSystem/FileSystem.h>
+#include <LibWeb/HTML/SelectedFile.h>
 #include <LibWebView/Utilities.h>
 
 #define TOKENCAT(x, y) x##y
@@ -143,6 +144,22 @@ ErrorOr<void> handle_attached_debugger()
 #endif
 
     return {};
+}
+
+ErrorOr<Web::HTML::SelectedFile> create_selected_file(ByteString const& file_path)
+{
+    // FIXME: Implement the File and Directory Entries API.
+    //        https://wicg.github.io/entries-api/
+    if (FileSystem::is_directory(file_path))
+        return Error::from_string_literal("Only files may currently be selected");
+
+    // https://html.spec.whatwg.org/multipage/input.html#file-upload-state-(type=file):concept-input-file-path
+    // Filenames must not contain path components, even in the case that a user has selected an entire directory
+    // hierarchy or multiple files with the same name from different directories.
+    auto name = LexicalPath::basename(file_path);
+
+    auto file = TRY(Core::File::open(file_path, Core::File::OpenMode::Read));
+    return Web::HTML::SelectedFile { move(name), IPC::File::adopt_file(move(file)) };
 }
 
 ErrorOr<JsonObject> read_json_file(ByteString const& path)

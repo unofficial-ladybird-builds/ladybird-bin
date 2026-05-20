@@ -484,7 +484,7 @@ ThrowCompletionOr<GC::RootVector<Value>> Object::enumerable_own_property_names(P
     // 1. Let ownKeys be ? O.[[OwnPropertyKeys]]().
 
     // 2. Let properties be a new empty List.
-    auto properties = GC::RootVector<Value> { heap() };
+    GC::RootVector<Value> properties;
     properties.ensure_capacity(own_properties_count());
 
     auto& pre_iteration_shape = shape();
@@ -1230,7 +1230,7 @@ ThrowCompletionOr<GC::RootVector<Value>> Object::internal_own_property_keys() co
     auto& vm = this->vm();
 
     // 1. Let keys be a new empty List.
-    GC::RootVector<Value> keys { heap() };
+    GC::RootVector<Value> keys;
 
     // 2. For each own property key P of O such that P is an array index, in ascending numeric index order, do
     {
@@ -1467,7 +1467,7 @@ ThrowCompletionOr<void> Object::for_each_own_property_with_enumerability(Functio
             PropertyKey property_key;
             bool enumerable;
         };
-        GC::ConservativeVector<OwnKey> keys { heap() };
+        GC::ConservativeVector<OwnKey> keys;
         keys.ensure_capacity(indexed_real_size() + shape().property_count() + (has_magical_length_property() ? 1 : 0));
 
         {
