@@ -38,9 +38,10 @@ public:
 
     virtual void start() override;
 
-    virtual PipelineStatus pull(AudioBlock& into) override;
+    virtual PipelineStatus status() const override;
+    virtual void pull(AudioBlock& into) override;
 
-    virtual void set_state_changed_handler(PipelineStateChangeHandler) override;
+    virtual void set_wake_handler(PipelineWakeHandler) override;
 
 private:
     struct InputMixingData {
@@ -49,7 +50,8 @@ private:
         PipelineStatus last_status { PipelineStatus::Pending };
     };
 
-    void dispatch_state(PipelineStatus);
+    PipelineStatus combined_input_status() const;
+    void dispatch_wake();
     AK::Duration mix_head_timestamp() const;
 
     void disconnect_input_while_locked(NonnullRefPtr<AudioProducer> const&);
@@ -59,8 +61,11 @@ private:
     HashMap<NonnullRefPtr<AudioProducer>, InputMixingData> m_inputs;
     i64 m_next_frame_to_write { 0 };
     bool m_started { false };
+    bool m_moved_position_pending { false };
+    mutable bool m_downstream_needs_wake { true };
 
-    PipelineStateChangeHandler m_state_changed_handler;
+    PipelineWakeHandler m_wake_handler;
+    PipelineStatus m_status { PipelineStatus::Pending };
 };
 
 }
