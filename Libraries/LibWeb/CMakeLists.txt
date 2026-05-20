@@ -165,6 +165,7 @@ set(SOURCES
     CSS/Display.cpp
     CSS/EasingFunction.cpp
     CSS/EdgeRect.cpp
+    CSS/FeatureQuery.cpp
     CSS/Fetch.cpp
     CSS/Filter.cpp
     CSS/Flex.cpp
@@ -800,6 +801,7 @@ set(SOURCES
     Layout/TextAreaBox.cpp
     Layout/TextInputBox.cpp
     Layout/TextNode.cpp
+    Layout/TextOffsetMapping.cpp
     Layout/TreeBuilder.cpp
     Layout/VideoBox.cpp
     Layout/Viewport.cpp

@@ -82,12 +82,21 @@ struct BooleanExpressionEvaluationContext {
 };
 
 struct ContainerQueryFeatureRequirements {
-    bool requires_size_container : 1 { false };
+    bool requires_width_container : 1 { false };
+    bool requires_height_container : 1 { false };
     bool requires_inline_size_container : 1 { false };
     bool requires_block_size_container : 1 { false };
     bool requires_style_container : 1 { false };
     bool requires_scroll_state_container : 1 { false };
     bool has_unknown_or_unsupported_feature : 1 { false };
+
+    bool contains_size_feature() const
+    {
+        return requires_width_container
+            || requires_height_container
+            || requires_inline_size_container
+            || requires_block_size_container;
+    }
 };
 
 // The contents of this file implement the `<boolean-expr>` concept.

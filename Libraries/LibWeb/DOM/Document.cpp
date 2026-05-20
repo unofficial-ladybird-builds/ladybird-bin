@@ -721,6 +721,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
         visitor.visit(resize_observer);
 
     visitor.visit(m_svg_roots_needing_relayout);
+    visitor.visit(m_query_containers_needing_container_query_evaluation_after_layout);
 
     visitor.visit(m_shared_resource_requests);
 
@@ -1534,6 +1535,11 @@ void Document::mark_svg_root_as_needing_relayout(Layout::SVGSVGBox& svg_root)
     m_svg_roots_needing_relayout.set(svg_root);
 }
 
+void Document::set_needs_container_query_evaluation_after_layout(Element const& query_container)
+{
+    m_query_containers_needing_container_query_evaluation_after_layout.set(const_cast<Element&>(query_container));
+}
+
 static void relayout_svg_root(Layout::SVGSVGBox& svg_root)
 {
     Layout::LayoutState layout_state(svg_root);
@@ -1542,14 +1548,12 @@ static void relayout_svg_root(Layout::SVGSVGBox& svg_root)
     if (auto paintable = svg_root.paintable_box())
         layout_state.populate_from_paintable(svg_root, *paintable);
 
-    // Pre-populate SVGGraphicsBox ancestors (up to outer SVG) for get_parent_svg_transform().
+    // Pre-populate SVGGraphicsBox ancestors for get_parent_svg_transform().
     for (auto* ancestor = svg_root.parent(); ancestor; ancestor = ancestor->parent()) {
         if (auto const* svg_graphics_ancestor = as_if<Layout::SVGGraphicsBox>(*ancestor)) {
             if (auto paintable = svg_graphics_ancestor->paintable_box())
                 layout_state.populate_from_paintable(*svg_graphics_ancestor, *paintable);
         }
-        if (is<Layout::SVGSVGBox>(*ancestor))
-            break;
     }
 
     // Pre-populate the viewport for position:fixed elements inside <foreignObject>.
@@ -1655,163 +1659,194 @@ void Document::update_layout(UpdateLayoutReason reason)
     ScopeGuard guard = [&] { m_is_running_update_layout = false; };
     m_is_running_update_layout = true;
 
-    update_style();
+    auto needs_style_update_after_layout = [&] {
+        return !m_query_containers_needing_container_query_evaluation_after_layout.is_empty()
+            || m_needs_animated_style_update
+            || m_needs_invalidation_of_elements_affected_by_has
+            || m_style_invalidator->has_pending_invalidations()
+            || needs_full_style_update()
+            || needs_style_update()
+            || child_needs_style_update();
+    };
 
-    if (layout_is_up_to_date())
-        return;
+    constexpr size_t max_container_query_layout_passes = 8;
+    for (size_t layout_pass = 0; layout_pass < max_container_query_layout_passes; ++layout_pass) {
+        update_style();
 
-    auto svg_roots_to_relayout = move(m_svg_roots_needing_relayout);
+        if (layout_is_up_to_date())
+            return;
 
-    // NOTE: If this is a document hosting <template> contents, layout is unnecessary.
-    if (m_created_for_appropriate_template_contents)
-        return;
+        auto svg_roots_to_relayout = move(m_svg_roots_needing_relayout);
 
-    auto const needs_layout_tree_rebuild = !m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update();
+        // NOTE: If this is a document hosting <template> contents, layout is unnecessary.
+        if (m_created_for_appropriate_template_contents)
+            return;
 
-    // Partial SVG relayout
-    if (!needs_layout_tree_rebuild && !svg_roots_to_relayout.is_empty() && !m_layout_root->needs_layout_update()) {
-        for (auto const& svg_root : svg_roots_to_relayout)
-            relayout_svg_root(*svg_root);
+        auto const needs_layout_tree_rebuild = !m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update();
 
-        invalidate_stacking_context_tree();
+        // Partial SVG relayout
+        if (!needs_layout_tree_rebuild && !svg_roots_to_relayout.is_empty() && !m_layout_root->needs_layout_update()) {
+            for (auto const& svg_root : svg_roots_to_relayout)
+                relayout_svg_root(*svg_root);
+
+            invalidate_stacking_context_tree();
+            set_needs_to_record_display_list();
+
+            set_needs_accumulated_visual_contexts_update(true);
+            update_paint_and_hit_testing_properties_if_needed();
+            m_document->set_needs_repaint();
+            return;
+        }
+
+        // Clear text blocks cache so we rebuild them on the next find action.
+        if (m_layout_root)
+            m_layout_root->invalidate_text_blocks_cache();
+
         set_needs_to_record_display_list();
+
+        auto* document_element = this->document_element();
+        auto viewport_rect = navigable->viewport_rect();
+
+        auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
+
+        if (needs_layout_tree_rebuild) {
+            Layout::TreeBuilder tree_builder;
+            m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
+
+            // NB: Called during layout update.
+            if (document_element && document_element->unsafe_layout_node()) {
+                propagate_overflow_to_viewport(*document_element, *m_layout_root);
+                propagate_scrollbar_width_to_viewport(*document_element, *m_layout_root);
+            }
+
+            set_needs_full_layout_tree_update(false);
+
+            if constexpr (UPDATE_LAYOUT_DEBUG) {
+                dbgln("TREEBUILD {} µs", timer.elapsed_time().to_microseconds());
+            }
+        }
+
+        u32 layout_index_counter = 0;
+        m_layout_root->for_each_in_inclusive_subtree([&](auto& layout_node) {
+            if (auto* node_with_style = as_if<Layout::NodeWithStyle>(layout_node))
+                node_with_style->set_layout_index(layout_index_counter++);
+
+            layout_node.recompute_containing_block({});
+
+            auto* box = as_if<Layout::Box>(layout_node);
+            if (!box)
+                return TraversalDecision::Continue;
+
+            box->clear_contained_abspos_children();
+
+            if (!box->is_absolutely_positioned())
+                return TraversalDecision::Continue;
+
+            if (auto containing_block = box->containing_block()) {
+                auto closest_box_that_establishes_formatting_context = containing_block;
+                while (closest_box_that_establishes_formatting_context) {
+                    if (closest_box_that_establishes_formatting_context == m_layout_root)
+                        break;
+                    if (Layout::FormattingContext::formatting_context_type_created_by_box(*closest_box_that_establishes_formatting_context).has_value())
+                        break;
+                    closest_box_that_establishes_formatting_context = closest_box_that_establishes_formatting_context->containing_block();
+                }
+                VERIFY(closest_box_that_establishes_formatting_context);
+                closest_box_that_establishes_formatting_context->add_contained_abspos_child(*box);
+            }
+
+            return TraversalDecision::Continue;
+        });
+
+        Layout::LayoutState layout_state;
+        layout_state.ensure_capacity(layout_index_counter);
+
+        {
+            auto& viewport = static_cast<Layout::Viewport&>(*m_layout_root);
+            auto& viewport_state = layout_state.get_mutable(viewport);
+            viewport_state.set_content_width(viewport_rect.width());
+            viewport_state.set_content_height(viewport_rect.height());
+
+            // NB: Called during layout update.
+            if (document_element && document_element->unsafe_layout_node()) {
+                auto& icb_state = layout_state.get_mutable(as<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->unsafe_layout_node()));
+                icb_state.set_content_width(viewport_rect.width());
+            }
+
+            auto available_space = Layout::AvailableSpace(
+                Layout::AvailableSize::make_definite(viewport_rect.width()),
+                Layout::AvailableSize::make_definite(viewport_rect.height()));
+
+            if (m_layout_root->first_child() && m_layout_root->first_child()->is_svg_svg_box()) {
+                // NOTE: If we are laying out a standalone SVG document, we give it some special treatment:
+                //       The root <svg> container gets the same size as the viewport,
+                //       and we call directly into the SVG layout code from here.
+                auto const& svg_root = as<Layout::SVGSVGBox>(*m_layout_root->first_child());
+                auto content_height = layout_state.get(*svg_root.containing_block()).content_height();
+                layout_state.get_mutable(svg_root).set_content_height(content_height);
+                Layout::SVGFormattingContext svg_formatting_context(layout_state, Layout::LayoutMode::Normal, svg_root, nullptr);
+                svg_formatting_context.run(available_space);
+            } else {
+                Layout::BlockFormattingContext root_formatting_context(layout_state, Layout::LayoutMode::Normal, *m_layout_root, nullptr);
+                root_formatting_context.run(available_space);
+            }
+        }
+
+        layout_state.commit(*m_layout_root);
+
+        // Broadcast the current viewport rect to any new paintables, so they know whether they're visible or not.
+        inform_all_viewport_clients_about_the_current_viewport_rect();
+
+        m_document->set_needs_repaint();
+
+        // NB: Called during layout update.
+        unsafe_paintable()->assign_scroll_frames();
 
         set_needs_accumulated_visual_contexts_update(true);
         update_paint_and_hit_testing_properties_if_needed();
-        m_document->set_needs_repaint();
-        return;
-    }
 
-    // Clear text blocks cache so we rebuild them on the next find action.
-    if (m_layout_root)
-        m_layout_root->invalidate_text_blocks_cache();
-
-    set_needs_to_record_display_list();
-
-    auto* document_element = this->document_element();
-    auto viewport_rect = navigable->viewport_rect();
-
-    auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
-
-    if (needs_layout_tree_rebuild) {
-        Layout::TreeBuilder tree_builder;
-        m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
-
-        // NB: Called during layout update.
-        if (document_element && document_element->unsafe_layout_node()) {
-            propagate_overflow_to_viewport(*document_element, *m_layout_root);
-            propagate_scrollbar_width_to_viewport(*document_element, *m_layout_root);
+        if (auto range = get_selection()->range()) {
+            unsafe_paintable()->recompute_selection_states(*range);
         }
 
-        set_needs_full_layout_tree_update(false);
+        // Collect elements with content-visibility: auto. This is used in the HTML event loop to avoid traversing the whole tree every time.
+        Vector<WeakPtr<Painting::PaintableBox>> paintable_boxes_with_auto_content_visibility;
+        unsafe_paintable()->for_each_in_subtree_of_type<Painting::PaintableBox>([&](auto& paintable_box) {
+            if (paintable_box.dom_node()
+                && paintable_box.dom_node()->is_element()
+                && paintable_box.computed_values().content_visibility() == CSS::ContentVisibility::Auto) {
+                paintable_boxes_with_auto_content_visibility.append(paintable_box);
+            }
+            return TraversalDecision::Continue;
+        });
+        unsafe_paintable()->set_paintable_boxes_with_auto_content_visibility(move(paintable_boxes_with_auto_content_visibility));
+
+        m_layout_root->for_each_in_inclusive_subtree([](auto& node) {
+            node.reset_needs_layout_update();
+            return TraversalDecision::Continue;
+        });
 
         if constexpr (UPDATE_LAYOUT_DEBUG) {
-            dbgln("TREEBUILD {} µs", timer.elapsed_time().to_microseconds());
+            dbgln("LAYOUT {} {} µs", to_string(reason), timer.elapsed_time().to_microseconds());
         }
-    }
 
-    u32 layout_index_counter = 0;
-    m_layout_root->for_each_in_inclusive_subtree([&](auto& layout_node) {
-        if (auto* node_with_style = as_if<Layout::NodeWithStyle>(layout_node))
-            node_with_style->set_layout_index(layout_index_counter++);
+        if (!m_query_containers_needing_container_query_evaluation_after_layout.is_empty()) {
+            auto query_containers = move(m_query_containers_needing_container_query_evaluation_after_layout);
+            for (auto& query_container : query_containers) {
+                if (!query_container->is_connected())
+                    continue;
 
-        layout_node.recompute_containing_block({});
+                query_container->for_each_shadow_including_descendant([](Node& node) {
+                    if (auto* element = as_if<Element>(node); element && element->style_depends_on_size_container_query())
+                        element->set_needs_style_update(true);
 
-        auto* box = as_if<Layout::Box>(layout_node);
-        if (!box)
-            return TraversalDecision::Continue;
-
-        box->clear_contained_abspos_children();
-
-        if (!box->is_absolutely_positioned())
-            return TraversalDecision::Continue;
-
-        if (auto containing_block = box->containing_block()) {
-            auto closest_box_that_establishes_formatting_context = containing_block;
-            while (closest_box_that_establishes_formatting_context) {
-                if (closest_box_that_establishes_formatting_context == m_layout_root)
-                    break;
-                if (Layout::FormattingContext::formatting_context_type_created_by_box(*closest_box_that_establishes_formatting_context).has_value())
-                    break;
-                closest_box_that_establishes_formatting_context = closest_box_that_establishes_formatting_context->containing_block();
+                    return TraversalDecision::Continue;
+                });
             }
-            VERIFY(closest_box_that_establishes_formatting_context);
-            closest_box_that_establishes_formatting_context->add_contained_abspos_child(*box);
         }
 
-        return TraversalDecision::Continue;
-    });
-
-    Layout::LayoutState layout_state;
-    layout_state.ensure_capacity(layout_index_counter);
-
-    {
-        auto& viewport = static_cast<Layout::Viewport&>(*m_layout_root);
-        auto& viewport_state = layout_state.get_mutable(viewport);
-        viewport_state.set_content_width(viewport_rect.width());
-        viewport_state.set_content_height(viewport_rect.height());
-
-        // NB: Called during layout update.
-        if (document_element && document_element->unsafe_layout_node()) {
-            auto& icb_state = layout_state.get_mutable(as<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->unsafe_layout_node()));
-            icb_state.set_content_width(viewport_rect.width());
-        }
-
-        auto available_space = Layout::AvailableSpace(
-            Layout::AvailableSize::make_definite(viewport_rect.width()),
-            Layout::AvailableSize::make_definite(viewport_rect.height()));
-
-        if (m_layout_root->first_child() && m_layout_root->first_child()->is_svg_svg_box()) {
-            // NOTE: If we are laying out a standalone SVG document, we give it some special treatment:
-            //       The root <svg> container gets the same size as the viewport,
-            //       and we call directly into the SVG layout code from here.
-            auto const& svg_root = as<Layout::SVGSVGBox>(*m_layout_root->first_child());
-            auto content_height = layout_state.get(*svg_root.containing_block()).content_height();
-            layout_state.get_mutable(svg_root).set_content_height(content_height);
-            Layout::SVGFormattingContext svg_formatting_context(layout_state, Layout::LayoutMode::Normal, svg_root, nullptr);
-            svg_formatting_context.run(available_space);
-        } else {
-            Layout::BlockFormattingContext root_formatting_context(layout_state, Layout::LayoutMode::Normal, *m_layout_root, nullptr);
-            root_formatting_context.run(available_space);
-        }
-    }
-
-    layout_state.commit(*m_layout_root);
-
-    // Broadcast the current viewport rect to any new paintables, so they know whether they're visible or not.
-    inform_all_viewport_clients_about_the_current_viewport_rect();
-
-    m_document->set_needs_repaint();
-
-    // NB: Called during layout update.
-    unsafe_paintable()->assign_scroll_frames();
-
-    set_needs_accumulated_visual_contexts_update(true);
-    update_paint_and_hit_testing_properties_if_needed();
-
-    if (auto range = get_selection()->range()) {
-        unsafe_paintable()->recompute_selection_states(*range);
-    }
-
-    // Collect elements with content-visibility: auto. This is used in the HTML event loop to avoid traversing the whole tree every time.
-    Vector<WeakPtr<Painting::PaintableBox>> paintable_boxes_with_auto_content_visibility;
-    unsafe_paintable()->for_each_in_subtree_of_type<Painting::PaintableBox>([&](auto& paintable_box) {
-        if (paintable_box.dom_node()
-            && paintable_box.dom_node()->is_element()
-            && paintable_box.computed_values().content_visibility() == CSS::ContentVisibility::Auto) {
-            paintable_boxes_with_auto_content_visibility.append(paintable_box);
-        }
-        return TraversalDecision::Continue;
-    });
-    unsafe_paintable()->set_paintable_boxes_with_auto_content_visibility(move(paintable_boxes_with_auto_content_visibility));
-
-    m_layout_root->for_each_in_inclusive_subtree([](auto& node) {
-        node.reset_needs_layout_update();
-        return TraversalDecision::Continue;
-    });
-
-    if constexpr (UPDATE_LAYOUT_DEBUG) {
-        dbgln("LAYOUT {} {} µs", to_string(reason), timer.elapsed_time().to_microseconds());
+        if (!needs_style_update_after_layout())
+            break;
     }
 
     VERIFY(layout_is_up_to_date());
@@ -2376,9 +2411,12 @@ static CSSPixelPoint hover_event_page_offset(Optional<HoverEventData> const& hov
 // https://drafts.csswg.org/cssom-view/#dom-mouseevent-offsetx
 static CSSPixelPoint compute_mouse_event_offset(CSSPixelPoint position, Painting::Paintable const& paintable)
 {
-    auto inverse_transform_point = [](Painting::PaintableBox const& paintable_box, CSSPixelPoint position) {
+    auto inverse_transform_point = [](Painting::PaintableBox const& paintable_box, CSSPixelPoint position) -> Optional<CSSPixelPoint> {
+        auto viewport_paintable = paintable_box.document().unsafe_paintable();
+        if (!viewport_paintable)
+            return {};
         auto pixel_ratio = static_cast<float>(paintable_box.document().page().client().device_pixels_per_css_pixel());
-        auto const& visual_context_tree = paintable_box.document().unsafe_paintable()->visual_context_tree();
+        auto const& visual_context_tree = viewport_paintable->visual_context_tree();
         auto transformed_position = visual_context_tree.inverse_transform_point(
             paintable_box.accumulated_visual_context_index(), position.to_type<float>() * pixel_ratio);
         return (transformed_position / pixel_ratio).to_type<CSSPixels>();
@@ -2386,11 +2424,15 @@ static CSSPixelPoint compute_mouse_event_offset(CSSPixelPoint position, Painting
 
     CSSPixelPoint offset_position = position;
     if (auto const* paintable_box = as_if<Painting::PaintableBox>(paintable)) {
-        if (paintable_box->accumulated_visual_context_index().value())
-            offset_position = inverse_transform_point(*paintable_box, position);
+        if (paintable_box->accumulated_visual_context_index().value()) {
+            if (auto transformed_position = inverse_transform_point(*paintable_box, position); transformed_position.has_value())
+                offset_position = *transformed_position;
+        }
     } else if (auto containing_block = paintable.containing_block()) {
-        if (containing_block->accumulated_visual_context_index().value())
-            offset_position = inverse_transform_point(*containing_block, position);
+        if (containing_block->accumulated_visual_context_index().value()) {
+            if (auto transformed_position = inverse_transform_point(*containing_block, position); transformed_position.has_value())
+                offset_position = *transformed_position;
+        }
     }
 
     auto const top_left_of_layout_node = paintable.box_type_agnostic_position();
@@ -2434,6 +2476,43 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
         window_proxy = navigable->active_window_proxy();
     auto page_offset = hover_event_page_offset(hover_event_data);
 
+    struct HoverEventTarget {
+        GC::Ref<Node> node;
+        CSSPixelPoint offset;
+    };
+
+    auto make_hover_event_target = [&](Node& target) {
+        return HoverEventTarget { target, hover_event_offset_for_target(hover_event_data, target) };
+    };
+
+    // Boundary event listeners can invalidate layout while the batch is still being dispatched. Compute all offsets
+    // against the layout and paint trees from the original platform hit-test before firing the first event.
+    Optional<CSSPixelPoint> old_hovered_node_offset;
+    if (old_hovered_node)
+        old_hovered_node_offset = hover_event_offset_for_target(hover_event_data, *old_hovered_node);
+
+    Optional<CSSPixelPoint> hovered_node_offset;
+    if (node)
+        hovered_node_offset = hover_event_offset_for_target(hover_event_data, *node);
+
+    Vector<HoverEventTarget> pointer_leave_targets;
+    if (old_hovered_node && (!node || !node->is_descendant_of(*old_hovered_node))) {
+        for (auto target = old_hovered_node; target && target.ptr() != common_ancestor; target = target->parent())
+            pointer_leave_targets.append(make_hover_event_target(*target));
+    }
+
+    Vector<HoverEventTarget> mouse_leave_targets;
+    if (old_hovered_node && (!node || !node->is_descendant_of(*old_hovered_node))) {
+        for (auto target = old_hovered_node; target && target.ptr() != common_ancestor; target = target->parent_or_shadow_host())
+            mouse_leave_targets.append(make_hover_event_target(*target));
+    }
+
+    Vector<HoverEventTarget> entered_ancestors;
+    if (node && (!old_hovered_node || !node->is_ancestor_of(*old_hovered_node))) {
+        for (auto target = node; target && target.ptr() != common_ancestor; target = target->parent_or_shadow_host())
+            entered_ancestors.append(make_hover_event_target(*target));
+    }
+
     GC::Ptr<Node> old_hovered_node_root = nullptr;
     GC::Ptr<Node> new_hovered_node_root = nullptr;
     if (old_hovered_node)
@@ -2463,7 +2542,7 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
         pointer_event_init.view = window_proxy;
         if (hover_event_data.has_value())
             populate_mouse_event_init_from_hover_event_data(pointer_event_init, *hover_event_data, window_proxy);
-        auto offset = hover_event_offset_for_target(hover_event_data, *old_hovered_node);
+        auto offset = *old_hovered_node_offset;
         auto event = UIEvents::PointerEvent::create(realm(), UIEvents::EventNames::pointerout, pointer_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
         mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
         old_hovered_node->dispatch_event(event);
@@ -2479,15 +2558,15 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
         mouse_event_init.view = window_proxy;
         if (hover_event_data.has_value())
             populate_mouse_event_init_from_hover_event_data(mouse_event_init, *hover_event_data, window_proxy);
-        auto offset = hover_event_offset_for_target(hover_event_data, *old_hovered_node);
+        auto offset = *old_hovered_node_offset;
         auto event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseout, mouse_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
         mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
         old_hovered_node->dispatch_event(event);
     }
 
     // https://w3c.github.io/pointerevents/#the-pointerleave-event
-    if (old_hovered_node && (!m_hovered_node || !m_hovered_node->is_descendant_of(*old_hovered_node))) {
-        for (auto target = old_hovered_node; target && target.ptr() != common_ancestor; target = target->parent()) {
+    if (!pointer_leave_targets.is_empty()) {
+        for (auto const& target : pointer_leave_targets) {
             Bindings::PointerEventInit pointer_event_init {};
             pointer_event_init.related_target = GC::Root<DOM::EventTarget> { m_hovered_node.ptr() };
             pointer_event_init.is_primary = true;
@@ -2495,24 +2574,24 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
             pointer_event_init.view = window_proxy;
             if (hover_event_data.has_value())
                 populate_mouse_event_init_from_hover_event_data(pointer_event_init, *hover_event_data, window_proxy);
-            auto offset = hover_event_offset_for_target(hover_event_data, *target);
+            auto offset = target.offset;
             auto event = UIEvents::PointerEvent::create(realm(), UIEvents::EventNames::pointerleave, pointer_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
             mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
-            target->dispatch_event(event);
+            target.node->dispatch_event(event);
         }
     }
 
     // https://w3c.github.io/uievents/#mouseleave
-    if (old_hovered_node && (!m_hovered_node || !m_hovered_node->is_descendant_of(*old_hovered_node))) {
-        for (auto target = old_hovered_node; target && target.ptr() != common_ancestor; target = target->parent_or_shadow_host()) {
+    if (!mouse_leave_targets.is_empty()) {
+        for (auto const& target : mouse_leave_targets) {
             Bindings::MouseEventInit mouse_event_init {};
             mouse_event_init.related_target = GC::Root<DOM::EventTarget> { m_hovered_node.ptr() };
             if (hover_event_data.has_value())
                 populate_mouse_event_init_from_hover_event_data(mouse_event_init, *hover_event_data, window_proxy);
-            auto offset = hover_event_offset_for_target(hover_event_data, *target);
+            auto offset = target.offset;
             auto event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseleave, mouse_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
             mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
-            target->dispatch_event(event);
+            target.node->dispatch_event(event);
         }
     }
 
@@ -2528,7 +2607,7 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
         pointer_event_init.view = window_proxy;
         if (hover_event_data.has_value())
             populate_mouse_event_init_from_hover_event_data(pointer_event_init, *hover_event_data, window_proxy);
-        auto offset = hover_event_offset_for_target(hover_event_data, *m_hovered_node);
+        auto offset = *hovered_node_offset;
         auto event = UIEvents::PointerEvent::create(realm(), UIEvents::EventNames::pointerover, pointer_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
         mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
         m_hovered_node->dispatch_event(event);
@@ -2544,7 +2623,7 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
         mouse_event_init.view = window_proxy;
         if (hover_event_data.has_value())
             populate_mouse_event_init_from_hover_event_data(mouse_event_init, *hover_event_data, window_proxy);
-        auto offset = hover_event_offset_for_target(hover_event_data, *m_hovered_node);
+        auto offset = *hovered_node_offset;
         auto event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseover, mouse_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
         mark_mouse_transition_event_as_trusted_if_needed(event, hover_event_data);
         m_hovered_node->dispatch_event(event);
@@ -2554,11 +2633,7 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
     // https://w3c.github.io/uievents/#mouseenter
     // Enter events are dispatched from ancestor to descendant.
     // Leave events are dispatched in the opposite order.
-    if (m_hovered_node && (!old_hovered_node || !m_hovered_node->is_ancestor_of(*old_hovered_node))) {
-        Vector<GC::Ref<Node>> entered_ancestors;
-        for (auto target = m_hovered_node; target && target.ptr() != common_ancestor; target = target->parent_or_shadow_host())
-            entered_ancestors.append(*target);
-
+    if (!entered_ancestors.is_empty()) {
         for (auto target : entered_ancestors.in_reverse()) {
             Bindings::PointerEventInit pointer_event_init {};
             pointer_event_init.related_target = GC::Root<DOM::EventTarget> { old_hovered_node.ptr() };
@@ -2567,18 +2642,17 @@ void Document::set_hovered_node(GC::Ptr<Node> node, Optional<HoverEventData> hov
             pointer_event_init.view = window_proxy;
             if (hover_event_data.has_value())
                 populate_mouse_event_init_from_hover_event_data(pointer_event_init, *hover_event_data, window_proxy);
-            auto offset = hover_event_offset_for_target(hover_event_data, target);
+            auto offset = target.offset;
             auto pointer_event = UIEvents::PointerEvent::create(realm(), UIEvents::EventNames::pointerenter, pointer_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
             mark_mouse_transition_event_as_trusted_if_needed(pointer_event, hover_event_data);
-            target->dispatch_event(pointer_event);
+            target.node->dispatch_event(pointer_event);
             Bindings::MouseEventInit mouse_event_init {};
             mouse_event_init.related_target = GC::Root<DOM::EventTarget> { old_hovered_node.ptr() };
             if (hover_event_data.has_value())
                 populate_mouse_event_init_from_hover_event_data(mouse_event_init, *hover_event_data, window_proxy);
-            offset = hover_event_offset_for_target(hover_event_data, target);
             auto mouse_event = UIEvents::MouseEvent::create(realm(), UIEvents::EventNames::mouseenter, mouse_event_init, page_offset.x().to_double(), page_offset.y().to_double(), offset.x().to_double(), offset.y().to_double());
             mark_mouse_transition_event_as_trusted_if_needed(mouse_event, hover_event_data);
-            target->dispatch_event(mouse_event);
+            target.node->dispatch_event(mouse_event);
         }
     }
 }
@@ -7394,7 +7468,7 @@ Vector<GC::Root<Range>> Document::find_matching_text(String const& query, CaseSe
             for (; i < text_block.positions.size() - 1 && match_index.value() > text_block.positions[i + 1].start_offset; ++i)
                 match_start_position = &text_block.positions[i + 1];
 
-            auto start_position = match_index.value() - match_start_position->start_offset;
+            auto start_position = match_index.value() - match_start_position->start_offset + match_start_position->dom_offset_within_node;
             auto& start_dom_node = match_start_position->dom_node;
 
             auto* match_end_position = match_start_position;
@@ -7402,7 +7476,7 @@ Vector<GC::Root<Range>> Document::find_matching_text(String const& query, CaseSe
                 match_end_position = &text_block.positions[i + 1];
 
             auto& end_dom_node = match_end_position->dom_node;
-            auto end_position = match_index.value() + utf16_query.length_in_code_units() - match_end_position->start_offset;
+            auto end_position = match_index.value() + utf16_query.length_in_code_units() - match_end_position->start_offset + match_end_position->dom_offset_within_node;
 
             matches.append(Range::create(start_dom_node, start_position, end_dom_node, end_position));
             match_start_position = match_end_position;
