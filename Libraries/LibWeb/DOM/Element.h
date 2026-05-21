@@ -174,6 +174,7 @@ public:
     int client_height() const;
     [[nodiscard]] double current_css_zoom() const;
 
+    void for_each_attribute(Function<void(Attr&)>);
     void for_each_attribute(Function<void(Attr const&)>) const;
 
     void for_each_attribute(Function<void(FlyString const&, String const&)>) const;
@@ -477,6 +478,7 @@ public:
     bool matches_placeholder_shown_pseudo_class() const;
     bool matches_link_pseudo_class() const;
     bool matches_local_link_pseudo_class() const;
+    bool matches_focus_within_pseudo_class() const;
 
     bool affected_by_has_pseudo_class_in_subject_position() const { return m_affected_by_has_pseudo_class_in_subject_position; }
     void set_affected_by_has_pseudo_class_in_subject_position(bool value) { m_affected_by_has_pseudo_class_in_subject_position = value; }
@@ -551,6 +553,8 @@ public:
 
     // https://drafts.csswg.org/css-images-4/#element-not-rendered
     bool not_rendered() const;
+
+    bool meets_focusable_area_rendering_requirements() const;
 
     // https://drafts.csswg.org/css-view-transitions-1/#document-scoped-view-transition-name
     Optional<FlyString> document_scoped_view_transition_name();

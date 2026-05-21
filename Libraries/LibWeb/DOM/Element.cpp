@@ -1891,6 +1891,19 @@ bool Element::matches_local_link_pseudo_class() const
     return document_url.equals(*target_url, URL::ExcludeFragment::Yes);
 }
 
+bool Element::matches_focus_within_pseudo_class() const
+{
+    auto focused_area = document().focused_area();
+    if (!focused_area)
+        return false;
+
+    for (auto const* node = focused_area.ptr(); node; node = node->flat_tree_parent()) {
+        if (node == this)
+            return true;
+    }
+    return false;
+}
+
 bool Element::has_pseudo_elements() const
 {
     if (m_pseudo_element_data) {
@@ -3467,6 +3480,14 @@ Optional<String> Element::locate_a_namespace_prefix(Optional<String> const& name
     return {};
 }
 
+void Element::for_each_attribute(Function<void(Attr&)> callback)
+{
+    if (!m_attributes)
+        return;
+    for (size_t i = 0; i < m_attributes->length(); ++i)
+        callback(*m_attributes->item(i));
+}
+
 void Element::for_each_attribute(Function<void(Attr const&)> callback) const
 {
     if (!m_attributes)
@@ -4641,6 +4662,30 @@ bool Element::not_rendered() const
     return false;
 }
 
+static bool has_display_none_in_flat_tree_ancestor_chain(Element const& element)
+{
+    for (auto const* ancestor = &element; ancestor;) {
+        if (ancestor->computed_properties() && ancestor->computed_properties()->property(CSS::PropertyID::Display, CSS::ComputedProperties::WithAnimationsApplied::No).as_display().display().is_none())
+            return true;
+
+        auto inherited_style_parent = ancestor->element_to_inherit_style_from({});
+        ancestor = inherited_style_parent.ptr();
+    }
+
+    return false;
+}
+
+bool Element::meets_focusable_area_rendering_requirements() const
+{
+    // https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
+    // Elements can only be focusable areas if they are being rendered, delegating their rendering to
+    // their children, or being used as relevant canvas fallback content. Reject display: none
+    // subtrees without forcing layout; display: contents is intentionally allowed by this check.
+    const_cast<Document&>(document()).update_style_if_needed_for_element(AbstractElement { const_cast<Element&>(*this) });
+    return computed_properties()
+        && !has_display_none_in_flat_tree_ancestor_chain(*this);
+}
+
 // https://drafts.csswg.org/css-view-transitions-1/#document-scoped-view-transition-name
 Optional<FlyString> Element::document_scoped_view_transition_name()
 {
@@ -4798,7 +4843,8 @@ bool Element::should_indicate_focus() const
 // https://html.spec.whatwg.org/multipage/interaction.html#tabindex-value
 bool Element::is_focusable() const
 {
-    return HTML::parse_integer(get_attribute_value(HTML::AttributeNames::tabindex)).has_value();
+    return HTML::parse_integer(get_attribute_value(HTML::AttributeNames::tabindex)).has_value()
+        && meets_focusable_area_rendering_requirements();
 }
 
 void Element::set_had_duplicate_attribute_during_tokenization(Badge<HTML::HTMLParser>)

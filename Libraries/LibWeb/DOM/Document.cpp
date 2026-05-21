@@ -3114,7 +3114,10 @@ void Document::adopt_node(Node& node)
 
             // 3. Otherwise, if inclusiveDescendant is an element:
             else if (auto* element = as_if<Element>(inclusive_descendant)) {
-                // FIXME: 1. Set the node document of each attribute in inclusiveDescendant’s attribute list to document.
+                // 1. Set the node document of each attribute in inclusiveDescendant’s attribute list to document.
+                element->for_each_attribute([this](Attr& attribute) {
+                    attribute.set_document(Badge<Document> {}, *this);
+                });
 
                 // 2. If inclusiveDescendant’s custom element registry is null or inclusiveDescendant’s custom element
                 //    registry’s is scoped is false, then set inclusiveDescendant’s custom element registry to
@@ -3778,8 +3781,7 @@ void Document::scroll_to_the_fragment()
         (void)target->scroll_into_view(scroll_options);
 
         // 6. Run the focusing steps for target, with the Document's viewport as the fallback target.
-        // FIXME: Pass the Document's viewport somehow.
-        HTML::run_focusing_steps(target);
+        HTML::run_focusing_steps(target, this);
 
         // FIXME: 7. Move the sequential focus navigation starting point to target.
     }
