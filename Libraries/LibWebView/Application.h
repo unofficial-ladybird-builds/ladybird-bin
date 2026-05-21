@@ -10,6 +10,7 @@
 #include <AK/Function.h>
 #include <AK/LexicalPath.h>
 #include <AK/Optional.h>
+#include <LibCore/AnonymousBuffer.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/Forward.h>
 #include <LibDatabase/Forward.h>
@@ -209,6 +210,7 @@ private:
     ErrorOr<void> launch_request_server();
     ErrorOr<void> launch_image_decoder_server();
     ErrorOr<void> launch_devtools_server();
+    ErrorOr<void> load_content_blocker_lists();
 
     void initialize_actions();
 
@@ -271,6 +273,7 @@ private:
     BrowserOptions m_browser_options;
     RequestServerOptions m_request_server_options;
     WebContentOptions m_web_content_options;
+    Optional<Core::AnonymousBuffer> m_content_blocker_list_buffer;
 
     RefPtr<Requests::RequestClient> m_request_server_client;
     RefPtr<ImageDecoderClient::Client> m_image_decoder_client;
@@ -325,7 +328,7 @@ private:
     RefPtr<Menu> m_debug_menu;
     RefPtr<Action> m_show_line_box_borders_action;
     RefPtr<Action> m_enable_scripting_action;
-    RefPtr<Action> m_enable_content_filtering_action;
+    RefPtr<Action> m_enable_content_blocking_action;
     RefPtr<Action> m_block_pop_ups_action;
     StringView m_user_agent_string;
     StringView m_navigator_compatibility_mode;

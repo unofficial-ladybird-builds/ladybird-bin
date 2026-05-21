@@ -28,10 +28,11 @@ public:
     TransformFunction transform_function() const { return m_properties.transform_function; }
     StyleValueVector const& values() const { return m_properties.values; }
 
-    ErrorOr<FloatMatrix4x4> to_matrix(Optional<Painting::PaintableBox const&>) const;
+    bool can_be_converted_to_matrix_without_reference_box() const;
+    FloatMatrix4x4 to_matrix(Optional<Painting::PaintableBox const&>) const;
 
     virtual void serialize(StringBuilder&, SerializationMode) const override;
-    ErrorOr<GC::Ref<CSSTransformComponent>> reify_a_transform_function(JS::Realm&) const;
+    GC::Ptr<CSSTransformComponent> reify_a_transform_function(JS::Realm&) const;
 
     virtual ValueComparingNonnullRefPtr<StyleValue const> absolutized(ComputationContext const&) const override;
 

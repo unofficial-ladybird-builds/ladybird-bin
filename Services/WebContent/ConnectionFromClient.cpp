@@ -49,7 +49,7 @@
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Layout/Viewport.h>
-#include <LibWeb/Loader/ContentFilter.h>
+#include <LibWeb/Loader/ContentBlocker.h>
 #include <LibWeb/Loader/ProxyMappings.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Loader/UserAgent.h>
@@ -457,8 +457,8 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString request, ByteSt
         return;
     }
 
-    if (request == "content-filtering") {
-        Web::ContentFilter::the().set_filtering_enabled(argument == "on");
+    if (request == "content-blocking") {
+        page->page().set_content_blocking_enabled(argument == "on");
         return;
     }
 }
@@ -1144,9 +1144,38 @@ void ConnectionFromClient::paste(u64 page_id, Utf16String text)
         page->page().focused_navigable().paste(text);
 }
 
-void ConnectionFromClient::set_content_filters(u64, Vector<String> filters)
+static ErrorOr<Vector<String>> parse_content_blocker_patterns(Core::AnonymousBuffer const& patterns_buffer)
 {
-    Web::ContentFilter::the().set_patterns(filters).release_value_but_fixme_should_propagate_errors();
+    Vector<String> patterns;
+
+    for (auto line : StringView { patterns_buffer.bytes() }.split_view('\n', SplitBehavior::Nothing)) {
+        if (line.ends_with('\r'))
+            line = line.substring_view(0, line.length() - 1);
+        if (line.is_empty())
+            continue;
+
+        patterns.append(TRY(String::from_utf8(line)));
+    }
+
+    return patterns;
+}
+
+void ConnectionFromClient::set_content_blockers(u64 page_id, Core::AnonymousBuffer patterns_buffer)
+{
+    auto patterns_or_error = parse_content_blocker_patterns(patterns_buffer);
+    if (patterns_or_error.is_error()) {
+        dbgln("Failed to set content blockers: {}", patterns_or_error.error());
+        return;
+    }
+
+    auto& blocker = Web::ContentBlocker::the();
+    auto had_cosmetic_rules = blocker.has_cosmetic_rules();
+    blocker.set_patterns(patterns_or_error.value()).release_value_but_fixme_should_propagate_errors();
+
+    if (had_cosmetic_rules || blocker.has_cosmetic_rules()) {
+        if (auto page = this->page(page_id); page.has_value())
+            page->page().invalidate_user_style();
+    }
 }
 
 void ConnectionFromClient::set_autoplay_allowed_on_all_websites(u64)

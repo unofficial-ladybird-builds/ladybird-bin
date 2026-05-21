@@ -950,6 +950,10 @@ WebIDL::ExceptionOr<ParsedMatrix> parse_dom_matrix_init_string(JS::Realm& realm,
         return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_utf16);
     auto parsed_value = CSS::ComputedProperties::transformations_for_style_value(*transform_style_value);
 
+    // NB: Check that no <length> values with non-absolute length units were used
+    if (!all_of(parsed_value, [](auto& transform) { return transform->can_be_converted_to_matrix_without_reference_box(); }))
+        return WebIDL::SyntaxError::create(realm, "Failed to parse CSS transform string."_utf16);
+
     // 3. If parsedValue is none, set parsedValue to a <transform-list> containing a single identity matrix.
     // NOTE: parsed_value is empty on none so for loop in 6 won't modify matrix
     auto matrix = Gfx::FloatMatrix4x4::identity();
@@ -971,12 +975,8 @@ WebIDL::ExceptionOr<ParsedMatrix> parse_dom_matrix_init_string(JS::Realm& realm,
 
     // 5. Transform all <transform-function>s to 4x4 abstract matrices by following the “Mathematical Description of Transform Functions”. [CSS3-TRANSFORMS]
     // 6. Let matrix be a 4x4 abstract matrix as shown in the initial figure of this section. Post-multiply all matrices from left to right and set matrix to this product.
-    for (auto const& transform : parsed_value) {
-        auto const& transform_matrix = transform->as_transformation().to_matrix({});
-        if (transform_matrix.is_error())
-            return WebIDL::SyntaxError::create(realm, Utf16String::formatted("Failed to parse CSS transform string: {}", transform_matrix.error()));
-        matrix = matrix * transform_matrix.value();
-    }
+    for (auto const& transform : parsed_value)
+        matrix = matrix * transform->as_transformation().to_matrix({});
 
     // 7. Return matrix and 2dTransform.
     Gfx::DoubleMatrix4x4 double_matrix {
