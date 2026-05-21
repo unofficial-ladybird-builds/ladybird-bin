@@ -13,6 +13,7 @@ set(SOURCES
     Font/Font.cpp
     Font/FontDatabase.cpp
     Font/FontSupport.cpp
+    Font/FontVariationSettings.cpp
     Font/PathFontProvider.cpp
     Font/Typeface.cpp
     Font/TypefaceSkia.cpp
@@ -20,6 +21,7 @@ set(SOURCES
     Font/WOFF2/Loader.cpp
     FontCascadeList.cpp
     GradientPainting.cpp
+    Matrix4x4.cpp
     ImageFormats/AVIFLoader.cpp
     ImageFormats/BMPLoader.cpp
     ImageFormats/BMPWriter.cpp
@@ -51,6 +53,7 @@ set(SOURCES
     SharedImage.cpp
     SharedImageBuffer.cpp
     ShareableBitmap.cpp
+    ShapeFeature.cpp
     Size.cpp
     SkiaBackendContext.cpp
     SkiaUtils.cpp

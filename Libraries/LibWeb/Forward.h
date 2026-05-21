@@ -566,6 +566,7 @@ class ShadowRoot;
 class SlotRegistry;
 class StaticNodeList;
 class StaticRange;
+class SyntheticPseudoElement;
 class Text;
 class TreeWalker;
 class XMLDocument;
@@ -1390,16 +1391,6 @@ class XMLHttpRequestEventTarget;
 class XMLHttpRequestUpload;
 
 struct FormDataEntry;
-
-}
-
-namespace IPC {
-
-template<>
-WEB_API ErrorOr<void> encode(Encoder&, Web::UniqueNodeID const&);
-
-template<>
-WEB_API ErrorOr<Web::UniqueNodeID> decode(Decoder&);
 
 }
 

@@ -18,7 +18,7 @@
 #include <LibIPC/File.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
-#include <LibURL/Forward.h>
+#include <LibURL/URL.h>
 
 namespace IPC {
 
@@ -74,6 +74,12 @@ template<Enum T>
 ErrorOr<void> encode(Encoder& encoder, T const& value)
 {
     return encoder.encode(to_underlying(value));
+}
+
+template<Concepts::DistinctNumeric T>
+ErrorOr<void> encode(Encoder& encoder, T const& value)
+{
+    return encoder.encode(value.value());
 }
 
 template<>

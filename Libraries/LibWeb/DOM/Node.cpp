@@ -12,8 +12,6 @@
 #include <AK/JsonObjectSerializer.h>
 #include <AK/StringBuilder.h>
 #include <LibGC/DeferGC.h>
-#include <LibIPC/Decoder.h>
-#include <LibIPC/Encoder.h>
 #include <LibJS/Runtime/ExternalMemory.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibWeb/Animations/Animation.h>
@@ -3198,7 +3196,10 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             // b. For ::after pseudo elements, User agents MUST append CSS textual content, without a space, to the textual
             //    content of the current node. NOTE: The code for handling the ::after pseudo elements case is further below,
             //    following the “iii. For each child node of the current node” code.
-            if (auto before = element->get_pseudo_element_node(CSS::PseudoElement::Before)) {
+
+            // FIXME: Do we need to update layout before checking this? If so we can avoid using the unsafe layout node
+            //        getter here.
+            if (auto before = element->pseudo_element_unsafe_layout_node(CSS::PseudoElement::Before)) {
                 // NB: We know that content has a value since we set it immediately when creating a ::before pseudo
                 //     element node.
                 auto const& content = before->computed_values().content().value();
@@ -3262,7 +3263,9 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             }
 
             // NOTE: See step ii.b above.
-            if (auto after = element->get_pseudo_element_node(CSS::PseudoElement::After)) {
+            // FIXME: Do we need to update layout before checking this? If so we can avoid using the unsafe layout node
+            //        getter here.
+            if (auto after = element->pseudo_element_unsafe_layout_node(CSS::PseudoElement::After)) {
                 // NB: We know that content has a value since we set it immediately when creating an ::after pseudo
                 //     element node.
                 auto const& content = after->computed_values().content().value();
@@ -3425,23 +3428,6 @@ GC::Ptr<ShadowRoot> Node::containing_shadow_root()
     if (auto* shadow_root = as_if<ShadowRoot>(root()))
         return shadow_root;
     return nullptr;
-}
-
-}
-
-namespace IPC {
-
-template<>
-ErrorOr<void> encode(Encoder& encoder, Web::UniqueNodeID const& value)
-{
-    return encode(encoder, value.value());
-}
-
-template<>
-ErrorOr<Web::UniqueNodeID> decode(Decoder& decoder)
-{
-    auto value = TRY(decoder.decode<i64>());
-    return Web::UniqueNodeID(value);
 }
 
 }

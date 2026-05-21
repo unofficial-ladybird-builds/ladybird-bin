@@ -1006,7 +1006,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
         // TODO: Can we be smarter about invalidation?
         if (pseudo_element_style && new_pseudo_element_style) {
             DOM::AbstractElement abstract_element { *this, pseudo_element };
-            invalidation |= compute_required_invalidation(*pseudo_element_style, *new_pseudo_element_style, document().font_computer(), get_pseudo_element_node(pseudo_element), abstract_element);
+            invalidation |= compute_required_invalidation(*pseudo_element_style, *new_pseudo_element_style, document().font_computer(), pseudo_element_unsafe_layout_node(pseudo_element), abstract_element);
         } else if (pseudo_element_style || new_pseudo_element_style) {
             invalidation = CSS::RequiredInvalidationAfterStyleChange::full();
         }
@@ -1036,22 +1036,17 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
             set_needs_repaint();
 
         // Do the same for pseudo-elements.
-        for (auto i = 0; i < to_underlying(CSS::PseudoElement::KnownPseudoElementCount); i++) {
-            auto pseudo_element_type = static_cast<CSS::PseudoElement>(i);
-            auto pseudo_element = get_pseudo_element(pseudo_element_type);
-            if (!pseudo_element.has_value() || !pseudo_element->unsafe_layout_node())
-                continue;
-
+        for_each_synthetic_pseudo_element([&](CSS::PseudoElement pseudo_element_type, SyntheticPseudoElement const& pseudo_element) {
             auto pseudo_element_style = computed_properties(pseudo_element_type);
             if (!pseudo_element_style)
-                continue;
+                return;
 
-            if (auto node_with_style = pseudo_element->unsafe_layout_node()) {
+            if (auto node_with_style = pseudo_element.unsafe_layout_node()) {
                 node_with_style->apply_style(*pseudo_element_style);
                 if (invalidation.repaint && node_with_style->first_paintable())
                     node_with_style->first_paintable()->set_needs_repaint();
             }
-        }
+        });
     }
 
     return invalidation;
@@ -1750,9 +1745,9 @@ void Element::children_changed(ChildrenChangedMetadata const& metadata)
     }
 }
 
-void Element::set_pseudo_element_node(Badge<Layout::TreeBuilder>, CSS::PseudoElement pseudo_element, GC::Ptr<Layout::NodeWithStyle> pseudo_element_node)
+void Element::set_synthetic_pseudo_element_node(Badge<Layout::TreeBuilder>, CSS::PseudoElement pseudo_element, GC::Ptr<Layout::NodeWithStyle> pseudo_element_node)
 {
-    auto existing_pseudo_element = get_pseudo_element(pseudo_element);
+    auto existing_pseudo_element = get_synthetic_pseudo_element(pseudo_element);
     if (!existing_pseudo_element.has_value() && !pseudo_element_node)
         return;
 
@@ -1760,13 +1755,20 @@ void Element::set_pseudo_element_node(Badge<Layout::TreeBuilder>, CSS::PseudoEle
         return;
     }
 
-    ensure_pseudo_element(pseudo_element).set_layout_node(move(pseudo_element_node));
+    ensure_synthetic_pseudo_element(pseudo_element).set_layout_node(move(pseudo_element_node));
 }
 
-GC::Ptr<Layout::NodeWithStyle> Element::get_pseudo_element_node(CSS::PseudoElement pseudo_element) const
+GC::Ptr<Layout::NodeWithStyle> Element::pseudo_element_layout_node(CSS::PseudoElement pseudo_element) const
 {
     if (auto element_data = get_pseudo_element(pseudo_element); element_data.has_value())
         return element_data->layout_node();
+    return nullptr;
+}
+
+GC::Ptr<Layout::NodeWithStyle> Element::pseudo_element_unsafe_layout_node(CSS::PseudoElement pseudo_element) const
+{
+    if (auto element_data = get_pseudo_element(pseudo_element); element_data.has_value())
+        return element_data->unsafe_layout_node();
     return nullptr;
 }
 
@@ -1904,46 +1906,43 @@ bool Element::matches_focus_within_pseudo_class() const
     return false;
 }
 
-bool Element::has_pseudo_elements() const
+bool Element::has_synthetic_pseudo_elements() const
 {
     if (m_pseudo_element_data) {
-        for (auto& pseudo_element : *m_pseudo_element_data) {
-            if (pseudo_element.value->layout_node())
-                return true;
-        }
+        bool has_any_synthetic_pseudo_elements = false;
+
+        for_each_synthetic_pseudo_element([&](CSS::PseudoElement, SyntheticPseudoElement const& pseudo_element) {
+            if (pseudo_element.layout_node()) {
+                has_any_synthetic_pseudo_elements = true;
+                return IterationDecision::Break;
+            }
+
+            return IterationDecision::Continue;
+        });
+
+        return has_any_synthetic_pseudo_elements;
     }
     return false;
 }
 
-void Element::clear_pseudo_element_nodes(Badge<Layout::TreeBuilder>)
+void Element::clear_synthetic_pseudo_element_layout_nodes()
 {
-    if (m_pseudo_element_data) {
-        for (auto& pseudo_element : *m_pseudo_element_data) {
-            pseudo_element.value->set_layout_node(nullptr);
-        }
-    }
-}
-
-void Element::clear_pseudo_element_layout_nodes(Badge<Document>)
-{
-    if (m_pseudo_element_data) {
-        for (auto& pseudo_element : *m_pseudo_element_data) {
-            pseudo_element.value->set_layout_node(nullptr);
-        }
-    }
+    for_each_synthetic_pseudo_element([&](CSS::PseudoElement, SyntheticPseudoElement& pseudo_element) {
+        pseudo_element.set_layout_node(nullptr);
+    });
 }
 
 void Element::serialize_children_as_json(JsonObjectSerializer<StringBuilder>& element_object) const
 {
-    bool has_pseudo_elements = this->has_pseudo_elements();
+    bool has_pseudo_elements = this->has_synthetic_pseudo_elements();
     if (!is_shadow_host() && !has_child_nodes() && !has_pseudo_elements)
         return;
 
     auto children = MUST(element_object.add_array("children"sv));
 
-    auto serialize_pseudo_element = [&](CSS::PseudoElement pseudo_element_type, auto const& pseudo_element) {
+    auto serialize_pseudo_element = [&](CSS::PseudoElement pseudo_element_type, PseudoElement const& pseudo_element) {
         // FIXME: Find a way to make these still inspectable? (eg, `::before { display: none }`)
-        if (!pseudo_element->layout_node())
+        if (!pseudo_element.layout_node())
             return;
         auto object = MUST(children.add_object());
         MUST(object.add("name"sv, MUST(String::formatted("::{}", CSS::pseudo_element_name(pseudo_element_type)))));
@@ -1979,11 +1978,12 @@ void Element::serialize_children_as_json(JsonObjectSerializer<StringBuilder>& el
         }
 
         // Any other pseudo-elements, as a catch-all.
-        for (auto const& [type, pseudo_element] : *m_pseudo_element_data) {
+        for_each_synthetic_pseudo_element([&](CSS::PseudoElement type, PseudoElement const& pseudo_element) {
             if (first_is_one_of(type, CSS::PseudoElement::After, CSS::PseudoElement::Backdrop, CSS::PseudoElement::Before, CSS::PseudoElement::Marker))
-                continue;
+                return;
+
             serialize_pseudo_element(type, pseudo_element);
-        }
+        });
     }
 
     MUST(children.finish());
@@ -3556,16 +3556,43 @@ GC::Ptr<CSS::ComputedProperties const> Element::computed_properties(Optional<CSS
 void Element::set_computed_properties(Optional<CSS::PseudoElement> pseudo_element_type, GC::Ptr<CSS::ComputedProperties> style)
 {
     if (pseudo_element_type.has_value()) {
-        if (!CSS::Selector::PseudoElementSelector::is_known_pseudo_element_type(*pseudo_element_type))
-            return;
+        VERIFY(is_synthetic_pseudo_element(pseudo_element_type.value()));
+
         if (style)
-            ensure_pseudo_element(*pseudo_element_type).set_computed_properties(style);
-        else if (auto existing_pseudo_element = get_pseudo_element(*pseudo_element_type); existing_pseudo_element.has_value())
+            ensure_synthetic_pseudo_element(*pseudo_element_type).set_computed_properties(style);
+        else if (auto existing_pseudo_element = get_synthetic_pseudo_element(*pseudo_element_type); existing_pseudo_element.has_value())
             existing_pseudo_element->set_computed_properties({});
         return;
     }
     m_computed_properties = style;
     computed_properties_changed();
+}
+
+void Element::set_associated_shadow_host_pseudo_element(CSS::PseudoElement type)
+{
+    VERIFY(CSS::is_element_reference_pseudo_element(type));
+
+    auto& root = this->root();
+    VERIFY(is<ShadowRoot>(root));
+
+    auto& shadow_root = as<ShadowRoot>(root);
+    VERIFY(shadow_root.host());
+
+    shadow_root.host()->register_element_reference_pseudo_element(type, *this);
+
+    m_associated_shadow_host_pseudo_element = type;
+}
+
+Optional<SyntheticPseudoElement&> Element::get_synthetic_pseudo_element(CSS::PseudoElement type) const
+{
+    VERIFY(is_synthetic_pseudo_element(type));
+
+    auto pseudo_element = get_pseudo_element(type);
+
+    if (!pseudo_element.has_value())
+        return {};
+
+    return as<SyntheticPseudoElement>(pseudo_element.value());
 }
 
 Optional<PseudoElement&> Element::get_pseudo_element(CSS::PseudoElement type) const
@@ -3584,21 +3611,40 @@ Optional<PseudoElement&> Element::get_pseudo_element(CSS::PseudoElement type) co
     return *(pseudo_element.value());
 }
 
-PseudoElement& Element::ensure_pseudo_element(CSS::PseudoElement type) const
+void Element::register_element_reference_pseudo_element(CSS::PseudoElement type, GC::Ref<Element> element)
+{
+    VERIFY(CSS::is_element_reference_pseudo_element(type));
+
+    if (!m_pseudo_element_data)
+        m_pseudo_element_data = make<PseudoElementData>();
+
+    m_pseudo_element_data->set(type, heap().allocate<ElementReferencePseudoElement>(element));
+}
+
+void Element::clear_element_reference_pseudo_elements()
+{
+    if (!m_pseudo_element_data)
+        return;
+
+    for (auto i = to_underlying(CSS::first_element_reference_pseudo_element); i <= to_underlying(CSS::last_element_reference_pseudo_element); ++i)
+        m_pseudo_element_data->remove(static_cast<CSS::PseudoElement>(i));
+}
+
+SyntheticPseudoElement& Element::ensure_synthetic_pseudo_element(CSS::PseudoElement type) const
 {
     if (!m_pseudo_element_data)
         m_pseudo_element_data = make<PseudoElementData>();
 
-    VERIFY(CSS::Selector::PseudoElementSelector::is_known_pseudo_element_type(type));
+    VERIFY(CSS::is_synthetic_pseudo_element(type));
 
     if (!m_pseudo_element_data->get(type).has_value()) {
         if (is_pseudo_element_root(type))
-            m_pseudo_element_data->set(type, heap().allocate<PseudoElementTreeNode>());
+            m_pseudo_element_data->set(type, heap().allocate<SyntheticPseudoElementTreeNode>());
         else
-            m_pseudo_element_data->set(type, heap().allocate<PseudoElement>());
+            m_pseudo_element_data->set(type, heap().allocate<SyntheticPseudoElement>());
     }
 
-    return *(m_pseudo_element_data->get(type).value());
+    return as<SyntheticPseudoElement>(*m_pseudo_element_data->get(type).value());
 }
 
 void Element::set_custom_property_data(Optional<CSS::PseudoElement> pseudo_element, RefPtr<CSS::CustomPropertyData const> data)
@@ -3611,9 +3657,24 @@ void Element::set_custom_property_data(Optional<CSS::PseudoElement> pseudo_eleme
     if (!CSS::Selector::PseudoElementSelector::is_known_pseudo_element_type(pseudo_element.value()))
         return;
 
-    if (data)
-        ensure_pseudo_element(pseudo_element.value()).set_custom_property_data(move(data));
-    else if (auto existing_pseudo_element = get_pseudo_element(pseudo_element.value()); existing_pseudo_element.has_value())
+    if (data) {
+        if (is_synthetic_pseudo_element(pseudo_element.value())) {
+            ensure_synthetic_pseudo_element(pseudo_element.value()).set_custom_property_data(move(data));
+        } else {
+            if (auto existing_pseudo_element = get_pseudo_element(pseudo_element.value()); existing_pseudo_element.has_value())
+                existing_pseudo_element->set_custom_property_data(move(data));
+
+            // FIXME: In the case that an originating element doesn't support a given element-reference pseudo-element
+            //        we will end up here, we can't create an element-reference pseudo-element on demand to store the
+            //        custom property data so we just ignore it.
+            //
+            //        The issue with this is it means the relevant custom properties aren't included in
+            //        getComputedStyle, which would be fixed if we stored CustomPropertyData on ComputedProperties
+            //        instead of on the Element/PseudoElement directly. Chrome displays this same (presumably broken)
+            //        behavior whereas Firefox includes the properties in getComputedStyle.
+        }
+
+    } else if (auto existing_pseudo_element = get_pseudo_element(pseudo_element.value()); existing_pseudo_element.has_value())
         existing_pseudo_element->set_custom_property_data({});
 }
 
@@ -3625,7 +3686,10 @@ RefPtr<CSS::CustomPropertyData const> Element::custom_property_data(Optional<CSS
     if (!CSS::Selector::PseudoElementSelector::is_known_pseudo_element_type(pseudo_element.value()))
         return nullptr;
 
-    return ensure_pseudo_element(pseudo_element.value()).custom_property_data();
+    if (auto existing_pseudo_element = get_pseudo_element(pseudo_element.value()); existing_pseudo_element.has_value())
+        return existing_pseudo_element->custom_property_data();
+
+    return nullptr;
 }
 
 bool Element::refresh_inherited_custom_property_data()
@@ -4058,7 +4122,7 @@ void Element::unregister_intersection_observer(Badge<IntersectionObserver::Inter
 CSSPixelPoint Element::scroll_offset(Optional<CSS::PseudoElement> pseudo_element_type) const
 {
     if (pseudo_element_type.has_value()) {
-        if (auto pseudo_element = get_pseudo_element(*pseudo_element_type); pseudo_element.has_value())
+        if (auto pseudo_element = get_synthetic_pseudo_element(*pseudo_element_type); pseudo_element.has_value())
             return pseudo_element->scroll_offset();
         return {};
     }
@@ -4068,7 +4132,7 @@ CSSPixelPoint Element::scroll_offset(Optional<CSS::PseudoElement> pseudo_element
 void Element::set_scroll_offset(Optional<CSS::PseudoElement> pseudo_element_type, CSSPixelPoint offset)
 {
     if (pseudo_element_type.has_value()) {
-        if (auto pseudo_element = get_pseudo_element(*pseudo_element_type); pseudo_element.has_value())
+        if (auto pseudo_element = get_synthetic_pseudo_element(*pseudo_element_type); pseudo_element.has_value())
             pseudo_element->set_scroll_offset(offset);
     } else {
         m_scroll_offset = offset;
