@@ -8,6 +8,7 @@
 #include <LibCore/Process.h>
 #include <LibCore/System.h>
 #include <LibWebView/Application.h>
+#include <LibWebView/CompositorClient.h>
 #include <LibWebView/HelperProcess.h>
 #include <LibWebView/Utilities.h>
 
@@ -120,6 +121,8 @@ static ErrorOr<NonnullRefPtr<WebView::WebContentClient>> launch_web_content_proc
         arguments.append("--disable-scrollbar-painting"sv);
     if (web_content_options.enable_async_scrolling == EnableAsyncScrolling::No)
         arguments.append("--disable-async-scrolling"sv);
+    if (browser_options.enable_compositor_process == EnableCompositorProcess::Yes)
+        arguments.append("--enable-compositor-process"sv);
     if (web_content_options.file_scheme_urls_have_tuple_origins == FileSchemeUrlsHaveTupleOrigins::Yes)
         arguments.append("--tuple-file-origins"sv);
 
@@ -163,6 +166,25 @@ ErrorOr<NonnullRefPtr<ImageDecoderClient::Client>> launch_image_decoder_process(
     }
 
     return launch_server_process<ImageDecoderClient::Client>("ImageDecoder"sv, arguments);
+}
+
+ErrorOr<NonnullRefPtr<WebView::CompositorClient>> launch_compositor_process()
+{
+    auto const& web_content_options = WebView::Application::web_content_options();
+
+    Vector<ByteString> arguments;
+    if (web_content_options.force_cpu_painting == WebView::ForceCPUPainting::Yes)
+        arguments.append("--force-cpu-painting"sv);
+    if (web_content_options.force_fontconfig == WebView::ForceFontconfig::Yes)
+        arguments.append("--force-fontconfig"sv);
+    if (web_content_options.enable_async_scrolling == EnableAsyncScrolling::No)
+        arguments.append("--disable-async-scrolling"sv);
+    if (auto server = mach_server_name(); server.has_value()) {
+        arguments.append("--mach-server-name"sv);
+        arguments.append(server.value());
+    }
+
+    return launch_server_process<WebView::CompositorClient>("Compositor"sv, move(arguments));
 }
 
 ErrorOr<NonnullRefPtr<Web::HTML::WebWorkerClient>> launch_web_worker_process(Web::Bindings::AgentType type)

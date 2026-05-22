@@ -16,6 +16,8 @@
 #include <LibDatabase/Forward.h>
 #include <LibDevTools/DevToolsDelegate.h>
 #include <LibDevTools/Forward.h>
+#include <LibGfx/Point.h>
+#include <LibGfx/Size.h>
 #include <LibIPC/Forward.h>
 #include <LibImageDecoderClient/Client.h>
 #include <LibMain/Main.h>
@@ -25,6 +27,7 @@
 #include <LibWeb/CSS/PreferredContrast.h>
 #include <LibWeb/CSS/PreferredMotion.h>
 #include <LibWeb/Clipboard/SystemClipboard.h>
+#include <LibWeb/Compositor/Types.h>
 #include <LibWeb/HTML/ActivateTab.h>
 #include <LibWebView/BookmarkStore.h>
 #include <LibWebView/FileDownloader.h>
@@ -38,6 +41,12 @@
 #if defined(AK_OS_MACOS)
 #    include <LibIPC/TransportBootstrapMach.h>
 #endif
+
+namespace Web {
+
+struct MouseEvent;
+
+}
 
 namespace WebView {
 
@@ -82,6 +91,13 @@ public:
 #endif
 
     ErrorOr<NonnullRefPtr<WebContentClient>> launch_web_content_process(ViewImplementation&);
+    ErrorOr<void> connect_web_content_to_compositor(WebContentClient&);
+    void register_compositor_context(WebContentClient&, Web::Compositor::CompositorContextId, Optional<u64> page_id, Web::Compositor::PagePresentationRegistration);
+    void update_compositor_viewport(Web::Compositor::CompositorContextId, Gfx::IntSize viewport_size, Web::Compositor::WindowResizingInProgress = Web::Compositor::WindowResizingInProgress::No);
+    bool send_async_scroll_to_compositor(Web::Compositor::CompositorContextId, Gfx::FloatPoint position, Gfx::FloatPoint delta_in_device_pixels);
+    bool handle_mouse_event_in_compositor(Web::Compositor::CompositorContextId, Web::MouseEvent const&);
+    void dispatch_mouse_event_to_web_content(Web::Compositor::CompositorContextId, Web::MouseEvent const&);
+    void notify_compositor_presented_bitmap_ready_to_paint(Web::Compositor::CompositorContextId, i32 bitmap_id);
 
     virtual Optional<ViewImplementation&> active_web_view() const { return {}; }
     virtual Optional<ViewImplementation&> open_blank_new_tab(Web::HTML::ActivateTab) const { return {}; }
@@ -207,6 +223,7 @@ protected:
 private:
     ErrorOr<void> launch_services();
     void launch_spare_web_content_process();
+    ErrorOr<void> launch_compositor_process();
     ErrorOr<void> launch_request_server();
     ErrorOr<void> launch_image_decoder_server();
     ErrorOr<void> launch_devtools_server();
@@ -277,6 +294,7 @@ private:
 
     RefPtr<Requests::RequestClient> m_request_server_client;
     RefPtr<ImageDecoderClient::Client> m_image_decoder_client;
+    RefPtr<CompositorClient> m_compositor_client;
 
     RefPtr<WebContentClient> m_spare_web_content_process;
     bool m_has_queued_task_to_launch_spare_web_content_process { false };

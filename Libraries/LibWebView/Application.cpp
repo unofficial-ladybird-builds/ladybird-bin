@@ -20,7 +20,9 @@
 #include <LibImageDecoderClient/Client.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/Loader/UserAgent.h>
+#include <LibWeb/Page/InputEvent.h>
 #include <LibWebView/Application.h>
+#include <LibWebView/CompositorClient.h>
 #include <LibWebView/CookieJar.h>
 #include <LibWebView/HeadlessWebView.h>
 #include <LibWebView/HelperProcess.h>
@@ -97,6 +99,8 @@ Application::~Application()
     // Explicitly delete the observers first, as the observer destructors will refer to Application::the().
     m_settings_observer.clear();
     m_bookmark_store_observer.clear();
+    if (m_compositor_client)
+        m_compositor_client->on_death = nullptr;
 
     s_the = nullptr;
 }
@@ -164,6 +168,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     bool disable_http_memory_cache = false;
     bool disable_http_disk_cache = false;
     bool disable_content_blocker = false;
+    bool enable_compositor_process = false;
     Vector<StringView> content_blocker_list_paths;
     Optional<StringView> resource_substitution_map_path;
     bool enable_autoplay = false;
@@ -238,6 +243,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     args_parser.add_option(disable_http_memory_cache, "Disable HTTP memory cache", "disable-http-memory-cache");
     args_parser.add_option(disable_http_disk_cache, "Disable HTTP disk cache", "disable-http-disk-cache");
     args_parser.add_option(disable_content_blocker, "Disable content blocker", "disable-content-blocker");
+    args_parser.add_option(enable_compositor_process, "Enable the out-of-process compositor", "enable-compositor-process");
     args_parser.add_option(Core::ArgsParser::Option {
         .argument_mode = Core::ArgsParser::OptionArgumentMode::Required,
         .help_string = "Path to a content blocker list. May be specified multiple times.",
@@ -353,6 +359,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
                 : OptionalNone()),
         .devtools_port = devtools_port,
         .enable_content_blocker = disable_content_blocker ? EnableContentBlocker::No : EnableContentBlocker::Yes,
+        .enable_compositor_process = enable_compositor_process ? EnableCompositorProcess::Yes : EnableCompositorProcess::No,
         .content_blocker_list_paths = move(content_blocker_list_paths_as_byte_strings),
     };
 
@@ -481,8 +488,88 @@ static ErrorOr<NonnullRefPtr<WebContentClient>> create_web_content_client(Option
 
     client->async_connect_to_request_server(move(request_server_handle));
     client->async_connect_to_image_decoder(move(image_decoder_handle));
+    TRY(Application::the().connect_web_content_to_compositor(*client));
 
     return client;
+}
+
+static bool should_skip_compositor_process_ipc(RefPtr<CompositorClient> const& compositor_client)
+{
+    if (Application::browser_options().enable_compositor_process == EnableCompositorProcess::No)
+        return true;
+    if (!compositor_client && Core::EventLoop::current().was_exit_requested())
+        return true;
+    return false;
+}
+
+ErrorOr<void> Application::connect_web_content_to_compositor(WebContentClient& web_content_client)
+{
+    if (m_browser_options.enable_compositor_process == EnableCompositorProcess::No)
+        return {};
+    if (web_content_client.compositor_connection_id({}).has_value())
+        return {};
+
+    VERIFY(m_compositor_client);
+    auto response = m_compositor_client->connect_web_content();
+
+    web_content_client.set_compositor_connection_id({}, response.web_content_connection_id());
+    web_content_client.async_connect_to_compositor_process(response.take_handle());
+    return {};
+}
+
+void Application::register_compositor_context(WebContentClient& web_content_client, Web::Compositor::CompositorContextId context_id, Optional<u64> page_id, Web::Compositor::PagePresentationRegistration page_presentation_registration)
+{
+    if (should_skip_compositor_process_ipc(m_compositor_client))
+        return;
+    VERIFY(m_compositor_client);
+
+    auto web_content_connection_id = web_content_client.compositor_connection_id({});
+    if (!web_content_connection_id.has_value()) {
+        MUST(connect_web_content_to_compositor(web_content_client));
+        web_content_connection_id = web_content_client.compositor_connection_id({});
+    }
+    VERIFY(web_content_connection_id.has_value());
+
+    m_compositor_client->create_context(context_id, page_id, page_presentation_registration, *web_content_connection_id);
+}
+
+void Application::update_compositor_viewport(Web::Compositor::CompositorContextId context_id, Gfx::IntSize viewport_size, Web::Compositor::WindowResizingInProgress window_resize_in_progress)
+{
+    if (should_skip_compositor_process_ipc(m_compositor_client))
+        return;
+    VERIFY(m_compositor_client);
+
+    m_compositor_client->async_viewport_size_updated(context_id, viewport_size, true, window_resize_in_progress);
+}
+
+bool Application::send_async_scroll_to_compositor(Web::Compositor::CompositorContextId context_id, Gfx::FloatPoint position, Gfx::FloatPoint delta_in_device_pixels)
+{
+    VERIFY(m_compositor_client);
+    return m_compositor_client->async_scroll_by(context_id, position, delta_in_device_pixels);
+}
+
+bool Application::handle_mouse_event_in_compositor(Web::Compositor::CompositorContextId context_id, Web::MouseEvent const& event)
+{
+    VERIFY(m_compositor_client);
+    return m_compositor_client->handle_mouse_event(context_id, event.clone_without_browser_data());
+}
+
+void Application::dispatch_mouse_event_to_web_content(Web::Compositor::CompositorContextId context_id, Web::MouseEvent const& event)
+{
+    if (should_skip_compositor_process_ipc(m_compositor_client))
+        return;
+    VERIFY(m_compositor_client);
+
+    m_compositor_client->async_dispatch_mouse_event_to_web_content(context_id, event.clone_without_browser_data());
+}
+
+void Application::notify_compositor_presented_bitmap_ready_to_paint(Web::Compositor::CompositorContextId context_id, i32 bitmap_id)
+{
+    if (should_skip_compositor_process_ipc(m_compositor_client))
+        return;
+    VERIFY(m_compositor_client);
+
+    m_compositor_client->async_presented_bitmap_ready_to_paint(context_id, bitmap_id);
 }
 
 ErrorOr<NonnullRefPtr<WebContentClient>> Application::launch_web_content_process(ViewImplementation& view)
@@ -582,9 +669,28 @@ ErrorOr<void> Application::launch_services()
 
     TRY(launch_request_server());
     TRY(launch_image_decoder_server());
+    if (m_browser_options.enable_compositor_process == EnableCompositorProcess::Yes)
+        TRY(launch_compositor_process());
 
     if (m_browser_options.devtools_port.has_value())
         TRY(launch_devtools_server());
+
+    return {};
+}
+
+ErrorOr<void> Application::launch_compositor_process()
+{
+    VERIFY(!m_compositor_client);
+    m_compositor_client = TRY(WebView::launch_compositor_process());
+    m_compositor_client->on_death = [this]() {
+        m_compositor_client = nullptr;
+
+        if (Core::EventLoop::current().was_exit_requested())
+            return;
+
+        dbgln("Compositor process died");
+        VERIFY_NOT_REACHED();
+    };
 
     return {};
 }
@@ -806,6 +912,12 @@ void Application::process_did_exit(Process&& process, Optional<int> exit_status)
     dbgln_if(WEBVIEW_PROCESS_DEBUG, "Process {} died, type: {}", process.pid(), process_name_from_type(process.type()));
 
     switch (process.type()) {
+    case ProcessType::Compositor:
+        if (auto client = process.client<CompositorClient>(); client.has_value()) {
+            if (auto on_death = move(client->on_death))
+                on_death();
+        }
+        break;
     case ProcessType::ImageDecoder:
         if (auto client = process.client<ImageDecoderClient::Client>(); client.has_value()) {
             dbgln_if(WEBVIEW_PROCESS_DEBUG, "Restart ImageDecoder process");
