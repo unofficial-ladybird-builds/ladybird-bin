@@ -1,0 +1,10 @@
+Harness status: OK
+
+Found 5 tests
+
+5 Pass
+Pass	Alternating light/dark
+Pass	Proximity wins over order of appearance
+Pass	Specificity wins over proximity
+Pass	Identical root with further proximity is not ignored
+Pass	Most proximate match wins under multiple scoping roots

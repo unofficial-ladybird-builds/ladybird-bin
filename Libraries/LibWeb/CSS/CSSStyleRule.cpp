@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2021-2025, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2026, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -143,9 +143,19 @@ void CSSStyleRule::set_selector_text(StringView selector_text)
         parsing_params.declared_namespaces = m_parent_style_sheet->declared_namespaces();
 
     Optional<SelectorList> parsed_selectors;
-    if (parent_style_rule()) {
+    if (auto nesting_parent = nesting_parent_rule()) {
         // AD-HOC: If we're a nested style rule, then we need to parse the selector as relative and then adapt it with implicit &s.
-        parsed_selectors = parse_selector_for_nested_style_rule(parsing_params, selector_text);
+        auto nesting_parent_type = [&] {
+            switch (nesting_parent->type()) {
+            case Type::Style:
+                return StyleNestingParent::Style;
+            case Type::Scope:
+                return StyleNestingParent::Scope;
+            default:
+                VERIFY_NOT_REACHED();
+            }
+        }();
+        parsed_selectors = parse_selector_for_nested_style_rule(parsing_params, selector_text, nesting_parent_type);
     } else {
         parsed_selectors = parse_selector(parsing_params, selector_text);
     }
@@ -168,50 +178,7 @@ SelectorList const& CSSStyleRule::absolutized_selectors() const
     if (m_cached_absolutized_selectors.has_value())
         return m_cached_absolutized_selectors.value();
 
-    // Replace all occurrences of `&` with the nearest ancestor style rule's selector list wrapped in `:is(...)`,
-    // or if we have no such ancestor, with `:scope`.
-
-    // If we don't have any nesting selectors, we can just use our selectors as they are.
-    bool has_any_nesting = false;
-    for (auto const& selector : selectors()) {
-        if (selector->contains_the_nesting_selector()) {
-            has_any_nesting = true;
-            break;
-        }
-    }
-
-    if (!has_any_nesting) {
-        m_cached_absolutized_selectors = m_selectors;
-        return m_cached_absolutized_selectors.value();
-    }
-
-    // Otherwise, build up a new list of selectors with the `&` replaced.
-
-    // First, figure out what we should replace `&` with.
-    // "When used in the selector of a nested style rule, the nesting selector represents the elements matched by the parent rule.
-    // When used in any other context, it represents the same elements as :scope in that context (unless otherwise defined)."
-    // https://drafts.csswg.org/css-nesting-1/#nest-selector
-    if (auto const* parent_style_rule = this->parent_style_rule()) {
-        // TODO: If there's only 1, we don't have to use `:is()` for it
-        Selector::SimpleSelector parent_selector = {
-            .type = Selector::SimpleSelector::Type::PseudoClass,
-            .value = Selector::SimpleSelector::PseudoClassSelector {
-                .type = PseudoClass::Is,
-                .argument_selector_list = parent_style_rule->absolutized_selectors(),
-            },
-        };
-        SelectorList absolutized_selectors;
-        for (auto const& selector : selectors()) {
-            if (auto absolutized = selector->absolutized(parent_selector))
-                absolutized_selectors.append(absolutized.release_nonnull());
-        }
-        m_cached_absolutized_selectors = move(absolutized_selectors);
-    } else {
-        // NOTE: We can't actually replace & with :scope, because & has to have 0 specificity.
-        //       So we leave it, and treat & like :scope during matching.
-        m_cached_absolutized_selectors = m_selectors;
-    }
-
+    m_cached_absolutized_selectors = absolutize_selectors_relative_to(selectors(), nesting_parent_rule());
     return m_cached_absolutized_selectors.value();
 }
 
@@ -231,11 +198,11 @@ void CSSStyleRule::set_parent_style_sheet(CSSStyleSheet* parent_style_sheet)
     }
 }
 
-CSSStyleRule const* CSSStyleRule::parent_style_rule() const
+GC::Ptr<CSSRule const> CSSStyleRule::nesting_parent_rule() const
 {
-    for (auto* parent = parent_rule(); parent; parent = parent->parent_rule()) {
-        if (parent->type() == CSSStyleRule::Type::Style)
-            return static_cast<CSSStyleRule const*>(parent);
+    for (auto const* parent = parent_rule(); parent; parent = parent->parent_rule()) {
+        if (parent->type() == Type::Style || parent->type() == Type::Scope)
+            return parent;
     }
     return nullptr;
 }
@@ -246,6 +213,11 @@ void CSSStyleRule::dump(StringBuilder& builder, int indent_levels) const
 
     for (auto& selector : selectors()) {
         dump_selector(builder, selector, indent_levels + 1);
+    }
+    dump_indent(builder, indent_levels + 1);
+    builder.appendff("Absolutized selectors:\n");
+    for (auto& selector : absolutized_selectors()) {
+        dump_selector(builder, selector, indent_levels + 2);
     }
     dump_style_properties(builder, declaration(), indent_levels + 1);
 

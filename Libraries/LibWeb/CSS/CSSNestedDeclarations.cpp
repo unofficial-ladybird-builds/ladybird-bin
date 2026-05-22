@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2024-2026, Sam Atkins <sam@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,6 +7,7 @@
 #include "CSSNestedDeclarations.h"
 #include <LibWeb/Bindings/CSSNestedDeclarations.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/CSSScopeRule.h>
 #include <LibWeb/CSS/CSSStyleRule.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/Dump.h>
@@ -45,6 +46,81 @@ void CSSNestedDeclarations::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_parent_style_rule);
 }
 
+static SelectorList absolutize_parent_selectors(CSSNestedDeclarations const& nested_declarations)
+{
+    static SelectorList s_root_selector_list {
+        Selector::create({
+            Selector::CompoundSelector {
+                .combinator = Selector::Combinator::None,
+                .simple_selectors = {
+                    Selector::SimpleSelector {
+                        .type = Selector::SimpleSelector::Type::PseudoClass,
+                        .value = Selector::SimpleSelector::PseudoClassSelector {
+                            .type = PseudoClass::Root,
+                        },
+                    },
+                },
+            },
+        }),
+    };
+
+    for (auto const* parent_rule = nested_declarations.parent_rule(); parent_rule; parent_rule = parent_rule->parent_rule()) {
+        if (auto const* parent_style_rule = as_if<CSSStyleRule>(parent_rule))
+            return parent_style_rule->absolutized_selectors();
+        if (auto const* parent_scope_rule = as_if<CSSScopeRule>(parent_rule)) {
+            // https://drafts.csswg.org/css-cascade-6/#scope-limits
+            // Finding the scoping root(s)
+            auto scoping_root_selector = [&] {
+                // For each element matched by <scope-start>, create a scope using that element as the scoping root.
+                if (auto const& scope_start = parent_scope_rule->start_selectors_for_matching(); scope_start.has_value())
+                    return scope_start.value();
+
+                // If no <scope-start> is specified, the scoping root is the parent element of the owner node of the
+                // stylesheet where the @scope rule is defined.
+                // FIXME: This means the scoping root is the `<style>` element's parent element. Implement this!
+
+                // (If no such element exists and the containing node tree is a shadow tree, then the scoping root is
+                // the shadow host. Otherwise, the scoping root is the root of the containing node tree.)
+                return s_root_selector_list;
+            }();
+
+            // https://drafts.csswg.org/css-cascade-6/#scoped-declarations
+            // Declarations may be used directly with the body of a @scope rule. Contiguous runs of declarations are
+            // wrapped in nested declarations rules, which match the scoping root with zero specificity.
+            // NB: We achieve zero specificity by wrapping it in `:where()`.
+            return SelectorList {
+                Selector::create({
+                    Selector::CompoundSelector {
+                        .combinator = Selector::Combinator::None,
+                        .simple_selectors = {
+                            Selector::SimpleSelector {
+                                .type = Selector::SimpleSelector::Type::PseudoClass,
+                                .value = Selector::SimpleSelector::PseudoClassSelector {
+                                    .type = PseudoClass::Where,
+                                    .argument_selector_list = scoping_root_selector,
+                                },
+                            },
+                        },
+                    },
+                }),
+            };
+        }
+    }
+
+    // NB: CSSNestedDeclarations can only exist inside an ancestor rule that provides selectors, so we cannot get here
+    //     unless something has gone very wrong.
+    VERIFY_NOT_REACHED();
+}
+
+SelectorList const& CSSNestedDeclarations::absolutized_selectors() const
+{
+    if (m_cached_absolutized_selectors.has_value())
+        return m_cached_absolutized_selectors.value();
+
+    m_cached_absolutized_selectors = absolutize_parent_selectors(*this);
+    return m_cached_absolutized_selectors.value();
+}
+
 GC::Ref<CSSStyleProperties> CSSNestedDeclarations::style()
 {
     return m_declaration;
@@ -79,6 +155,7 @@ void CSSNestedDeclarations::clear_caches()
 {
     Base::clear_caches();
     m_parent_style_rule = nullptr;
+    m_cached_absolutized_selectors.clear();
 }
 
 void CSSNestedDeclarations::dump(StringBuilder& builder, int indent_levels) const

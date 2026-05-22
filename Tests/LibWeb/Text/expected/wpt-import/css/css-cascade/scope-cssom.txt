@@ -1,0 +1,18 @@
+Harness status: OK
+
+Found 13 tests
+
+13 Pass
+Pass	CSSScopeRule.cssText, implicit scope
+Pass	CSSScopeRule.cssText, root only
+Pass	CSSScopeRule.cssText, root and limit
+Pass	CSSScopeRule.cssText, limit only
+Pass	CSSScopeRule.start, implicit scope
+Pass	CSSScopeRule.start, root only
+Pass	CSSScopeRule.start, root and limit
+Pass	CSSScopeRule.start, limit only
+Pass	CSSScopeRule.end, implicit scope
+Pass	CSSScopeRule.end, root only
+Pass	CSSScopeRule.end, root and limit
+Pass	CSSScopeRule.end, limit only
+Pass	CSSScopeRule is a CSSGroupingRule

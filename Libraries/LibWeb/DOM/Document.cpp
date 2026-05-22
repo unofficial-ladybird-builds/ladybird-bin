@@ -2188,14 +2188,26 @@ void Document::update_animated_style_if_needed()
 
     Animations::AnimationUpdateContext context;
 
-    for (auto& timeline : m_associated_animation_timelines) {
-        for (auto& animation : timeline->associated_animations()) {
-            if (animation.is_idle())
-                continue;
-            if (auto effect = animation.effect())
-                effect->update_computed_properties(context);
-        }
+    GC::RootVector<GC::Ref<Animations::Animation>> animations;
+
+    for (auto& animation : m_associated_animations) {
+        if (animation.is_idle())
+            continue;
+
+        if (!animation.effect())
+            continue;
+
+        animations.append(animation);
     }
+
+    quick_sort(animations, [](GC::Ref<Animations::Animation>& a, GC::Ref<Animations::Animation>& b) {
+        auto& a_effect = as<Animations::KeyframeEffect>(*a->effect());
+        auto& b_effect = as<Animations::KeyframeEffect>(*b->effect());
+        return Animations::KeyframeEffect::composite_order(a_effect, b_effect) < 0;
+    });
+
+    for (auto& animation : animations)
+        animation->effect()->update_computed_properties(context);
 
     m_needs_animated_style_update = false;
 }
@@ -3580,6 +3592,8 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
                                                                                   })
                                         .value_or({});
 
+        auto timeline = transition->timeline();
+
         append_pending_animation_event({
             .event = CSS::TransitionEvent::create(
                 transition->owning_element()->element().realm(),
@@ -3587,7 +3601,9 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
                 event_init),
             .animation = transition,
             .target = transition->owning_element()->element(),
-            .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
+            .scheduled_event_time = timeline && timeline->can_convert_a_timeline_time_to_an_origin_relative_time()
+                ? timeline->convert_a_timeline_time_to_an_origin_relative_time(timeline->current_time())
+                : Optional<double> {},
         });
     };
 
@@ -3631,7 +3647,7 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
 
     if (transition_phase == Phase::Idle) {
         if (previous_phase != Phase::Idle && previous_phase != Phase::After)
-            dispatch_event(HTML::EventNames::animationstart, Interval::ActiveTime);
+            dispatch_event(HTML::EventNames::transitioncancel, Interval::ActiveTime);
     }
 
     transition->set_previous_phase(transition_phase);
@@ -3654,15 +3670,14 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
 
     auto& css_animation = as<CSS::CSSAnimation>(*animation);
 
-    GC::Ptr<Element> target = effect->target();
-    if (!target)
-        return;
-
     auto previous_phase = effect->previous_phase();
     auto current_phase = effect->phase();
     auto current_iteration = effect->current_iteration().value_or(0.0);
 
     auto owning_element = css_animation.owning_element();
+
+    if (!owning_element.has_value())
+        return;
 
     auto dispatch_event = [&](FlyString const& name, Animations::TimeValue elapsed_time) {
         double elapsed_time_output;
@@ -3685,14 +3700,18 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
                                                                     })
                                         .value_or({});
 
+        auto timeline = animation->timeline();
+
         append_pending_animation_event({
             .event = CSS::AnimationEvent::create(
                 owning_element->element().realm(),
                 name,
                 event_init),
             .animation = css_animation,
-            .target = *target,
-            .scheduled_event_time = HighResolutionTime::unsafe_shared_current_time(),
+            .target = owning_element->element(),
+            .scheduled_event_time = timeline && timeline->can_convert_a_timeline_time_to_an_origin_relative_time()
+                ? timeline->convert_a_timeline_time_to_an_origin_relative_time(timeline->current_time())
+                : Optional<double> {},
         });
     };
 
@@ -6481,6 +6500,16 @@ void Document::disassociate_with_timeline(GC::Ref<Animations::AnimationTimeline>
     m_associated_animation_timelines.remove(timeline);
 }
 
+void Document::associate_with_animation(GC::Ref<Animations::Animation> animation)
+{
+    m_associated_animations.set(animation);
+}
+
+void Document::disassociate_with_animation(GC::Ref<Animations::Animation> animation)
+{
+    m_associated_animations.remove(animation);
+}
+
 void Document::append_pending_animation_event(Web::DOM::Document::PendingAnimationEvent const& event)
 {
     m_pending_animation_event_queue.append(event);
@@ -6497,6 +6526,14 @@ void Document::update_animations_and_send_events(double timestamp)
         // 1. Update the current time of all timelines associated with doc passing now as the timestamp.
         for (auto const& timeline : timelines_to_update)
             timeline->update_current_time(timestamp);
+
+        // NB: We dispatch events for all animations regardless of whether they have a timeline
+        GC::RootVector<GC::Ref<Animations::Animation>> animations;
+        for (auto& animation : m_associated_animations)
+            animations.append(animation);
+
+        for (auto& animation : animations)
+            dispatch_events_for_animation_if_necessary(animation);
 
         // 2. Remove replaced animations for doc.
         remove_replaced_animations();
@@ -7967,10 +8004,6 @@ void Document::set_navigable(GC::Ptr<HTML::Navigable> navigable)
 void Document::set_needs_repaint(InvalidateDisplayList should_invalidate_display_list)
 {
     auto navigable = this->navigable();
-
-    // OPTIMIZATION: Ignore set_needs_repaint() inside navigable containers (i.e frames) with visibility: hidden.
-    if (navigable && navigable->has_inclusive_ancestor_with_visibility_hidden())
-        return;
 
     if (should_invalidate_display_list == InvalidateDisplayList::Yes) {
         set_needs_to_record_display_list();
