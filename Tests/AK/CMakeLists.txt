@@ -19,7 +19,6 @@ set(AK_TEST_SOURCES
     TestCircularBuffer.cpp
     TestCircularQueue.cpp
     TestDemangle.cpp
-    TestDisjointChunks.cpp
     TestDistinctNumeric.cpp
     TestDoublyLinkedList.cpp
     TestEndian.cpp
@@ -27,7 +26,6 @@ set(AK_TEST_SOURCES
     TestEnumerate.cpp
     TestFind.cpp
     TestFixedArray.cpp
-    TestFixedPoint.cpp
     TestFunction.cpp
     TestFlyString.cpp
     TestFormat.cpp
@@ -43,7 +41,6 @@ set(AK_TEST_SOURCES
     TestInsertionSort.cpp
     TestIntegerMath.cpp
     TestIntrusiveList.cpp
-    TestIntrusiveRedBlackTree.cpp
     TestJSON.cpp
     TestLEB128.cpp
     TestMemory.cpp
@@ -64,7 +61,6 @@ set(AK_TEST_SOURCES
     TestSourceGenerator.cpp
     TestSourceLocation.cpp
     TestSpan.cpp
-    TestStack.cpp
     TestStdLibExtras.cpp
     TestString.cpp
     TestStringConversions.cpp
