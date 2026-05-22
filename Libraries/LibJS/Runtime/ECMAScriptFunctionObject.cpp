@@ -84,8 +84,13 @@ ECMAScriptFunctionObject::ECMAScriptFunctionObject(
     , m_private_environment(private_environment)
 {
     set_is_ecmascript_function_object();
-    if (!is_arrow_function() && kind() == FunctionKind::Normal)
-        unsafe_set_shape(realm()->intrinsics().normal_function_shape());
+    if (!is_arrow_function() && kind() == FunctionKind::Normal) {
+        auto normal_function_shape = realm()->intrinsics().normal_function_shape();
+        if (normal_function_shape->prototype() == &prototype)
+            unsafe_set_shape(normal_function_shape);
+        else
+            unsafe_set_shape(*normal_function_shape->create_prototype_transition(&prototype));
+    }
 
     // 15. Set F.[[ScriptOrModule]] to GetActiveScriptOrModule().
     m_script_or_module = vm().get_active_script_or_module();
@@ -145,7 +150,7 @@ void ECMAScriptFunctionObject::get_stack_frame_info(size_t& registers_and_locals
         VERIFY(rust_executable);
         m_shared_data->set_executable(rust_executable);
         executable = rust_executable;
-        executable->name = m_shared_data->m_name;
+        executable->name = name();
         if (Bytecode::g_dump_bytecode)
             executable->dump();
         m_shared_data->clear_compile_inputs();
@@ -315,6 +320,7 @@ void ECMAScriptFunctionObject::make_method(Object& home_object)
     // 1. Set F.[[HomeObject]] to homeObject.
     m_home_object = &home_object;
     m_is_method = true;
+    m_may_need_lazy_prototype_instantiation = false;
 
     // 2. Return unused.
 }
@@ -532,10 +538,16 @@ ThrowCompletionOr<Value> ECMAScriptFunctionObject::ordinary_call_evaluate_body(V
 void ECMAScriptFunctionObject::set_name(Utf16FlyString const& name)
 {
     auto& vm = this->vm();
-    const_cast<SharedFunctionInstanceData&>(shared_data()).m_name = name;
+    m_name = name;
     m_name_string = PrimitiveString::create(vm, name);
     PropertyDescriptor descriptor { .value = m_name_string, .writable = false, .enumerable = false, .configurable = true };
     MUST(define_property_or_throw(vm.names.name, descriptor));
+}
+
+void ECMAScriptFunctionObject::set_inferred_name(Variant<PropertyKey, PrivateName> const& name, Optional<StringView> const& prefix)
+{
+    auto function_name = make_function_name(name, prefix);
+    set_name(Utf16FlyString(function_name->utf16_string()));
 }
 
 ECMAScriptFunctionObject::ClassData& ECMAScriptFunctionObject::ensure_class_data() const
@@ -550,8 +562,106 @@ Utf16String ECMAScriptFunctionObject::name_for_call_stack() const
     return m_name_string->utf16_string();
 }
 
+bool ECMAScriptFunctionObject::supports_legacy_caller_or_arguments() const
+{
+    // https://tc39.es/ecma262/#sec-forbidden-extensions
+    //
+    // ECMAScript function objects defined using syntactic constructors in strict mode code must not be created with own
+    // properties named *"caller"* or *"arguments"*. Such own properties also must not be created for function objects
+    // defined using an |ArrowFunction|, |MethodDefinition|, |GeneratorDeclaration|, |GeneratorExpression|,
+    // |AsyncGeneratorDeclaration|, |AsyncGeneratorExpression|, |ClassDeclaration|, |ClassExpression|,
+    // |AsyncFunctionDeclaration|, |AsyncFunctionExpression|, or |AsyncArrowFunction| regardless of whether the definition
+    // is contained in strict mode code.
+    // Built-in functions, strict functions created using the Function constructor, generator functions created using
+    // the Generator constructor, async functions created using the AsyncFunction constructor, and functions created
+    // using the `bind` method also must not be created with such own properties.
+    return kind() == FunctionKind::Normal
+        && !is_arrow_function()
+        && !is_class_constructor()
+        && !m_is_method
+        && !is_strict_mode();
+}
+
+Value ECMAScriptFunctionObject::legacy_caller() const
+{
+    ECMAScriptFunctionObject* caller = nullptr;
+    bool found_this_function = false;
+
+    vm().for_each_execution_context_top_to_bottom([&](ExecutionContext const& context) {
+        if (!found_this_function) {
+            if (context.function.ptr() == this)
+                found_this_function = true;
+            return true;
+        }
+
+        if (!context.function)
+            return true;
+
+        caller = as_if<ECMAScriptFunctionObject>(*context.function);
+        return false;
+    });
+
+    // https://tc39.es/ecma262/#sec-forbidden-extensions
+    //
+    // If an implementation extends any function object with an own property named *"caller"* the value of that property,
+    // as observed using [[Get]] or [[GetOwnProperty]], must not be a strict function object. If it is an accessor
+    // property, the function that is the value of the property's [[Get]] attribute must never return a strict function
+    // when called.
+    if (!caller || !caller->supports_legacy_caller_or_arguments())
+        return js_null();
+
+    return caller;
+}
+
+Value ECMAScriptFunctionObject::legacy_arguments() const
+{
+    ExecutionContext const* active_context = nullptr;
+
+    vm().for_each_execution_context_top_to_bottom([&](ExecutionContext const& context) {
+        if (context.function.ptr() != this)
+            return true;
+
+        active_context = &context;
+        return false;
+    });
+
+    if (!active_context)
+        return js_null();
+
+    auto arguments = active_context->arguments_span();
+    auto passed_arguments = ReadonlySpan<Value> { arguments.data(), active_context->passed_argument_count };
+    auto* arguments_object = create_unmapped_arguments_object(vm(), passed_arguments);
+    if (has_simple_parameter_list())
+        arguments_object->define_direct_property(
+            vm().names.callee, this, Attribute::Writable | Attribute::Configurable);
+    return arguments_object;
+}
+
 ThrowCompletionOr<Optional<PropertyDescriptor>> ECMAScriptFunctionObject::internal_get_own_property(PropertyKey const& property_key) const
 {
+    if (supports_legacy_caller_or_arguments()) {
+        auto descriptor = TRY(Base::internal_get_own_property(property_key));
+        if (descriptor.has_value())
+            return descriptor;
+
+        if (property_key == vm().names.caller) {
+            return PropertyDescriptor {
+                .value = legacy_caller(),
+                .writable = false,
+                .enumerable = false,
+                .configurable = false,
+            };
+        }
+        if (property_key == vm().names.arguments) {
+            return PropertyDescriptor {
+                .value = legacy_arguments(),
+                .writable = false,
+                .enumerable = false,
+                .configurable = false,
+            };
+        }
+    }
+
     if (m_may_need_lazy_prototype_instantiation && property_key == vm().names.prototype) {
         auto& realm = *this->realm();
         auto metadata = shape().lookup(property_key);
@@ -564,6 +674,32 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ECMAScriptFunctionObject::intern
     }
 
     return Base::internal_get_own_property(property_key);
+}
+
+ThrowCompletionOr<GC::RootVector<Value>> ECMAScriptFunctionObject::internal_own_property_keys() const
+{
+    if (m_may_need_lazy_prototype_instantiation)
+        (void)TRY(internal_get_own_property(vm().names.prototype));
+
+    auto keys = TRY(Base::internal_own_property_keys());
+    if (!supports_legacy_caller_or_arguments())
+        return keys;
+
+    auto& vm = this->vm();
+    auto insertion_index = keys.size();
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (keys[i].is_string() && keys[i].as_string().utf16_string() == vm.names.name.as_string().to_utf16_string()) {
+            insertion_index = i + 1;
+            break;
+        }
+    }
+
+    if (!TRY(Base::internal_get_own_property(vm.names.arguments)).has_value())
+        keys.insert(insertion_index++, PrimitiveString::create(vm, vm.names.arguments.as_string()));
+    if (!TRY(Base::internal_get_own_property(vm.names.caller)).has_value())
+        keys.insert(insertion_index, PrimitiveString::create(vm, vm.names.caller.as_string()));
+
+    return keys;
 }
 
 }

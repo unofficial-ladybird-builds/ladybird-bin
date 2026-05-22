@@ -73,6 +73,20 @@ pub fn generate_expression(
     result
 }
 
+fn generate_class_part_expression(
+    expression: &Expression,
+    generator: &mut Generator,
+    preferred_dst: Option<&ScopedOperand>,
+) -> Option<ScopedOperand> {
+    // https://tc39.es/ecma262/#sec-strict-mode-code
+    // All parts of a |ClassDeclaration| or a |ClassExpression| are strict mode code.
+    let saved_strict = generator.strict;
+    generator.strict = true;
+    let result = generate_expression(expression, generator, preferred_dst);
+    generator.strict = saved_strict;
+    result
+}
+
 fn emit_get_binding(
     generator: &mut Generator,
     dst: Operand,
@@ -171,6 +185,22 @@ fn emit_typeof_binding(generator: &mut Generator, dst: Operand, identifier: Iden
         let cache = generator.next_environment_coordinate_cache();
         generator.emit(Instruction::DynamicTypeofBinding { dst, identifier, cache });
     }
+}
+
+fn set_pending_lhs_name_for_identifier_assignment(
+    generator: &mut Generator,
+    identifier: StringId,
+    lhs_is_parenthesized: bool,
+) {
+    // https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation
+    // If IsAnonymousFunctionDefinition(|AssignmentExpression|) is *true* and IsIdentifierRef of
+    // |LeftHandSideExpression| is *true*, then
+    // A parenthesized identifier can be a simple assignment target, but it is not an IdentifierRef.
+    generator.pending_lhs_name = if lhs_is_parenthesized {
+        None
+    } else {
+        Some(generator.intern_identifier_id(identifier))
+    };
 }
 
 fn generate_expression_inner(
@@ -340,9 +370,14 @@ fn generate_expression_inner(
         ExpressionKind::Update(data) => generate_update_expression(generator, data.op, &data.argument, data.prefixed),
 
         // === Assignment ===
-        ExpressionKind::Assignment(data) => {
-            generate_assignment_expression(generator, data.op, &data.lhs, &data.rhs, preferred_dst)
-        }
+        ExpressionKind::Assignment(data) => generate_assignment_expression(
+            generator,
+            data.op,
+            &data.lhs,
+            &data.rhs,
+            data.lhs_is_parenthesized,
+            preferred_dst,
+        ),
 
         // === Template literals ===
         ExpressionKind::TemplateLiteral(data) => generate_template_literal(generator, data, preferred_dst),
@@ -377,6 +412,14 @@ fn generate_expression_inner(
 
         // === SuperCall ===
         ExpressionKind::SuperCall(data) => {
+            // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
+            // 3. Let _superConstructor_ be GetSuperConstructor().
+            // 4. Let _argList_ be ? ArgumentListEvaluation of |Arguments|.
+            let super_constructor = generator.allocate_register();
+            generator.emit(Instruction::GetSuperConstructor {
+                dst: super_constructor.operand(),
+            });
+
             let arguments = if data.is_synthetic {
                 // Synthetic constructor: super(...arguments) — single spread argument,
                 // don't call @@iterator on %Array.prototype%.
@@ -389,6 +432,7 @@ fn generate_expression_inner(
             let dst = choose_dst(generator, preferred_dst);
             generator.emit(Instruction::SuperCallWithArgumentArray {
                 dst: dst.operand(),
+                super_constructor: super_constructor.operand(),
                 arguments: arguments.operand(),
                 is_synthetic: data.is_synthetic,
             });
@@ -889,7 +933,11 @@ fn generate_yield_expression(
         &received_completion,
         &received_completion_type,
         &received_completion_value,
-        generator.is_in_async_generator_function(),
+        if generator.is_in_async_generator_function() {
+            YieldBehavior::AwaitValue
+        } else {
+            YieldBehavior::Normal
+        },
     );
 
     generator.switch_to_basic_block(continuation_block);
@@ -1031,9 +1079,7 @@ pub fn generate_statement(
             let val = match value {
                 Some(expression) => {
                     let v = generate_expression_or_undefined(expression, generator, None);
-                    // Async functions implicitly await an explicit return value.
-                    // Bare `return;` does NOT await (per spec).
-                    if generator.is_in_async_function() {
+                    if generator.is_in_async_generator_function() {
                         let received_completion = generator.allocate_register();
                         let received_completion_type = generator.allocate_register();
                         let received_completion_value = generator.allocate_register();
@@ -1116,12 +1162,18 @@ pub fn generate_statement(
             generator.push_dynamic_lexical_environment(object_environment);
             generator.start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
 
-            let result = generate_statement(&data.body, generator, preferred_dst);
+            let with_completion = generator.allocate_completion_register();
+            let result = generate_with_completion(
+                &data.body,
+                generator,
+                with_completion.as_ref(),
+                with_completion.as_ref().or(preferred_dst),
+            );
 
             generator.end_variable_scope();
-            // Per spec 13.11.7 step 10: if body completion value is empty,
-            // return NormalCompletion(undefined).
-            Some(result.unwrap_or_else(|| generator.add_constant_undefined()))
+
+            // Return ? UpdateEmpty(_stmtCompletion_, *undefined*).
+            Some(with_completion.unwrap_or_else(|| result.unwrap_or_else(|| generator.add_constant_undefined())))
         }
 
         // === ForIn / ForOf / ForAwaitOf ===
@@ -1256,6 +1308,13 @@ enum ArgumentsKind {
     Unmapped = 1,
 }
 
+#[repr(u32)]
+enum FunctionNamePrefix {
+    None = 0,
+    Get = 1,
+    Set = 2,
+}
+
 /// Class element kind (ABI-compatible with ClassBlueprint::Element::Kind).
 #[repr(u8)]
 enum ClassElementKind {
@@ -1271,6 +1330,13 @@ enum ClassElementKind {
 enum IteratorHint {
     Sync = 0,
     Async = 1,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum YieldBehavior {
+    Normal,
+    AwaitValue,
+    IteratorResult,
 }
 
 /// Like generate_await but uses caller-provided completion registers.
@@ -1381,7 +1447,7 @@ fn generate_yield_from(
     // =========================================================================
     generator.switch_to_basic_block(type_is_normal_block);
 
-    // i. Let innerResult be ? Call(next, iterator, « received.[[Value]] »).
+    // i. Let _innerResult_ be ? Call(_next_, _iterator_, « _received_.[[Value]] »).
     let inner_result = generator.allocate_register();
     generator.emit(Instruction::Call {
         dst: inner_result.operand(),
@@ -1392,7 +1458,7 @@ fn generate_yield_from(
         arguments: vec![received_completion_value.operand()],
     });
 
-    // ii. If generatorKind is async, set innerResult to ? Await(innerResult).
+    // ii. If _generatorKind_ is ~async~, set _innerResult_ to ? Await(_innerResult_).
     if is_async {
         let awaited = generate_await_with_completions(
             generator,
@@ -1404,16 +1470,16 @@ fn generate_yield_from(
         generator.emit_mov(&inner_result, &awaited);
     }
 
-    // iii. If innerResult is not an Object, throw a TypeError exception.
+    // iii. If _innerResult_ is not an Object, throw a *TypeError* exception.
     generator.emit(Instruction::ThrowIfNotObject {
         src: inner_result.operand(),
     });
 
-    // iv. Let done be ? IteratorComplete(innerResult).
+    // iv. Let _done_ be ? IteratorComplete(_innerResult_).
     let done = generator.allocate_register();
     emit_get_by_id(generator, &done, &inner_result, utf16!("done"), None);
 
-    // v. If done is true, then return ? IteratorValue(innerResult).
+    // v. If _done_ is *true*, then return ? IteratorValue(_innerResult_).
     let type_is_normal_done_block = generator.make_block();
     let type_is_normal_not_done_block = generator.make_block();
     generator.emit_jump_if(&done, type_is_normal_done_block, type_is_normal_not_done_block);
@@ -1423,20 +1489,26 @@ fn generate_yield_from(
     emit_get_by_id(generator, &return_value, &inner_result, utf16!("value"), None);
     generator.emit(Instruction::Jump { target: loop_end_block });
 
-    // vi/vii. Yield IteratorValue(innerResult), receive new completion.
+    // vi. If _generatorKind_ is ~async~, set _received_ to Completion(AsyncGeneratorYield(? IteratorValue(_innerResult_))).
+    // vii. Else, set _received_ to Completion(GeneratorYield(_innerResult_)).
     generator.switch_to_basic_block(type_is_normal_not_done_block);
     {
-        let current_value = generator.allocate_register();
-        emit_get_by_id(generator, &current_value, &inner_result, utf16!("value"), None);
+        let (yield_value, yield_behavior) = if is_async {
+            let current_value = generator.allocate_register();
+            emit_get_by_id(generator, &current_value, &inner_result, utf16!("value"), None);
+            (current_value, YieldBehavior::Normal)
+        } else {
+            (inner_result.clone(), YieldBehavior::IteratorResult)
+        };
 
         generate_yield(
             generator,
             continuation_block,
-            &current_value,
+            &yield_value,
             received_completion,
             received_completion_type,
             received_completion_value,
-            false,
+            yield_behavior,
         );
     }
 
@@ -1457,7 +1529,7 @@ fn generate_yield_from(
 
     generator.switch_to_basic_block(type_is_throw_block);
 
-    // i. Let throw be ? GetMethod(iterator, "throw").
+    // i. Let _throw_ be ? GetMethod(_iterator_, *"throw"*).
     let throw_method = generator.allocate_register();
     let throw_key = generator.intern_property_key(utf16!("throw"));
     generator.emit(Instruction::GetMethod {
@@ -1466,7 +1538,7 @@ fn generate_yield_from(
         property: throw_key,
     });
 
-    // ii. If throw is not undefined, then
+    // ii. If _throw_ is not *undefined*, then
     let throw_method_defined_block = generator.make_block();
     let throw_method_undefined_block = generator.make_block();
     generator.emit(Instruction::JumpUndefined {
@@ -1477,7 +1549,7 @@ fn generate_yield_from(
 
     generator.switch_to_basic_block(throw_method_defined_block);
 
-    // 1. Let innerResult be ? Call(throw, iterator, « received.[[Value]] »).
+    // 1. Let _innerResult_ be ? Call(_throw_, _iterator_, « _received_.[[Value]] »).
     generator.emit(Instruction::Call {
         dst: inner_result.operand(),
         callee: throw_method.operand(),
@@ -1487,7 +1559,7 @@ fn generate_yield_from(
         arguments: vec![received_completion_value.operand()],
     });
 
-    // 2. If generatorKind is async, set innerResult to ? Await(innerResult).
+    // 2. If _generatorKind_ is ~async~, set _innerResult_ to ? Await(_innerResult_).
     if is_async {
         let awaited = generate_await_with_completions(
             generator,
@@ -1499,15 +1571,15 @@ fn generate_yield_from(
         generator.emit_mov(&inner_result, &awaited);
     }
 
-    // 4. If innerResult is not an Object, throw a TypeError exception.
+    // 4. If _innerResult_ is not an Object, throw a *TypeError* exception.
     generator.emit(Instruction::ThrowIfNotObject {
         src: inner_result.operand(),
     });
 
-    // 5. Let done be ? IteratorComplete(innerResult).
+    // 5. Let _done_ be ? IteratorComplete(_innerResult_).
     emit_get_by_id(generator, &done, &inner_result, utf16!("done"), None);
 
-    // 6. If done is true, return ? IteratorValue(innerResult).
+    // 6. If _done_ is *true*, return ? IteratorValue(_innerResult_).
     let type_is_throw_done_block = generator.make_block();
     let type_is_throw_not_done_block = generator.make_block();
     generator.emit_jump_if(&done, type_is_throw_done_block, type_is_throw_not_done_block);
@@ -1516,11 +1588,17 @@ fn generate_yield_from(
     emit_get_by_id(generator, &return_value, &inner_result, utf16!("value"), None);
     generator.emit(Instruction::Jump { target: loop_end_block });
 
-    // 7/8. Yield IteratorValue(innerResult), receive new completion.
+    // 7. If _generatorKind_ is ~async~, set _received_ to Completion(AsyncGeneratorYield(? IteratorValue(_innerResult_))).
+    // 8. Else, set _received_ to Completion(GeneratorYield(_innerResult_)).
     generator.switch_to_basic_block(type_is_throw_not_done_block);
     {
-        let yield_value = generator.allocate_register();
-        emit_get_by_id(generator, &yield_value, &inner_result, utf16!("value"), None);
+        let (yield_value, yield_behavior) = if is_async {
+            let current_value = generator.allocate_register();
+            emit_get_by_id(generator, &current_value, &inner_result, utf16!("value"), None);
+            (current_value, YieldBehavior::Normal)
+        } else {
+            (inner_result.clone(), YieldBehavior::IteratorResult)
+        };
         generate_yield(
             generator,
             continuation_block,
@@ -1528,7 +1606,7 @@ fn generate_yield_from(
             received_completion,
             received_completion_type,
             received_completion_value,
-            false,
+            yield_behavior,
         );
     }
 
@@ -1604,7 +1682,7 @@ fn generate_yield_from(
     // =========================================================================
     generator.switch_to_basic_block(type_is_return_block);
 
-    // ii. Let return be ? GetMethod(iterator, "return").
+    // ii. Let _return_ be ? GetMethod(_iterator_, *"return"*).
     let return_method = generator.allocate_register();
     let return_key = generator.intern_property_key(utf16!("return"));
     generator.emit(Instruction::GetMethod {
@@ -1613,7 +1691,7 @@ fn generate_yield_from(
         property: return_key,
     });
 
-    // iii. If return is undefined, then return received.[[Value]].
+    // iii. If _return_ is *undefined*, then
     let return_is_undefined_block = generator.make_block();
     let return_is_defined_block = generator.make_block();
     generator.emit(Instruction::JumpUndefined {
@@ -1623,7 +1701,7 @@ fn generate_yield_from(
     });
 
     generator.switch_to_basic_block(return_is_undefined_block);
-    // 1. If generatorKind is async, set received.[[Value]] to ? Await(received.[[Value]]).
+    // 1. If _generatorKind_ is ~async~, set _received_.[[Value]] to ? Await(_received_.[[Value]]).
     if is_async {
         generate_await_with_completions(
             generator,
@@ -1633,12 +1711,12 @@ fn generate_yield_from(
             received_completion_value,
         );
     }
-    // 2. Return received (return completion).
+    // 2. Return _received_.
     generator.generate_return(received_completion_value);
 
     generator.switch_to_basic_block(return_is_defined_block);
 
-    // iv. Let innerReturnResult be ? Call(return, iterator, « received.[[Value]] »).
+    // iv. Let _innerReturnResult_ be ? Call(_return_, _iterator_, « _received_.[[Value]] »).
     let inner_return_result = generator.allocate_register();
     generator.emit(Instruction::Call {
         dst: inner_return_result.operand(),
@@ -1649,7 +1727,7 @@ fn generate_yield_from(
         arguments: vec![received_completion_value.operand()],
     });
 
-    // v. If generatorKind is async, set innerReturnResult to ? Await(innerReturnResult).
+    // v. If _generatorKind_ is ~async~, set _innerReturnResult_ to ? Await(_innerReturnResult_).
     if is_async {
         let awaited = generate_await_with_completions(
             generator,
@@ -1661,15 +1739,15 @@ fn generate_yield_from(
         generator.emit_mov(&inner_return_result, &awaited);
     }
 
-    // vi. If innerReturnResult is not an Object, throw a TypeError exception.
+    // vi. If _innerReturnResult_ is not an Object, throw a *TypeError* exception.
     generator.emit(Instruction::ThrowIfNotObject {
         src: inner_return_result.operand(),
     });
 
-    // vii. Let done be ? IteratorComplete(innerReturnResult).
+    // vii. Let _done_ be ? IteratorComplete(_innerReturnResult_).
     emit_get_by_id(generator, &done, &inner_return_result, utf16!("done"), None);
 
-    // viii. If done is true, return IteratorValue(innerReturnResult).
+    // viii. If _done_ is *true*, then
     let type_is_return_done_block = generator.make_block();
     let type_is_return_not_done_block = generator.make_block();
     generator.emit_jump_if(&done, type_is_return_done_block, type_is_return_not_done_block);
@@ -1685,10 +1763,16 @@ fn generate_yield_from(
     );
     generator.generate_return(&inner_return_result_value);
 
-    // ix/x. Yield IteratorValue(innerReturnResult), receive new completion.
+    // ix. If _generatorKind_ is ~async~, set _received_ to Completion(AsyncGeneratorYield(? IteratorValue(_innerReturnResult_))).
+    // x. Else, set _received_ to Completion(GeneratorYield(_innerReturnResult_)).
     generator.switch_to_basic_block(type_is_return_not_done_block);
-    let received = generator.allocate_register();
-    emit_get_by_id(generator, &received, &inner_return_result, utf16!("value"), None);
+    let (received, yield_behavior) = if is_async {
+        let current_value = generator.allocate_register();
+        emit_get_by_id(generator, &current_value, &inner_return_result, utf16!("value"), None);
+        (current_value, YieldBehavior::Normal)
+    } else {
+        (inner_return_result.clone(), YieldBehavior::IteratorResult)
+    };
     generate_yield(
         generator,
         continuation_block,
@@ -1696,7 +1780,7 @@ fn generate_yield_from(
         received_completion,
         received_completion_type,
         received_completion_value,
-        false,
+        yield_behavior,
     );
 
     // =========================================================================
@@ -1733,17 +1817,24 @@ fn generate_yield(
     received_completion: &ScopedOperand,
     received_completion_type: &ScopedOperand,
     received_completion_value: &ScopedOperand,
-    await_before_yield: bool,
+    yield_behavior: YieldBehavior,
 ) {
     if !generator.is_in_async_generator_function() {
-        generator.emit(Instruction::Yield {
-            continuation_label: Some(continuation_label),
-            value: argument.operand(),
-        });
+        if yield_behavior == YieldBehavior::IteratorResult {
+            generator.emit(Instruction::YieldIteratorResult {
+                continuation_label,
+                value: argument.operand(),
+            });
+        } else {
+            generator.emit(Instruction::Yield {
+                continuation_label: Some(continuation_label),
+                value: argument.operand(),
+            });
+        }
         return;
     }
 
-    let argument = if await_before_yield {
+    let argument = if yield_behavior == YieldBehavior::AwaitValue {
         generate_await_with_completions(
             generator,
             argument,
@@ -2662,6 +2753,13 @@ fn emit_lexical_declarations_for_block<'a>(
     children: impl Iterator<Item = &'a Statement>,
 ) {
     for child in children {
+        if let Some(fd) = child.inner.function_declaration_for_labelled_item()
+            && fd.name.is_some()
+        {
+            emit_lexical_function_declaration_for_block(generator, environment, fd);
+            continue;
+        }
+
         match &child.inner {
             StatementKind::VariableDeclaration(vd)
                 if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const =>
@@ -2716,41 +2814,46 @@ fn emit_lexical_declarations_for_block<'a>(
                     }
                 }
             }
-            StatementKind::FunctionDeclaration(fd) if fd.name.is_some() => {
-                let name_ident_id = fd.name.unwrap();
-                let arena = generator.arena.clone();
-                let name_ident = &arena.identifiers[name_ident_id];
-                // a. Create binding.
-                if !name_ident.is_local() {
-                    let id = generator.intern_identifier_id(name_ident.name);
-                    generator.emit(Instruction::CreateMutableBinding {
-                        environment: environment.operand(),
-                        identifier: id,
-                        can_be_deleted: false,
-                    });
-                }
-                // b. Instantiate function object.
-                let function_data = generator.function_table.take(fd.function_id);
-                let sfd_index = emit_new_function(generator, function_data, None);
-                let fo = generator.allocate_register();
-                generator.emit(Instruction::NewFunction {
-                    dst: fo.operand(),
-                    shared_function_data_index: sfd_index,
-                    home_object: None,
-                    lhs_name: None,
-                });
-                if name_ident.is_local() {
-                    let local_index = name_ident.local_index;
-                    let local = generator.local(local_index);
-                    generator.emit_mov(&local, &fo);
-                    generator.mark_local_initialized(local_index);
-                } else {
-                    let id = generator.intern_identifier_id(name_ident.name);
-                    emit_initialize_lexical_binding(generator, id, fo.operand());
-                }
-            }
             _ => {}
         }
+    }
+}
+
+fn emit_lexical_function_declaration_for_block(
+    generator: &mut Generator,
+    environment: &ScopedOperand,
+    fd: &FunctionDeclarationData,
+) {
+    let name_ident_id = fd.name.unwrap();
+    let arena = generator.arena.clone();
+    let name_ident = &arena.identifiers[name_ident_id];
+    // a. Create binding.
+    if !name_ident.is_local() {
+        let id = generator.intern_identifier_id(name_ident.name);
+        generator.emit(Instruction::CreateMutableBinding {
+            environment: environment.operand(),
+            identifier: id,
+            can_be_deleted: false,
+        });
+    }
+    // b. Instantiate function object.
+    let function_data = generator.function_table.take(fd.function_id);
+    let sfd_index = emit_new_function(generator, function_data, None);
+    let fo = generator.allocate_register();
+    generator.emit(Instruction::NewFunction {
+        dst: fo.operand(),
+        shared_function_data_index: sfd_index,
+        home_object: None,
+        lhs_name: None,
+    });
+    if name_ident.is_local() {
+        let local_index = name_ident.local_index;
+        let local = generator.local(local_index);
+        generator.emit_mov(&local, &fo);
+        generator.mark_local_initialized(local_index);
+    } else {
+        let id = generator.intern_identifier_id(name_ident.name);
+        emit_initialize_lexical_binding(generator, id, fo.operand());
     }
 }
 
@@ -2769,6 +2872,58 @@ fn emit_block_declaration_instantiation(generator: &mut Generator, scope: &Scope
 // =============================================================================
 // Variable declaration
 // =============================================================================
+
+struct ResolvedBinding {
+    environment: ScopedOperand,
+    identifier: IdentifierTableIndex,
+}
+
+fn emit_resolve_binding_for_identifier_assignment(
+    generator: &mut Generator,
+    id: crate::ast::IdentifierId,
+) -> Option<ResolvedBinding> {
+    let arena = generator.arena.clone();
+    let ident = &arena.identifiers[id];
+    if ident.is_local() || ident.is_global {
+        return None;
+    }
+
+    let identifier = generator.intern_identifier_id(ident.name);
+    if generator.environment_coordinate_for_identifier(identifier).is_some() {
+        return None;
+    }
+
+    let environment = generator.allocate_register();
+    generator.emit(Instruction::ResolveBinding {
+        dst: environment.operand(),
+        identifier,
+    });
+    Some(ResolvedBinding {
+        environment,
+        identifier,
+    })
+}
+
+fn emit_set_resolved_binding(generator: &mut Generator, resolved_binding: &ResolvedBinding, value: &ScopedOperand) {
+    generator.emit(Instruction::SetResolvedBinding {
+        environment: resolved_binding.environment.operand(),
+        identifier: resolved_binding.identifier,
+        src: value.operand(),
+    });
+}
+
+fn emit_set_variable_or_resolved_binding(
+    generator: &mut Generator,
+    id: crate::ast::IdentifierId,
+    value: &ScopedOperand,
+    resolved_binding: Option<&ResolvedBinding>,
+) {
+    if let Some(resolved_binding) = resolved_binding {
+        emit_set_resolved_binding(generator, resolved_binding, value);
+    } else {
+        emit_set_variable(generator, id, value);
+    }
+}
 
 fn generate_variable_declaration(
     generator: &mut Generator,
@@ -2790,6 +2945,21 @@ fn generate_variable_declaration(
                 } else {
                     None
                 }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // https://tc39.es/ecma262/#sec-variable-statement-runtime-semantics-evaluation
+        // VariableDeclaration : BindingIdentifier Initializer
+        //
+        // 1. Let _bindingId_ be the StringValue of |BindingIdentifier|.
+        // 2. Let _lhs_ be ? ResolveBinding(_bindingId_).
+        let resolved_binding = if kind == DeclarationKind::Var && declaration.init.is_some() {
+            if let VariableDeclaratorTarget::Identifier(id) = &declaration.target {
+                emit_resolve_binding_for_identifier_assignment(generator, *id)
             } else {
                 None
             }
@@ -2829,7 +2999,9 @@ fn generate_variable_declaration(
                     let id = generator.intern_identifier_id(ident.name);
                     match kind {
                         DeclarationKind::Var => {
-                            if ident.is_global {
+                            if let Some(resolved_binding) = &resolved_binding {
+                                emit_set_resolved_binding(generator, resolved_binding, &value);
+                            } else if ident.is_global {
                                 let cache = generator.next_global_variable_cache();
                                 generator.emit(Instruction::SetGlobal {
                                     identifier: id,
@@ -3492,6 +3664,7 @@ fn generate_assignment_expression(
     op: AssignmentOp,
     lhs: &AssignmentLhs,
     rhs: &Expression,
+    lhs_is_parenthesized: bool,
     preferred_dst: Option<&ScopedOperand>,
 ) -> Option<ScopedOperand> {
     match lhs {
@@ -3502,13 +3675,28 @@ fn generate_assignment_expression(
                 let arena = generator.arena.clone();
                 let ident = &arena.identifiers[id];
                 if op == AssignmentOp::Assignment {
-                    generator.pending_lhs_name = Some(generator.intern_identifier_id(ident.name));
+                    // https://tc39.es/ecma262/#sec-assignment-operators-runtime-semantics-evaluation
+                    // AssignmentExpression : LeftHandSideExpression `=` AssignmentExpression
+                    //
+                    // 1. If |LeftHandSideExpression| is neither an |ObjectLiteral| nor an |ArrayLiteral|, then
+                    //   a. Let _lRef_ be ? Evaluation of |LeftHandSideExpression|.
+                    //   b. If the AssignmentTargetType of |LeftHandSideExpression| is ~web-compat~, throw a
+                    //      *ReferenceError* exception.
+                    //   c. If IsAnonymousFunctionDefinition(|AssignmentExpression|) is *true* and IsIdentifierRef of
+                    //      |LeftHandSideExpression| is *true*, then
+                    //     i. Let _lhs_ be the StringValue of |LeftHandSideExpression|.
+                    //     ii. Let _rVal_ be ? NamedEvaluation of |AssignmentExpression| with argument _lhs_.
+                    //   d. Else,
+                    //     i. Let _rRef_ be ? Evaluation of |AssignmentExpression|.
+                    //     ii. Let _rVal_ be ? GetValue(_rRef_).
+                    let resolved_binding = emit_resolve_binding_for_identifier_assignment(generator, id);
+                    set_pending_lhs_name_for_identifier_assignment(generator, ident.name, lhs_is_parenthesized);
                     let rhs_val = generate_expression(rhs, generator, None)?;
                     generator.pending_lhs_name = None;
                     if ident.is_local() {
                         emit_tdz_check_if_needed(generator, id);
                     }
-                    emit_set_variable(generator, id, &rhs_val);
+                    emit_set_variable_or_resolved_binding(generator, id, &rhs_val, resolved_binding.as_ref());
                     return Some(rhs_val);
                 }
 
@@ -3543,7 +3731,11 @@ fn generate_assignment_expression(
                     }
                     // RHS block: evaluate RHS, assign, jump to end.
                     generator.switch_to_basic_block(rhs_block);
-                    generator.pending_lhs_name = Some(generator.intern_identifier_id(arena.identifiers[id].name));
+                    set_pending_lhs_name_for_identifier_assignment(
+                        generator,
+                        arena.identifiers[id].name,
+                        lhs_is_parenthesized,
+                    );
                     let rhs_val = generate_expression(rhs, generator, None)?;
                     generator.pending_lhs_name = None;
                     // Allocate dst after RHS evaluation.
@@ -4399,6 +4591,7 @@ fn emit_delete_reference(generator: &mut Generator, operand: &Expression) -> Sco
             }
             dst
         }
+        ExpressionKind::OptionalChain(data) => emit_delete_optional_chain_reference(generator, data),
         _ => {
             // delete on non-reference: evaluate for side effects, return true
             generate_expression(operand, generator, None);
@@ -5012,7 +5205,7 @@ fn generate_switch_statement(
             // For function declarations in switch cases: emit AnnexB hoisting
             // only if the scope collector approved it (name is in annexb_function_names).
             if did_create_env
-                && let StatementKind::FunctionDeclaration(ref fd) = child.inner
+                && let Some(fd) = child.inner.function_declaration_for_labelled_item()
                 && let Some(name_ident_id) = fd.name
                 && generator
                     .annexb_function_names
@@ -5078,7 +5271,7 @@ fn emit_switch_block_declaration_instantiation(generator: &mut Generator, data: 
     // Check if we need a lexical environment.
     // Only needed if there are non-local lexical declarations.
     let needs_env = all_children.iter().any(|child| match &child.inner {
-        StatementKind::FunctionDeclaration(_) => true,
+        _ if child.inner.function_declaration_for_labelled_item().is_some() => true,
         StatementKind::VariableDeclaration(vd)
             if vd.kind == DeclarationKind::Let || vd.kind == DeclarationKind::Const =>
         {
@@ -5109,6 +5302,27 @@ fn emit_switch_block_declaration_instantiation(generator: &mut Generator, data: 
 // =============================================================================
 // Object expression
 // =============================================================================
+
+fn is_anonymous_function_definition(generator: &Generator, expression: &Expression) -> bool {
+    match &expression.inner {
+        ExpressionKind::Function(function_id) => generator.function_table.get(*function_id).name.is_none(),
+        ExpressionKind::Class(data) => data.name.is_none(),
+        _ => false,
+    }
+}
+
+fn emit_set_function_name(
+    generator: &mut Generator,
+    function: &ScopedOperand,
+    name: &ScopedOperand,
+    prefix: FunctionNamePrefix,
+) {
+    generator.emit(Instruction::SetFunctionName {
+        function: function.operand(),
+        name: name.operand(),
+        prefix: prefix as u32,
+    });
+}
 
 /// Generate bytecode for an object literal expression.
 ///
@@ -5188,6 +5402,25 @@ fn generate_object_expression(
             None
         };
 
+        let is_method_like = property.is_method
+            || property.property_type == ObjectPropertyType::Getter
+            || property.property_type == ObjectPropertyType::Setter;
+        let function_name_prefix = match property.property_type {
+            ObjectPropertyType::Getter => FunctionNamePrefix::Get,
+            ObjectPropertyType::Setter => FunctionNamePrefix::Set,
+            _ => FunctionNamePrefix::None,
+        };
+        // PropertyDefinitionEvaluation, https://tc39.es/ecma262/#sec-runtime-semantics-propertydefinitionevaluation
+        // If IsAnonymousFunctionDefinition(|AssignmentExpression|) is *true* and _isProtoSetter_ is *false*, then
+        //   Let _propValue_ be ? NamedEvaluation of |AssignmentExpression| with argument _propertyKey_.
+        let should_set_runtime_function_name = computed_key.is_some()
+            && property.property_type != ObjectPropertyType::ProtoSetter
+            && (is_method_like
+                || property
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| is_anonymous_function_definition(generator, value)));
+
         // Set pending LHS name for function name inference on non-computed properties.
         // ProtoSetter (__proto__) skips NamedEvaluation per spec.
         if !effectively_computed && property.property_type != ObjectPropertyType::ProtoSetter {
@@ -5219,9 +5452,6 @@ fn generate_object_expression(
         }
         // Methods, getters, and setters need the object as their [[HomeObject]]
         // so that super property lookups work.
-        let is_method_like = property.is_method
-            || property.property_type == ObjectPropertyType::Getter
-            || property.property_type == ObjectPropertyType::Setter;
         if is_method_like {
             generator.home_objects.push(dst.clone());
         }
@@ -5234,6 +5464,16 @@ fn generate_object_expression(
             generator.home_objects.pop();
         }
         generator.pending_lhs_name = None;
+        if should_set_runtime_function_name {
+            emit_set_function_name(
+                generator,
+                &value,
+                computed_key
+                    .as_ref()
+                    .expect("runtime function names require a runtime property key"),
+                function_name_prefix,
+            );
+        }
 
         match property.property_type {
             ObjectPropertyType::Spread => {
@@ -5611,6 +5851,221 @@ fn generate_optional_chain_inner(
     Some(())
 }
 
+fn generate_optional_chain_start(
+    generator: &mut Generator,
+    base: &Expression,
+    current_value: &ScopedOperand,
+    current_base: &ScopedOperand,
+) -> Option<()> {
+    let new_current_value = match &base.inner {
+        ExpressionKind::Member(member_data) => {
+            let is_super = matches!(member_data.object.inner, ExpressionKind::Super);
+            // For super property access, resolve this binding first (before
+            // ResolveSuperBase) per spec evaluation order.
+            let this_value = if is_super {
+                Some(emit_resolve_this_binding(generator))
+            } else {
+                None
+            };
+            let obj = generate_expression(&member_data.object, generator, None)?;
+            let val = generator.allocate_register();
+            if is_super {
+                let this_value = this_value.unwrap();
+                emit_super_get(
+                    generator,
+                    &val,
+                    &obj,
+                    &member_data.property,
+                    member_data.computed,
+                    &this_value,
+                );
+                generator.emit_mov(current_base, &this_value);
+            } else if member_data.computed {
+                let property = generate_expression(&member_data.property, generator, None)?;
+                emit_get_by_value(generator, &val, &obj, &property, None);
+                generator.emit_mov(current_base, &obj);
+            } else if let ExpressionKind::Identifier(ident) = &member_data.property.inner {
+                let base_id = intern_base_identifier(generator, &member_data.object);
+                let arena = generator.arena.clone();
+                emit_get_by_id(generator, &val, &obj, arena.name_slice(*ident), base_id);
+                generator.emit_mov(current_base, &obj);
+            } else if let ExpressionKind::PrivateIdentifier(name) = &member_data.property.inner {
+                let id = generator.intern_identifier(&name.name);
+                generator.emit(Instruction::GetPrivateById {
+                    dst: val.operand(),
+                    base: obj.operand(),
+                    property: id,
+                });
+                generator.emit_mov(current_base, &obj);
+            } else {
+                let property = generate_expression(&member_data.property, generator, None)?;
+                emit_get_by_value(generator, &val, &obj, &property, None);
+                generator.emit_mov(current_base, &obj);
+            }
+            val
+        }
+        ExpressionKind::OptionalChain(oc_data) => {
+            generate_optional_chain_inner(
+                generator,
+                &oc_data.base,
+                &oc_data.references,
+                current_value,
+                current_base,
+            )?;
+            current_value.clone()
+        }
+        _ => generate_expression(base, generator, None)?,
+    };
+
+    generator.emit_mov(current_value, &new_current_value);
+    Some(())
+}
+
+fn is_optional_chain_reference_optional(reference: &OptionalChainReference) -> bool {
+    match reference {
+        OptionalChainReference::Call { mode, .. }
+        | OptionalChainReference::ComputedReference { mode, .. }
+        | OptionalChainReference::MemberReference { mode, .. }
+        | OptionalChainReference::PrivateMemberReference { mode, .. } => *mode == OptionalChainMode::Optional,
+    }
+}
+
+fn generate_optional_chain_reference(
+    generator: &mut Generator,
+    reference: &OptionalChainReference,
+    current_value: &ScopedOperand,
+    current_base: &ScopedOperand,
+) -> Option<()> {
+    match reference {
+        OptionalChainReference::MemberReference { identifier, .. } => {
+            generator.emit_mov(current_base, current_value);
+            let arena = generator.arena.clone();
+            emit_get_by_id(
+                generator,
+                current_value,
+                current_value,
+                arena.name_slice(*identifier),
+                None,
+            );
+        }
+        OptionalChainReference::ComputedReference { expression, .. } => {
+            generator.emit_mov(current_base, current_value);
+            let property = generate_expression(expression, generator, None)?;
+            emit_get_by_value(generator, current_value, current_value, &property, None);
+        }
+        OptionalChainReference::Call { arguments, .. } => {
+            let arguments_array = generate_arguments_array(generator, arguments);
+            generator.emit(Instruction::CallWithArgumentArray {
+                dst: current_value.operand(),
+                callee: current_value.operand(),
+                this_value: current_base.operand(),
+                arguments: arguments_array.operand(),
+                expression_string: None,
+            });
+            let undef = generator.add_constant_undefined();
+            generator.emit_mov(current_base, &undef);
+        }
+        OptionalChainReference::PrivateMemberReference { private_identifier, .. } => {
+            generator.emit_mov(current_base, current_value);
+            let id = generator.intern_identifier(&private_identifier.name);
+            generator.emit(Instruction::GetPrivateById {
+                dst: current_value.operand(),
+                base: current_value.operand(),
+                property: id,
+            });
+        }
+    }
+
+    Some(())
+}
+
+fn emit_delete_optional_chain_reference(generator: &mut Generator, data: &OptionalChainData) -> ScopedOperand {
+    // https://tc39.es/ecma262/#sec-delete-operator-runtime-semantics-evaluation
+    // `delete` needs the final optional-chain property reference so it can perform [[Delete]]. If an optional hop
+    // short-circuits, the operand evaluates to a non-reference value and `delete` returns true.
+    let Some((last_reference, prefix_references)) = data.references.split_last() else {
+        generate_expression(&data.base, generator, None);
+        return generator.add_constant_boolean(true);
+    };
+
+    if !matches!(
+        last_reference,
+        OptionalChainReference::MemberReference { .. } | OptionalChainReference::ComputedReference { .. }
+    ) {
+        let current_base = generator.allocate_register();
+        let current_value = generator.allocate_register();
+        let undef = generator.add_constant_undefined();
+        generator.emit_mov(&current_base, &undef);
+        generate_optional_chain_inner(generator, &data.base, &data.references, &current_value, &current_base);
+        return generator.add_constant_boolean(true);
+    }
+
+    let dst = generator.allocate_register();
+    let current_base = generator.allocate_register();
+    let current_value = generator.allocate_register();
+    let undef = generator.add_constant_undefined();
+    generator.emit_mov(&current_base, &undef);
+
+    let short_circuit_block = generator.make_block();
+    let end_block = generator.make_block();
+
+    generate_optional_chain_start(generator, &data.base, &current_value, &current_base);
+
+    for reference in prefix_references {
+        if is_optional_chain_reference_optional(reference) {
+            let not_nullish_block = generator.make_block();
+            generator.emit(Instruction::JumpNullish {
+                condition: current_value.operand(),
+                true_target: short_circuit_block,
+                false_target: not_nullish_block,
+            });
+            generator.switch_to_basic_block(not_nullish_block);
+        }
+
+        generate_optional_chain_reference(generator, reference, &current_value, &current_base);
+    }
+
+    if is_optional_chain_reference_optional(last_reference) {
+        let not_nullish_block = generator.make_block();
+        generator.emit(Instruction::JumpNullish {
+            condition: current_value.operand(),
+            true_target: short_circuit_block,
+            false_target: not_nullish_block,
+        });
+        generator.switch_to_basic_block(not_nullish_block);
+    }
+
+    match last_reference {
+        OptionalChainReference::MemberReference { identifier, .. } => {
+            let arena = generator.arena.clone();
+            let key = generator.intern_property_key_id(arena.identifiers[*identifier].name);
+            generator.emit(Instruction::DeleteById {
+                dst: dst.operand(),
+                base: current_value.operand(),
+                property: key,
+            });
+        }
+        OptionalChainReference::ComputedReference { expression, .. } => {
+            let property = generate_expression_or_undefined(expression, generator, None);
+            generator.emit(Instruction::DeleteByValue {
+                dst: dst.operand(),
+                base: current_value.operand(),
+                property: property.operand(),
+            });
+        }
+        _ => unreachable!("non-property optional chain references were handled above"),
+    }
+    generator.emit(Instruction::Jump { target: end_block });
+
+    generator.switch_to_basic_block(short_circuit_block);
+    let true_value = generator.add_constant_boolean(true);
+    generator.emit_mov(&dst, &true_value);
+    generator.emit(Instruction::Jump { target: end_block });
+
+    generator.switch_to_basic_block(end_block);
+    dst
+}
+
 /// Convert arguments to an array for CallWithArgumentArray.
 fn generate_arguments_array(generator: &mut Generator, arguments: &[CallArgument]) -> ScopedOperand {
     let dst = generator.allocate_register();
@@ -5690,7 +6145,9 @@ fn generate_class_expression(
     });
     generator.push_static_lexical_environment(class_env.clone());
 
-    // Step 3.a: Create binding for the class name in the class environment.
+    // https://tc39.es/ecma262/#sec-runtime-semantics-classdefinitionevaluation
+    // If _classBinding_ is not *undefined*, then
+    //   Perform ! _classEnv_.CreateImmutableBinding(_classBinding_, *true*).
     // Only emit when the class has a name, or when there's no lhs_name
     // (skip this for anonymous classes with lhs_name).
     if data.name.is_some() || lhs_name.is_none() {
@@ -5705,13 +6162,13 @@ fn generate_class_expression(
             mode: EnvironmentMode::Lexical as u32,
             is_immutable: true,
             is_global: false,
-            is_strict: false,
+            is_strict: true,
         });
     }
 
     // Evaluate super class if present
     let super_class = if let Some(super_expression) = &data.super_class {
-        generate_expression(super_expression, generator, None)
+        generate_class_part_expression(super_expression, generator, None)
     } else {
         None
     };
@@ -5747,7 +6204,7 @@ fn generate_class_expression(
         match &element_node.inner {
             ClassElement::Method { key, .. } => {
                 if !is_private_key(key) {
-                    let key_val = generate_expression(key, generator, None);
+                    let key_val = generate_class_part_expression(key, generator, None);
                     element_keys.push(key_val);
                 } else {
                     element_keys.push(None);
@@ -5755,7 +6212,7 @@ fn generate_class_expression(
             }
             ClassElement::Field { key, .. } => {
                 if !is_private_key(key) {
-                    let key_val = generate_expression(key, generator, None);
+                    let key_val = generate_class_part_expression(key, generator, None);
                     element_keys.push(key_val);
                 } else {
                     element_keys.push(None);
@@ -6936,6 +7393,9 @@ fn assign_to_for_in_of_lhs(generator: &mut Generator, lhs: &ForInOfLhs, value: &
 // =============================================================================
 
 /// Whether we are initializing a new binding or setting an existing one.
+// https://tc39.es/ecma262/#sec-runtime-semantics-bindinginitialization
+// https://tc39.es/ecma262/#sec-runtime-semantics-destructuringassignmentevaluation
+// Binding patterns initialize lexical declarations, while assignment patterns perform PutValue.
 #[derive(Clone, Copy)]
 enum BindingMode {
     /// `const` or `let` declarations: emit InitializeLexicalBinding.
@@ -6987,8 +7447,17 @@ fn emit_set_variable_with_mode(
     let arena = generator.arena.clone();
     let ident = &arena.identifiers[id];
     if ident.is_local() {
-        let local = generator.resolve_local(ident.local_index, ident.local_type.unwrap());
-        generator.emit_mov(&local, value);
+        match mode {
+            BindingMode::InitializeLexical => {
+                let local = generator.resolve_local(ident.local_index, ident.local_type.unwrap());
+                generator.emit_mov(&local, value);
+                generator.mark_local_initialized(ident.local_index);
+            }
+            BindingMode::Set => {
+                emit_tdz_check_if_needed(generator, id);
+                emit_set_variable(generator, id, value);
+            }
+        }
     } else {
         let id = generator.intern_identifier_id(ident.name);
         match mode {
@@ -7036,6 +7505,14 @@ fn assign_binding_entry_alias(
     }
 }
 
+fn make_block_with_unwind_handler(generator: &mut Generator, unwind_handler: Option<Label>) -> Label {
+    let saved_unwind_handler = generator.current_unwind_handler;
+    generator.current_unwind_handler = unwind_handler;
+    let block = generator.make_block();
+    generator.current_unwind_handler = saved_unwind_handler;
+    block
+}
+
 fn generate_array_binding_pattern(
     generator: &mut Generator,
     pattern: &BindingPattern,
@@ -7057,6 +7534,43 @@ fn generate_array_binding_pattern(
         hint: IteratorHint::Sync as u32,
     });
 
+    // 13.15.5.1 Runtime Semantics: DestructuringAssignmentEvaluation,
+    // https://tc39.es/ecma262/#sec-runtime-semantics-destructuringassignmentevaluation
+    //
+    // ArrayAssignmentPattern : `[` AssignmentElementList `]`
+    // 1. Let _iteratorRecord_ be ? GetIterator(_value_, ~sync~).
+    // 2. Let _result_ be Completion(IteratorDestructuringAssignmentEvaluation of |AssignmentElementList| with argument
+    //    _iteratorRecord_).
+    // 3. If _iteratorRecord_.[[Done]] is *false*, return ? IteratorClose(_iteratorRecord_, _result_).
+    // 4. Return _result_.
+    let old_handler = generator.current_unwind_handler;
+    let close_completion_type = generator.allocate_register();
+    let close_completion_value = generator.allocate_register();
+    let exception_preamble_block = generator.make_block();
+    let iterator_close_body_block = generator.make_block();
+    let after_pattern_block = generator.make_block();
+    let lexical_env_at_entry = generator.lexical_environment_register_stack.last().cloned();
+    let parent_index = generator.current_finally_context;
+    generator.push_finally_context(FinallyContext {
+        completion_type: close_completion_type.clone(),
+        completion_value: close_completion_value.clone(),
+        finally_body: iterator_close_body_block,
+        exception_preamble: exception_preamble_block,
+        parent_index,
+        registered_jumps: Vec::new(),
+        next_jump_index: FinallyContext::FIRST_JUMP_INDEX,
+        lexical_environment_at_entry: lexical_env_at_entry.clone(),
+        saved_unwind_handler: None,
+    });
+    generator.start_boundary(BlockBoundaryType::ReturnToFinally);
+
+    generator.current_unwind_handler = Some(exception_preamble_block);
+    let pattern_body_block = generator.make_block();
+    generator.emit(Instruction::Jump {
+        target: pattern_body_block,
+    });
+    generator.switch_to_basic_block(pattern_body_block);
+
     for (index, entry) in pattern.entries.iter().enumerate() {
         if entry.is_rest {
             // 13.15.5.3 AssignmentRestElement: ... DestructuringAssignmentTarget
@@ -7072,16 +7586,24 @@ fn generate_array_binding_pattern(
             // else branch.
             let mut value = generator.allocate_register();
             if index == 0 {
+                let iterator_to_array_block = make_block_with_unwind_handler(generator, old_handler);
+                let continuation = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
+                generator.emit(Instruction::Jump {
+                    target: iterator_to_array_block,
+                });
+                generator.switch_to_basic_block(iterator_to_array_block);
                 generator.emit(Instruction::IteratorToArray {
                     dst: value.operand(),
                     iterator_object: iterator_object.operand(),
                     iterator_next_method: iterator_next.operand(),
                     iterator_done_property: iterator_done.operand(),
                 });
+                generator.emit(Instruction::Jump { target: continuation });
+                generator.switch_to_basic_block(continuation);
             } else {
-                let if_exhausted = generator.make_block();
-                let if_not_exhausted = generator.make_block();
-                let continuation = generator.make_block();
+                let if_exhausted = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
+                let if_not_exhausted = make_block_with_unwind_handler(generator, old_handler);
+                let continuation = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
 
                 generator.emit_jump_if(&is_exhausted, if_exhausted, if_not_exhausted);
 
@@ -7112,7 +7634,7 @@ fn generate_array_binding_pattern(
             } else {
                 assign_binding_entry_alias(generator, entry, &value, mode);
             }
-            return; // rest consumes the iterator
+            break; // rest consumes the iterator
         }
 
         // 13.15.5.5 AssignmentElement: DestructuringAssignmentTarget Initializer(opt)
@@ -7127,13 +7649,19 @@ fn generate_array_binding_pattern(
         // but don't bind anything.
         let is_elision = entry.name.is_none() && entry.alias.is_none();
 
-        let exhausted_block = generator.make_block();
+        let exhausted_block = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
 
         if index != 0 {
-            let not_exhausted_block = generator.make_block();
+            let not_exhausted_block = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
             generator.emit_jump_if(&is_exhausted, exhausted_block, not_exhausted_block);
             generator.switch_to_basic_block(not_exhausted_block);
         }
+
+        let iterator_next_block = make_block_with_unwind_handler(generator, old_handler);
+        generator.emit(Instruction::Jump {
+            target: iterator_next_block,
+        });
+        generator.switch_to_basic_block(iterator_next_block);
 
         let value = generator.allocate_register();
         generator.emit(Instruction::IteratorNextUnpack {
@@ -7145,11 +7673,11 @@ fn generate_array_binding_pattern(
         });
 
         // Check if iterator got exhausted by this step.
-        let no_bail_block = generator.make_block();
+        let no_bail_block = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
         generator.emit_jump_if(&is_exhausted, exhausted_block, no_bail_block);
 
         generator.switch_to_basic_block(no_bail_block);
-        let create_binding_block = generator.make_block();
+        let create_binding_block = make_block_with_unwind_handler(generator, Some(exception_preamble_block));
         generator.emit(Instruction::Jump {
             target: create_binding_block,
         });
@@ -7193,10 +7721,23 @@ fn generate_array_binding_pattern(
         }
     }
 
-    // Close iterator if not exhausted.
-    let done_block = generator.make_block();
-    let not_done_block = generator.make_block();
-    generator.emit_jump_if(&is_exhausted, done_block, not_done_block);
+    generator.end_boundary(BlockBoundaryType::ReturnToFinally);
+    let finally_ctx_index = generator.current_finally_context.expect("no active finally context");
+    generator.current_finally_context = generator.finally_contexts[finally_ctx_index].parent_index;
+    generator.current_unwind_handler = old_handler;
+
+    let normal_close_check_block = make_block_with_unwind_handler(generator, old_handler);
+    if !generator.is_current_block_terminated() {
+        generator.emit(Instruction::Jump {
+            target: normal_close_check_block,
+        });
+    }
+
+    // Close iterator if it is not done.
+    generator.switch_to_basic_block(normal_close_check_block);
+    let done_block = make_block_with_unwind_handler(generator, old_handler);
+    let not_done_block = make_block_with_unwind_handler(generator, old_handler);
+    generator.emit_jump_if(&iterator_done, done_block, not_done_block);
     generator.switch_to_basic_block(not_done_block);
     let undef = generator.add_constant_undefined();
     generator.emit(Instruction::IteratorClose {
@@ -7208,6 +7749,122 @@ fn generate_array_binding_pattern(
     });
     generator.emit(Instruction::Jump { target: done_block });
     generator.switch_to_basic_block(done_block);
+    generator.emit(Instruction::Jump {
+        target: after_pattern_block,
+    });
+
+    generator.switch_to_basic_block(exception_preamble_block);
+    generator.emit(Instruction::Catch {
+        dst: close_completion_value.operand(),
+    });
+    if let Some(env) = &lexical_env_at_entry {
+        generator.emit(Instruction::SetLexicalEnvironment {
+            environment: env.operand(),
+        });
+    }
+    let throw_const = generator.add_constant_i32(FinallyContext::THROW);
+    generator.emit_mov(&close_completion_type, &throw_const);
+    generator.emit(Instruction::Jump {
+        target: iterator_close_body_block,
+    });
+
+    generator.switch_to_basic_block(iterator_close_body_block);
+    let close_iterator_block = make_block_with_unwind_handler(generator, old_handler);
+    let dispatch_completion_block = make_block_with_unwind_handler(generator, old_handler);
+    generator.emit_jump_if(&iterator_done, dispatch_completion_block, close_iterator_block);
+
+    generator.switch_to_basic_block(close_iterator_block);
+    let throw_close_block = make_block_with_unwind_handler(generator, old_handler);
+    let non_throw_close_block = make_block_with_unwind_handler(generator, old_handler);
+    let throw_check_const = generator.add_constant_i32(FinallyContext::THROW);
+    generator.emit(Instruction::JumpStrictlyEquals {
+        lhs: close_completion_type.operand(),
+        rhs: throw_check_const.operand(),
+        true_target: throw_close_block,
+        false_target: non_throw_close_block,
+    });
+
+    generator.switch_to_basic_block(non_throw_close_block);
+    let undef = generator.add_constant_undefined();
+    generator.emit(Instruction::IteratorClose {
+        iterator_object: iterator_object.operand(),
+        iterator_next: iterator_next.operand(),
+        iterator_done: iterator_done.operand(),
+        completion_type: CompletionType::Normal as u32,
+        completion_value: undef.operand(),
+    });
+    generator.emit(Instruction::Jump {
+        target: dispatch_completion_block,
+    });
+
+    generator.switch_to_basic_block(throw_close_block);
+    generator.emit(Instruction::IteratorClose {
+        iterator_object: iterator_object.operand(),
+        iterator_next: iterator_next.operand(),
+        iterator_done: iterator_done.operand(),
+        completion_type: CompletionType::Throw as u32,
+        completion_value: close_completion_value.operand(),
+    });
+    if !generator.is_current_block_terminated() {
+        generator.emit(Instruction::Throw {
+            src: close_completion_value.operand(),
+        });
+    }
+
+    generator.switch_to_basic_block(dispatch_completion_block);
+    let registered_jumps = std::mem::take(&mut generator.finally_contexts[finally_ctx_index].registered_jumps);
+    for jump in &registered_jumps {
+        let after_check = make_block_with_unwind_handler(generator, old_handler);
+        let jump_const = generator.add_constant_i32(jump.index);
+        generator.emit(Instruction::JumpStrictlyEquals {
+            lhs: close_completion_type.operand(),
+            rhs: jump_const.operand(),
+            true_target: jump.target,
+            false_target: after_check,
+        });
+        generator.switch_to_basic_block(after_check);
+    }
+
+    let return_block = make_block_with_unwind_handler(generator, old_handler);
+    let throw_block = make_block_with_unwind_handler(generator, old_handler);
+    let return_const = generator.add_constant_i32(FinallyContext::RETURN);
+    generator.emit(Instruction::JumpStrictlyEquals {
+        lhs: close_completion_type.operand(),
+        rhs: return_const.operand(),
+        true_target: return_block,
+        false_target: throw_block,
+    });
+
+    generator.switch_to_basic_block(return_block);
+    if let Some(outer_index) = generator.current_finally_context {
+        let outer_ct = generator.finally_contexts[outer_index].completion_type.clone();
+        let outer_cv = generator.finally_contexts[outer_index].completion_value.clone();
+        let outer_fb = generator.finally_contexts[outer_index].finally_body;
+        generator.emit_mov(&outer_ct, &close_completion_type);
+        generator.emit_mov(&outer_cv, &close_completion_value);
+        generator.emit(Instruction::Jump { target: outer_fb });
+    } else if generator.is_in_generator_function() {
+        generator.emit(Instruction::Yield {
+            continuation_label: None,
+            value: close_completion_value.operand(),
+        });
+    } else {
+        generator.emit(Instruction::Return {
+            value: close_completion_value.operand(),
+        });
+    }
+
+    generator.switch_to_basic_block(throw_block);
+    generator.emit(Instruction::Throw {
+        src: close_completion_value.operand(),
+    });
+
+    let dummy = generator.add_constant_undefined();
+    generator.finally_contexts[finally_ctx_index].completion_type = dummy.clone();
+    generator.finally_contexts[finally_ctx_index].completion_value = dummy;
+    generator.finally_contexts[finally_ctx_index].lexical_environment_at_entry = None;
+
+    generator.switch_to_basic_block(after_pattern_block);
 }
 
 fn generate_object_binding_pattern(
@@ -7223,6 +7880,14 @@ fn generate_object_binding_pattern(
 
     for entry in &pattern.entries {
         if entry.is_rest {
+            // AssignmentRestProperty : `...` DestructuringAssignmentTarget
+            // 1. Let _lRef_ be ? Evaluation of |DestructuringAssignmentTarget|.
+            let evaluated_ref = if let Some(BindingEntryAlias::MemberExpression(expression)) = &entry.alias {
+                Some(emit_evaluate_member_reference(generator, expression))
+            } else {
+                None
+            };
+
             // Rest element: copy object excluding already-destructured properties.
             let copy = generator.allocate_register();
             generator.emit(Instruction::CopyObjectExcludingProperties {
@@ -7231,16 +7896,30 @@ fn generate_object_binding_pattern(
                 excluded_names_count: u32_from_usize(excluded_names.len()),
                 excluded_names: excluded_names.iter().map(|o| o.operand()).collect(),
             });
-            assign_binding_entry_alias(generator, entry, &copy, mode);
+            if let Some(ref eref) = evaluated_ref {
+                emit_store_to_evaluated_reference(generator, eref, &copy);
+            } else {
+                assign_binding_entry_alias(generator, entry, &copy, mode);
+            }
             return;
         }
 
         let value = generator.allocate_register();
+        let evaluated_ref;
 
         match &entry.name {
             Some(BindingEntryName::Identifier(ident)) => {
                 let arena = generator.arena.clone();
                 let name = arena.name_slice(*ident);
+                // AssignmentElement : DestructuringAssignmentTarget Initializer?
+                // 1. If |DestructuringAssignmentTarget| is neither an |ObjectLiteral| nor an |ArrayLiteral|, then
+                //    a. Let _lRef_ be ? Evaluation of |DestructuringAssignmentTarget|.
+                // 2. Let _v_ be ? GetV(_value_, _propertyName_).
+                evaluated_ref = if let Some(BindingEntryAlias::MemberExpression(expression)) = &entry.alias {
+                    Some(emit_evaluate_member_reference(generator, expression))
+                } else {
+                    None
+                };
                 emit_get_by_id(generator, &value, object, name, None);
                 if has_rest {
                     let name_val = generator.add_constant_string(arena.name_of(*ident).clone());
@@ -7249,17 +7928,23 @@ fn generate_object_binding_pattern(
             }
             Some(BindingEntryName::Expression(expression)) => {
                 let property_name = generate_expression_or_undefined(expression, generator, None);
+                let property_name = generator.copy_if_needed_to_preserve_evaluation_order(&property_name);
+                generator.emit(Instruction::ToPrimitiveWithStringHint {
+                    dst: property_name.operand(),
+                    value: property_name.operand(),
+                });
                 if has_rest {
-                    // Only copy to a new register if the property name is a local variable,
-                    // since locals can be reassigned. Registers are temporaries and won't change.
-                    if property_name.operand().is_local() {
-                        let excluded_name = generator.allocate_register();
-                        generator.emit_mov(&excluded_name, &property_name);
-                        excluded_names.push(excluded_name);
-                    } else {
-                        excluded_names.push(property_name.clone());
-                    }
+                    excluded_names.push(property_name.clone());
                 }
+                // AssignmentElement : DestructuringAssignmentTarget Initializer?
+                // 1. If |DestructuringAssignmentTarget| is neither an |ObjectLiteral| nor an |ArrayLiteral|, then
+                //    a. Let _lRef_ be ? Evaluation of |DestructuringAssignmentTarget|.
+                // 2. Let _v_ be ? GetV(_value_, _propertyName_).
+                evaluated_ref = if let Some(BindingEntryAlias::MemberExpression(expression)) = &entry.alias {
+                    Some(emit_evaluate_member_reference(generator, expression))
+                } else {
+                    None
+                };
                 emit_get_by_value(generator, &value, object, &property_name, None);
             }
             None => {
@@ -7288,7 +7973,11 @@ fn generate_object_binding_pattern(
             generator.switch_to_basic_block(if_not_undefined);
         }
 
-        assign_binding_entry_alias(generator, entry, &value, mode);
+        if let Some(ref eref) = evaluated_ref {
+            emit_store_to_evaluated_reference(generator, eref, &value);
+        } else {
+            assign_binding_entry_alias(generator, entry, &value, mode);
+        }
     }
 }
 
@@ -7885,6 +8574,14 @@ pub fn emit_function_declaration_instantiation(
             });
 
             generator.switch_to_basic_block(if_undefined_block);
+            if let FunctionParameterBinding::Identifier(ident_id) = &parameter.binding {
+                // https://tc39.es/ecma262/#sec-runtime-semantics-iteratorbindinginitialization
+                // If |Initializer| is present and _v_ is *undefined*, then
+                //   If IsAnonymousFunctionDefinition(|Initializer|) is *true*, then
+                //     Set _v_ to ? NamedEvaluation of |Initializer| with argument _bindingId_.
+                let arena = generator.arena.clone();
+                generator.pending_lhs_name = Some(generator.intern_identifier_id(arena.identifiers[*ident_id].name));
+            }
             if let Some(value) = generate_expression(
                 parameter
                     .default_value
@@ -7895,6 +8592,7 @@ pub fn emit_function_declaration_instantiation(
             ) {
                 generator.emit_mov_raw(Operand::argument(parameter_index), value.operand());
             }
+            generator.pending_lhs_name = None;
             generator.emit(Instruction::Jump {
                 target: if_not_undefined_block,
             });
@@ -8103,7 +8801,7 @@ pub fn emit_function_declaration_instantiation(
     if let Some(fsd) = function_scope_data {
         for function_to_init in &fsd.functions_to_initialize {
             let child = &body_scope.children[function_to_init.child_index];
-            if let StatementKind::FunctionDeclaration(ref fd) = child.inner {
+            if let Some(fd) = child.inner.function_declaration_for_labelled_item() {
                 let inner_function_data = generator.function_table.take(fd.function_id);
                 let sfd_index = emit_new_function(generator, inner_function_data, None);
 
@@ -8148,7 +8846,7 @@ fn is_for_loop(statement: &Statement) -> bool {
 fn needs_block_declaration_instantiation(scope: &ScopeData, arena: &crate::ast::AstArena) -> bool {
     for child in &scope.children {
         match &child.inner {
-            StatementKind::FunctionDeclaration(_) => {
+            _ if child.inner.function_declaration_for_labelled_item().is_some() => {
                 return true;
             }
             StatementKind::VariableDeclaration(vd)

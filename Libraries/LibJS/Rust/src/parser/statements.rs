@@ -9,7 +9,10 @@
 use crate::fast_hash::HashSet;
 
 use crate::ast::*;
-use crate::parser::{Associativity, ForbiddenTokens, PRECEDENCE_COMMA, Parser, Position};
+use crate::parser::{
+    Associativity, ForbiddenTokens, PRECEDENCE_COMMA, Parser, Position, is_strict_reserved_word,
+    is_unconditional_reserved_word,
+};
 use crate::token::TokenType;
 
 /// Used locally during for-statement parsing before converting to `ast::ForInit`.
@@ -457,10 +460,10 @@ impl Parser<'_> {
                 } else {
                     self.validate_for_in_of_lhs(&init);
                     // https://tc39.es/ecma262/#sec-for-in-and-for-of-statements
-                    // `for (async of ...)` must be rejected when `async` is the
-                    // reserved keyword token. Escaped identifiers (e.g. `\u0061sync`)
-                    // are still valid here.
-                    if init_starts_with_async_keyword
+                    // The ordinary for-of grammar excludes `async of`, while the for-await-of grammar only excludes
+                    // `let`, so escaped identifiers (e.g. `\u0061sync`) and `for await (async of ...)` are valid here.
+                    if !is_await
+                        && init_starts_with_async_keyword
                         && let LocalForInit::Expression(ref expression) = init
                         && let ExpressionKind::Identifier(ident) = expression.inner
                         && self.arena.name_of(ident).as_slice() == utf16!("async")
@@ -511,6 +514,11 @@ impl Parser<'_> {
                     self.syntax_error("Missing initializer in const declaration");
                 }
             }
+        }
+        if is_await {
+            // https://tc39.es/ecma262/#prod-ForInOfStatement
+            // `for await` only has `of` productions.
+            self.syntax_error("for-await-of statement must use 'of'");
         }
         self.consume_token(TokenType::Semicolon);
         let for_init = match init {
@@ -873,14 +881,14 @@ impl Parser<'_> {
         self.discard_saved_state();
         self.consume(); // consume :
 
-        // https://tc39.es/ecma262/#sec-labelled-statements
-        // LabelIdentifier : Identifier (not ReservedWord)
-        // `true`, `false`, and `null` are reserved words and cannot be labels.
-        if token.token_type == TokenType::BoolLiteral || token.token_type == TokenType::NullLiteral {
+        // https://tc39.es/ecma262/#sec-identifiers
+        // LabelIdentifier[Yield, Await] : Identifier
+        // Identifier : IdentifierName but not ReservedWord
+        if is_unconditional_reserved_word(&label) {
             self.syntax_error("Reserved word cannot be used as a label");
         }
 
-        if self.flags.strict_mode && (label == utf16!("let") || crate::parser::is_strict_reserved_word(&label)) {
+        if self.flags.strict_mode && (label == utf16!("let") || is_strict_reserved_word(&label)) {
             self.syntax_error("Strict mode reserved word is not allowed in label");
         }
         if self.flags.in_generator_function_context && label == utf16!("yield") {
@@ -917,8 +925,17 @@ impl Parser<'_> {
         let body_starts_iteration = self.match_iteration_start();
         self.last_inner_label_is_iteration = false;
         let body = if self.match_token(TokenType::Function) {
+            let function_start = self.position();
             let fn_decl = self.parse_function_declaration();
             if let StatementKind::FunctionDeclaration(ref fd) = fn_decl.inner {
+                if let Some(name) = fd.name {
+                    let name = self.arena.name_of(name).clone();
+                    self.scope_collector.check_labelled_function_declaration(
+                        name.as_slice(),
+                        function_start.line,
+                        function_start.column,
+                    );
+                }
                 match fd.kind {
                     FunctionKind::Generator | FunctionKind::AsyncGenerator => {
                         self.syntax_error("Generator functions cannot be defined in labelled statements");

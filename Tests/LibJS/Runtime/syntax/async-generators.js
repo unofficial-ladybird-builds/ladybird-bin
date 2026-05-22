@@ -25,6 +25,13 @@ describe("parsing freestanding generators", () => {
         expect(`async function foo() { yield
             *bar; }`).toEval();
     });
+    test("for await only allows for-of syntax", () => {
+        expect(`async function* foo() { for await (value of []) ; }`).toEval();
+
+        expect(`async function* foo() { for await (;;) ; }`).not.toEval();
+        expect(`async function* foo() { for await (value ;;) ; }`).not.toEval();
+        expect(`async function* foo() { for await (value in []) ; }`).not.toEval();
+    });
 });
 
 describe("parsing object literal generator functions", () => {
@@ -55,4 +62,14 @@ describe("parsing classes with generator methods", () => {
         expect(`class Foo { async *foo() { yield 42; } }`).toEval();
         expect(`class Foo { async *constructor() { yield 42; } }`).not.toEval();
     });
+});
+
+test("async generator instances use the intrinsic prototype when function prototype is not an object", () => {
+    async function* generator() {}
+    const AsyncGeneratorPrototype = Object.getPrototypeOf(generator.prototype);
+
+    for (const prototype of [undefined, null, false, "", Symbol(), 1]) {
+        generator.prototype = prototype;
+        expect(Object.getPrototypeOf(generator())).toBe(AsyncGeneratorPrototype);
+    }
 });

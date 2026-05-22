@@ -411,13 +411,11 @@ fn precompile_script_declaration_functions(
     generator: &mut bytecode::generator::Generator,
     mode: FunctionPrecompileMode,
 ) -> Vec<PendingSharedFunctionData> {
-    use ast::StatementKind;
-
     let arena = generator.arena.clone();
     let scope = &arena.scopes[scope_id];
     let mut last_position: std::collections::HashMap<ast::StringId, usize> = std::collections::HashMap::new();
     for (index, child) in scope.children.iter().enumerate() {
-        if let StatementKind::FunctionDeclaration(ref function) = child.inner
+        if let Some(function) = child.inner.function_declaration_for_labelled_item()
             && let Some(name) = function.name
         {
             last_position.insert(arena.identifiers[name].name, index);
@@ -426,7 +424,7 @@ fn precompile_script_declaration_functions(
 
     let mut declaration_functions = Vec::new();
     for (index, child) in scope.children.iter().enumerate() {
-        if let StatementKind::FunctionDeclaration(ref function) = child.inner
+        if let Some(function) = child.inner.function_declaration_for_labelled_item()
             && let Some(name) = function.name
             && last_position.get(&arena.identifiers[name].name).copied() == Some(index)
         {
@@ -1254,6 +1252,8 @@ pub unsafe extern "C" fn rust_compile_eval(
                 return std::ptr::null_mut();
             }
 
+            let eval_referenced_private_names = parser.eval_referenced_private_names().to_vec();
+
             parser.scope_collector.analyze(
                 true,
                 &mut parser.arena.identifiers,
@@ -1292,6 +1292,7 @@ pub unsafe extern "C" fn rust_compile_eval(
                 gdi_context,
                 &mut generator.function_table,
                 &arena_arc,
+                &eval_referenced_private_names,
             );
 
             exec_ptr
@@ -2045,14 +2046,14 @@ unsafe fn extract_module_metadata(scope: &ast::ScopeData, ctx: *mut c_void, cb: 
 
                     if let Some(import_entry) = matching_import {
                         if import_entry.import_name.is_none() {
-                            // Namespace re-export → local export.
+                            // Re-export of an imported module namespace object becomes an indirect namespace export.
                             call_export_callback(
-                                cb.push_local_export,
+                                cb.push_indirect_export,
                                 ctx,
-                                entry.kind as u8,
+                                ExportEntryKind::ModuleRequestAll as u8,
                                 entry.export_name.as_ref(),
-                                entry.local_or_import_name.as_ref(),
                                 None,
+                                Some(&import_entry.module_request),
                             );
                         } else {
                             // Re-export of a specific binding → indirect export.
@@ -2421,7 +2422,7 @@ fn extract_gdi_common(
     // Var names (var declarations at any nesting level + top-level function declarations)
     for child in &scope.children {
         collect_var_names_recursive(&child.inner, arena, push_var_name);
-        if let StatementKind::FunctionDeclaration(ref fd) = child.inner
+        if let Some(fd) = child.inner.function_declaration_for_labelled_item()
             && let Some(name_ident) = fd.name
         {
             push_var_name(arena.name_slice(name_ident));
@@ -2433,14 +2434,14 @@ fn extract_gdi_common(
     // forward passes; StringId keys keep the inserts to a u32 compare.
     let mut last_position: std::collections::HashMap<ast::StringId, usize> = std::collections::HashMap::new();
     for (i, child) in scope.children.iter().enumerate() {
-        if let StatementKind::FunctionDeclaration(ref fd) = child.inner
+        if let Some(fd) = child.inner.function_declaration_for_labelled_item()
             && let Some(name_ident) = fd.name
         {
             last_position.insert(arena.identifiers[name_ident].name, i);
         }
     }
     for (i, child) in scope.children.iter().enumerate() {
-        if let StatementKind::FunctionDeclaration(ref fd) = child.inner
+        if let Some(fd) = child.inner.function_declaration_for_labelled_item()
             && let Some(name_ident) = fd.name
             && last_position.get(&arena.identifiers[name_ident].name).copied() == Some(i)
         {
@@ -2499,6 +2500,7 @@ fn extract_gdi_common(
 
 /// Extract EDI metadata from a program-level ScopeData and populate
 /// the C++ EvalGdiBuilder via callbacks.
+#[allow(clippy::too_many_arguments)]
 unsafe fn extract_eval_gdi(
     scope: &ast::ScopeData,
     is_strict: bool,
@@ -2507,11 +2509,12 @@ unsafe fn extract_eval_gdi(
     ctx: *mut c_void,
     function_table: &mut ast::FunctionTable,
     arena: &std::sync::Arc<ast::AstArena>,
+    referenced_private_names: &[ast::Utf16String],
 ) {
     unsafe {
         use bytecode::ffi::{
-            eval_gdi_push_annex_b_name, eval_gdi_push_function, eval_gdi_push_lexical_binding, eval_gdi_push_var_name,
-            eval_gdi_push_var_scoped_name, eval_gdi_set_strict,
+            eval_gdi_push_annex_b_name, eval_gdi_push_function, eval_gdi_push_lexical_binding,
+            eval_gdi_push_private_name, eval_gdi_push_var_name, eval_gdi_push_var_scoped_name, eval_gdi_set_strict,
         };
 
         eval_gdi_set_strict(ctx, is_strict);
@@ -2531,6 +2534,10 @@ unsafe fn extract_eval_gdi(
             function_table,
             arena,
         );
+
+        for name in referenced_private_names {
+            eval_gdi_push_private_name(ctx, name.as_ptr(), name.len());
+        }
     }
 }
 

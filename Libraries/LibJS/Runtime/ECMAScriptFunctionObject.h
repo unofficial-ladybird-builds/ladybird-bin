@@ -59,8 +59,14 @@ public:
 
     virtual Utf16String name_for_call_stack() const override;
 
-    Utf16FlyString const& name() const { return shared_data().m_name; }
+    Utf16FlyString const& name() const
+    {
+        if (m_name.has_value())
+            return *m_name;
+        return shared_data().m_name;
+    }
     void set_name(Utf16FlyString const& name);
+    void set_inferred_name(Variant<PropertyKey, PrivateName> const& name, Optional<StringView> const& prefix = {});
 
     void set_is_class_constructor() { const_cast<SharedFunctionInstanceData&>(shared_data()).set_is_class_constructor(); }
 
@@ -135,6 +141,7 @@ private:
         Object& prototype);
 
     virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
+    virtual ThrowCompletionOr<GC::RootVector<Value>> internal_own_property_keys() const override;
 
     virtual bool is_strict_mode() const override { return shared_data().m_strict; }
 
@@ -148,9 +155,13 @@ private:
 
     void prepare_for_ordinary_call(VM&, ExecutionContext& callee_context, Object* new_target);
     void ordinary_call_bind_this(VM&, ExecutionContext&, Value this_argument);
+    bool supports_legacy_caller_or_arguments() const;
+    Value legacy_caller() const;
+    Value legacy_arguments() const;
 
     GC::Ref<SharedFunctionInstanceData> m_shared_data;
 
+    Optional<Utf16FlyString> m_name;
     GC::Ptr<PrimitiveString> m_name_string;
 
     // Internal Slots of ECMAScript Function Objects, https://tc39.es/ecma262/#table-internal-slots-of-ecmascript-function-objects

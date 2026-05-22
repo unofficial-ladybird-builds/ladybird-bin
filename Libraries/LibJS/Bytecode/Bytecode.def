@@ -535,6 +535,11 @@ op GetNewTarget < Instruction
     m_dst: Operand
 endop
 
+op GetSuperConstructor < Instruction
+    @nothrow
+    m_dst: Operand
+endop
+
 op GetObjectPropertyIterator < Instruction
     m_dst_iterator: Operand
     m_object: Operand
@@ -1014,6 +1019,11 @@ op ResolveSuperBase < Instruction
     m_dst: Operand
 endop
 
+op ResolveBinding < Instruction
+    m_dst: Operand
+    m_identifier: IdentifierTableIndex
+endop
+
 op ResolveThisBinding < Instruction
 endop
 
@@ -1035,6 +1045,12 @@ op SetCompletionType < Instruction
     m_completion_type: Completion::Type
 endop
 
+op SetFunctionName < Instruction
+    m_function: Operand
+    m_name: Operand
+    m_prefix: FunctionNamePrefix
+endop
+
 op SetGlobal < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
@@ -1050,6 +1066,12 @@ op SetLexicalBinding < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
     m_cache: EnvironmentCoordinate
+endop
+
+op SetResolvedBinding < Instruction
+    m_environment: Operand
+    m_identifier: IdentifierTableIndex
+    m_src: Operand
 endop
 
 op DynamicSetLexicalBinding < Instruction
@@ -1090,6 +1112,7 @@ endop
 
 op SuperCallWithArgumentArray < Instruction
     m_dst: Operand
+    m_super_constructor: Operand
     m_arguments: Operand
     m_is_synthetic: bool
 endop
@@ -1168,6 +1191,13 @@ op Yield < Instruction
     @terminator
     @nothrow
     m_continuation_label: Optional<Label>
+    m_value: Operand
+endop
+
+op YieldIteratorResult < Instruction
+    @terminator
+    @nothrow
+    m_continuation_label: Label
     m_value: Operand
 endop
 

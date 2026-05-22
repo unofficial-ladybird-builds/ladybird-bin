@@ -95,7 +95,7 @@ ALWAYS_INLINE static ThrowCompletionOr<bool> strict_equals(VM&, Value src1, Valu
     return is_strictly_equal(src1, src2);
 }
 
-ALWAYS_INLINE Value VM::do_yield(Value value, Optional<Label> continuation)
+ALWAYS_INLINE Value VM::do_yield(Value value, Optional<Label> continuation, bool value_is_iterator_result)
 {
     auto& context = running_execution_context();
     if (continuation.has_value())
@@ -103,6 +103,7 @@ ALWAYS_INLINE Value VM::do_yield(Value value, Optional<Label> continuation)
     else
         context.yield_continuation = ExecutionContext::no_yield_continuation;
     context.yield_is_await = false;
+    context.yield_value_is_iterator_result = value_is_iterator_result;
     return value;
 }
 
@@ -703,6 +704,7 @@ void VM::run_bytecode(size_t entry_point)
             HANDLE_INSTRUCTION(GetLengthWithThis);
             HANDLE_INSTRUCTION(GetMethod);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(GetNewTarget);
+            HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(GetSuperConstructor);
             HANDLE_INSTRUCTION(GetObjectPropertyIterator);
             HANDLE_INSTRUCTION(GetPrivateById);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(GetTemplateObject);
@@ -759,13 +761,16 @@ void VM::run_bytecode(size_t entry_point)
 
             HANDLE_INSTRUCTION(PutBySpread);
             HANDLE_INSTRUCTION(PutPrivateById);
+            HANDLE_INSTRUCTION(ResolveBinding);
             HANDLE_INSTRUCTION(ResolveSuperBase);
             HANDLE_INSTRUCTION(ResolveThisBinding);
             HANDLE_INSTRUCTION(RightShift);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(SetCompletionType);
+            HANDLE_INSTRUCTION(SetFunctionName);
             HANDLE_INSTRUCTION(SetGlobal);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(SetLexicalEnvironment);
             HANDLE_INSTRUCTION(SetLexicalBinding);
+            HANDLE_INSTRUCTION(SetResolvedBinding);
             HANDLE_INSTRUCTION(DynamicSetLexicalBinding);
             HANDLE_INSTRUCTION(SetVariableBinding);
             HANDLE_INSTRUCTION(DynamicSetVariableBinding);
@@ -820,6 +825,12 @@ void VM::run_bytecode(size_t entry_point)
             instruction.execute_impl(*this);
             return;
         }
+
+        handle_YieldIteratorResult: {
+            auto& instruction = *reinterpret_cast<Op::YieldIteratorResult const*>(&bytecode[program_counter]);
+            instruction.execute_impl(*this);
+            return;
+        }
         }
     }
 }
@@ -842,6 +853,9 @@ DeclarativeEnvironment& VM::global_declarative_environment()
 ThrowCompletionOr<Value> VM::run_executable(ExecutionContext& context, Executable& executable, u32 entry_point)
 {
     dbgln_if(JS_BYTECODE_DEBUG, "VM will run bytecode unit {}", &executable);
+
+    auto const is_outermost_bytecode_execution = m_run_executable_depth == 0;
+    TemporaryChange restore_run_executable_depth { m_run_executable_depth, m_run_executable_depth + 1 };
 
     // NOTE: This is how we "push" a new execution context onto the VM's
     //       execution context stack.
@@ -875,7 +889,8 @@ ThrowCompletionOr<Value> VM::run_executable(ExecutionContext& context, Executabl
         }
     }
 
-    vm().run_queued_promise_jobs();
+    if (is_outermost_bytecode_execution && !vm().is_executing_module())
+        vm().run_queued_promise_jobs();
     vm().finish_execution_generation();
 
     auto exception = reg(Register::exception());
@@ -1050,9 +1065,7 @@ inline ThrowCompletionOr<Value> get_global(VM& vm, IdentifierTableIndex identifi
         auto* entry = cache.first_entry();
         if (entry && &shape == entry->shape && (!shape.is_dictionary() || shape.dictionary_generation() == entry->shape_dictionary_generation)) {
             auto value = binding_object.get_direct(entry->property_offset);
-            if (value.is_accessor())
-                return TRY(call(vm, value.as_accessor().getter(), &binding_object));
-            return value;
+            return TRY(get_cached_property_value(vm, value, &binding_object));
         }
 
         // OPTIMIZATION: For global lexical bindings, if the global declarative environment hasn't changed,
@@ -2233,7 +2246,10 @@ ThrowCompletionOr<void> IteratorToArray::execute_impl(VM& vm) const
     size_t index = 0;
 
     while (true) {
-        auto value = TRY(iterator_step_value(vm, iterator_record));
+        auto value_or_error = iterator_step_value(vm, iterator_record);
+        if (iterator_record.done)
+            vm.set(m_iterator_done_property, Value(true));
+        auto value = TRY(value_or_error);
         if (!value.has_value())
             break;
 
@@ -2717,6 +2733,16 @@ ThrowCompletionOr<void> SetLexicalBinding::execute_impl(VM& vm) const
     return initialize_or_set_binding<EnvironmentMode::Lexical, BindingInitializationMode::Set>(vm, strict(), vm.get(m_src), m_cache);
 }
 
+ThrowCompletionOr<void> SetResolvedBinding::execute_impl(VM& vm) const
+{
+    auto const& identifier = vm.get_identifier(m_identifier);
+    auto environment = vm.get(m_environment);
+    auto reference = environment.is_null()
+        ? Reference { Reference::BaseType::Unresolvable, PropertyKey { identifier }, strict() }
+        : Reference { as<Environment>(environment.as_cell()), identifier, strict() };
+    return reference.put_value(vm, vm.get(m_src));
+}
+
 ThrowCompletionOr<void> SetVariableBinding::execute_impl(VM& vm) const
 {
     return initialize_or_set_binding<EnvironmentMode::Var, BindingInitializationMode::Set>(vm, strict(), vm.get(m_src), m_cache);
@@ -2844,6 +2870,20 @@ COLD ThrowCompletionOr<void> DeleteById::execute_impl(VM& vm) const
     return {};
 }
 
+ThrowCompletionOr<void> ResolveBinding::execute_impl(VM& vm) const
+{
+    auto const& identifier = vm.get_identifier(m_identifier);
+    auto reference = TRY(vm.resolve_binding(identifier, strict()));
+    if (reference.is_unresolvable()) {
+        vm.set(dst(), js_null());
+        return {};
+    }
+
+    VERIFY(reference.is_environment_reference());
+    vm.set(dst(), &reference.base_environment());
+    return {};
+}
+
 ThrowCompletionOr<void> ResolveThisBinding::execute_impl(VM& vm) const
 {
     auto& cached_this_value = vm.reg(Register::this_value());
@@ -2882,6 +2922,13 @@ ThrowCompletionOr<void> ResolveSuperBase::execute_impl(VM& vm) const
 void GetNewTarget::execute_impl(VM& vm) const
 {
     vm.set(dst(), vm.get_new_target());
+}
+
+// 13.3.7.2 GetSuperConstructor ( ), https://tc39.es/ecma262/#sec-getsuperconstructor
+void GetSuperConstructor::execute_impl(VM& vm) const
+{
+    auto* super_constructor = get_super_constructor(vm);
+    vm.set(dst(), super_constructor ? Value(super_constructor) : js_null());
 }
 
 void GetImportMeta::execute_impl(VM& vm) const
@@ -3140,17 +3187,18 @@ ThrowCompletionOr<void> SuperCallWithArgumentArray::execute_impl(VM& vm) const
     // 2. Assert: Type(newTarget) is Object.
     VERIFY(new_target.is_object());
 
-    // 3. Let func be GetSuperConstructor().
-    auto* func = get_super_constructor(vm);
+    // 3. Let _superConstructor_ be GetSuperConstructor().
+    auto super_constructor = vm.get(m_super_constructor);
 
-    // NON-STANDARD: We're doing this step earlier to streamline control flow.
-    // 5. If IsConstructor(func) is false, throw a TypeError exception.
-    if (!Value(func).is_constructor()) [[unlikely]]
+    // 4. Let _argList_ be ? ArgumentListEvaluation of |Arguments|.
+    // NOTE: The bytecode generator performs this step before emitting this instruction.
+
+    // 5. If IsConstructor(_superConstructor_) is *false*, throw a *TypeError* exception.
+    if (!super_constructor.is_constructor()) [[unlikely]]
         return vm.throw_completion<TypeError>(ErrorType::NotAConstructor, "Super constructor");
 
-    auto& function = static_cast<FunctionObject&>(*func);
+    auto& function = super_constructor.as_function();
 
-    // 4. Let argList be ? ArgumentListEvaluation of Arguments.
     auto& argument_array = vm.get(m_arguments).as_array_exotic_object();
     size_t argument_array_length = 0;
 
@@ -3217,6 +3265,30 @@ ThrowCompletionOr<void> SuperCallWithArgumentArray::execute_impl(VM& vm) const
 void NewFunction::execute_impl(VM& vm) const
 {
     vm.set(dst(), new_function(vm, m_shared_function_data_index, m_home_object));
+}
+
+static Optional<StringView> function_name_prefix_to_string(Op::FunctionNamePrefix prefix)
+{
+    switch (prefix) {
+    case Op::FunctionNamePrefix::None:
+        return {};
+    case Op::FunctionNamePrefix::Get:
+        return "get"sv;
+    case Op::FunctionNamePrefix::Set:
+        return "set"sv;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+ThrowCompletionOr<void> SetFunctionName::execute_impl(VM& vm) const
+{
+    auto function = vm.get(m_function).as_if<ECMAScriptFunctionObject>();
+    if (!function || !function->name().is_empty())
+        return {};
+
+    auto property_key = TRY(vm.get(m_name).to_property_key(vm));
+    function->set_inferred_name(Variant<PropertyKey, PrivateName> { move(property_key) }, function_name_prefix_to_string(m_prefix));
+    return {};
 }
 
 void Return::execute_impl(VM& vm) const
@@ -3344,12 +3416,20 @@ void Yield::execute_impl(VM& vm) const
         vm.do_yield(yielded_value, m_continuation_label));
 }
 
+void YieldIteratorResult::execute_impl(VM& vm) const
+{
+    auto yielded_value = vm.get(m_value).is_special_empty_value() ? js_undefined() : vm.get(m_value);
+    vm.do_return(
+        vm.do_yield(yielded_value, m_continuation_label, true));
+}
+
 void Await::execute_impl(VM& vm) const
 {
     auto yielded_value = vm.get(m_argument).is_special_empty_value() ? js_undefined() : vm.get(m_argument);
     auto& context = vm.running_execution_context();
     context.yield_continuation = m_continuation_label.address();
     context.yield_is_await = true;
+    context.yield_value_is_iterator_result = false;
     vm.do_return(yielded_value);
 }
 
@@ -3438,9 +3518,10 @@ ThrowCompletionOr<void> IteratorNext::execute_impl(VM& vm) const
     auto iterator_next_method = vm.get(m_iterator_next);
     auto iterator_done_property = vm.get(m_iterator_done).as_bool();
     IteratorRecordImpl iterator_record { .done = iterator_done_property, .iterator = iterator_object, .next_method = iterator_next_method };
-    vm.set(m_dst, TRY(JS::iterator_next(vm, iterator_record)));
-    if (iterator_done_property)
+    auto result = JS::iterator_next(vm, iterator_record);
+    if (iterator_record.done)
         vm.set(m_iterator_done, Value(true));
+    vm.set(m_dst, TRY(result));
     return {};
 }
 
@@ -3450,16 +3531,20 @@ ThrowCompletionOr<void> IteratorNextUnpack::execute_impl(VM& vm) const
     auto iterator_next_method = vm.get(m_iterator_next);
     auto iterator_done_property = vm.get(m_iterator_done).as_bool();
     IteratorRecordImpl iterator_record { .done = iterator_done_property, .iterator = iterator_object, .next_method = iterator_next_method };
-    auto iteration_result_or_done = TRY(iterator_step(vm, iterator_record));
-    if (iterator_done_property)
+    auto iteration_result_or_done_or_error = iterator_step(vm, iterator_record);
+    if (iterator_record.done)
         vm.set(m_iterator_done, Value(true));
+    auto iteration_result_or_done = TRY(iteration_result_or_done_or_error);
     if (iteration_result_or_done.has<IterationDone>()) {
         vm.set(m_dst_done, Value(true));
         return {};
     }
     auto& iteration_result = iteration_result_or_done.get<IterationResult>();
     vm.set(m_dst_done, TRY(iteration_result.done));
-    vm.set(m_dst_value, TRY(iteration_result.value));
+    auto value = move(iteration_result.value);
+    if (value.is_throw_completion())
+        vm.set(m_iterator_done, Value(true));
+    vm.set(m_dst_value, TRY(value));
     return {};
 }
 

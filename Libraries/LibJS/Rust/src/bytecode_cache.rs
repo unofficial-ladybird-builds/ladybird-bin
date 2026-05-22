@@ -29,7 +29,7 @@ use crate::bytecode::validator::{
 use crate::{CompiledProgram, CompiledProgramBytecode, ModuleCallbacks, ast, u32_from_usize};
 
 const MAGIC: &[u8; 8] = b"LBJSBC\0\0";
-const FORMAT_VERSION: u32 = 11;
+const FORMAT_VERSION: u32 = 12;
 const SOURCE_HASH_SIZE: usize = 32;
 const BYTECODE_ALIGNMENT: usize = 8;
 const COMPLETION_TYPE_VARIANT_COUNT: u32 = 6;
@@ -37,6 +37,7 @@ const ITERATOR_HINT_VARIANT_COUNT: u32 = 2;
 const ENVIRONMENT_MODE_VARIANT_COUNT: u32 = 2;
 const PUT_KIND_VARIANT_COUNT: u32 = 5;
 const ARGUMENTS_KIND_VARIANT_COUNT: u32 = 2;
+const FUNCTION_NAME_PREFIX_VARIANT_COUNT: u32 = 3;
 
 fn source_span_is_valid(start: u32, end: u32, source_len: usize) -> bool {
     let start = start as usize;
@@ -1438,7 +1439,7 @@ impl ScriptDeclarationMetadata {
 
         for child in &scope.children {
             collect_var_names_recursive(&child.inner, arena, &mut metadata.var_names);
-            if let ast::StatementKind::FunctionDeclaration(ref function) = child.inner
+            if let Some(function) = child.inner.function_declaration_for_labelled_item()
                 && let Some(name) = function.name
             {
                 metadata.var_names.push(arena.name_of(name).clone());
@@ -1870,7 +1871,7 @@ fn collect_script_lexical_bindings(
 fn script_function_names(scope: &ast::ScopeData, arena: &ast::AstArena) -> Vec<ast::Utf16String> {
     let mut last_position = HashMap::new();
     for (index, child) in scope.children.iter().enumerate() {
-        if let ast::StatementKind::FunctionDeclaration(ref function) = child.inner
+        if let Some(function) = child.inner.function_declaration_for_labelled_item()
             && let Some(name) = function.name
         {
             last_position.insert(arena.identifiers[name].name, index);
@@ -1879,7 +1880,7 @@ fn script_function_names(scope: &ast::ScopeData, arena: &ast::AstArena) -> Vec<a
 
     let mut names = Vec::new();
     for (index, child) in scope.children.iter().enumerate() {
-        if let ast::StatementKind::FunctionDeclaration(ref function) = child.inner
+        if let Some(function) = child.inner.function_declaration_for_labelled_item()
             && let Some(name) = function.name
             && last_position.get(&arena.identifiers[name].name).copied() == Some(index)
         {
@@ -1949,7 +1950,12 @@ fn collect_module_imports_and_exports(scope: &ast::ScopeData, metadata: &mut Mod
                     .find(|import| entry.local_or_import_name.as_ref() == Some(&import.local_name));
                 if let Some(import_entry) = matching_import {
                     if import_entry.import_name.is_none() {
-                        metadata.local_exports.push(export_record(entry, None));
+                        metadata.indirect_exports.push(ModuleExportEntryRecord {
+                            kind: ast::ExportEntryKind::ModuleRequestAll,
+                            export_name: entry.export_name.clone(),
+                            local_or_import_name: None,
+                            module_request: Some(import_entry.module_request.clone()),
+                        });
                     } else {
                         metadata.indirect_exports.push(ModuleExportEntryRecord {
                             kind: entry.kind,
@@ -2403,6 +2409,7 @@ impl DecodedExecutableRecord {
             environment_mode_variant_count: ENVIRONMENT_MODE_VARIANT_COUNT,
             put_kind_variant_count: PUT_KIND_VARIANT_COUNT,
             arguments_kind_variant_count: ARGUMENTS_KIND_VARIANT_COUNT,
+            function_name_prefix_variant_count: FUNCTION_NAME_PREFIX_VARIANT_COUNT,
         };
 
         let exception_handlers = self

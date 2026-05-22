@@ -9,12 +9,12 @@ $dc8f51ec super-length-access.js:3:1
 block0:
   [   0] GetLexicalEnvironment dst:reg4
   [   8] CreateLexicalEnvironment dst:reg5, parent:reg4, capacity:0, is_catch_environment:false
-  [  20] CreateVariable `A`, is_immutable:true, is_global:false, is_strict:false
+  [  20] CreateVariable `A`, is_immutable:true, is_global:false, is_strict:true
   [  30] SetLexicalEnvironment environment:reg4
   [  38] NewClass dst:reg6, class_environment:reg5, class_blueprint_index:0, element_keys:[element_keys:String("length")]
   [  60] DynamicInitializeLexicalBinding `A`, src:reg6
   [  70] CreateLexicalEnvironment dst:reg6, parent:reg4, capacity:0, is_catch_environment:false
-  [  88] CreateVariable `B`, is_immutable:true, is_global:false, is_strict:false
+  [  88] CreateVariable `B`, is_immutable:true, is_global:false, is_strict:true
   [  98] GetGlobal dst:reg5, `A`
   [  a8] SetLexicalEnvironment environment:reg4
   [  b0] NewClass dst:reg7, super_class:reg5, class_environment:reg6, class_blueprint_index:1, element_keys:[element_keys:String("m")]
@@ -26,17 +26,18 @@ block0:
   [ 148] End value:reg7
 
 
-B$cbd8a311 super-length-access.js:7:1
-  Registers: 7
+B$ce9c9421 super-length-access.js:7:1
+  Registers: 8
   Blocks:    1
 
 block0:
   [   0] CreateVariable `args`, is_immutable:false, is_global:false, is_strict:false
   [  10] CreateRestParams dst:arg0, rest_index:0
   [  20] InitializeLexicalBinding `args`, src:arg0
-  [  38] GetBinding dst:reg5, `args`
-  [  50] SuperCallWithArgumentArray dst:reg6, arguments:reg5, is_synthetic:true
-  [  60] Return value:reg6
+  [  38] GetSuperConstructor dst:reg5
+  [  40] GetBinding dst:reg6, `args`
+  [  58] SuperCallWithArgumentArray dst:reg7, super_constructor:reg5, arguments:reg6, is_synthetic:true
+  [  70] Return value:reg7
 
 
 A$ef0589ec

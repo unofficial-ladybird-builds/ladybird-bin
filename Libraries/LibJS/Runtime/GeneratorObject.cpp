@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/GeneratorObject.h>
 #include <LibJS/Runtime/GeneratorPrototype.h>
 #include <LibJS/Runtime/GlobalObject.h>
@@ -18,30 +19,25 @@ GC_DEFINE_ALLOCATOR(GeneratorObject);
 GC::Ref<GeneratorObject> GeneratorObject::create(Realm& realm, Variant<GC::Ref<ECMAScriptFunctionObject>, GC::Ref<NativeJavaScriptBackedFunction>> generating_function, NonnullOwnPtr<ExecutionContext> execution_context)
 {
     auto& vm = realm.vm();
-    // This is "g1.prototype" in figure-2 (https://tc39.es/ecma262/img/figure-2.png)
-    Value generating_function_prototype;
 
     auto kind = generating_function.visit(
         [](auto function) {
             return function->kind();
         });
 
+    GC::Ptr<Object> generating_function_prototype_object = nullptr;
     if (kind == FunctionKind::Async) {
         // We implement async functions by transforming them to generator function in the bytecode
         // interpreter. However an async function does not have a prototype and should not be
         // changed thus we hardcode the prototype.
-        generating_function_prototype = realm.intrinsics().generator_prototype();
+        generating_function_prototype_object = realm.intrinsics().generator_prototype();
     } else {
-        static Bytecode::StaticPropertyLookupCache cache;
-        generating_function_prototype = MUST(generating_function.visit([&vm](auto function) {
-            static Bytecode::StaticPropertyLookupCache cache;
-            return function->get(vm.names.prototype, cache);
+        // 1. Let _generator_ be ? OrdinaryCreateFromConstructor(_functionObject_, *"%GeneratorPrototype%"*,
+        //    « [[GeneratorState]], [[GeneratorContext]], [[GeneratorBrand]] »).
+        generating_function_prototype_object = MUST(generating_function.visit([&vm](auto function) -> ThrowCompletionOr<Object*> {
+            return get_prototype_from_constructor(vm, *function, &Intrinsics::generator_prototype);
         }));
     }
-
-    GC::Ptr<Object> generating_function_prototype_object = nullptr;
-    if (!generating_function_prototype.is_nullish())
-        generating_function_prototype_object = MUST(generating_function_prototype.to_object(vm));
 
     auto generating_executable = generating_function.visit(
         [](GC::Ref<ECMAScriptFunctionObject> function) -> GC::Ref<Bytecode::Executable> {
@@ -108,6 +104,7 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
 
     // Clear yield state so that a normal return (no yield) is detected as done.
     m_execution_context->yield_continuation = ExecutionContext::no_yield_continuation;
+    m_execution_context->yield_value_is_iterator_result = false;
 
     auto result_value = vm.run_executable(vm.running_execution_context(), *m_generating_executable, m_yield_continuation, Value(this));
     clear_pending_completion();
@@ -126,10 +123,11 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
 
     m_yield_continuation = m_execution_context->yield_continuation;
     bool done = m_yield_continuation == ExecutionContext::no_yield_continuation;
+    bool value_is_iterator_result = m_execution_context->yield_value_is_iterator_result;
 
     m_generator_state = done ? GeneratorState::Completed : GeneratorState::SuspendedYield;
 
-    return IterationResult(value, done);
+    return IterationResult(value, done, value_is_iterator_result && !done);
 }
 
 // 27.5.3.3 GeneratorResume ( generator, value, generatorBrand ), https://tc39.es/ecma262/#sec-generatorresume

@@ -212,8 +212,6 @@ impl Parser<'_> {
                         .zip(bound_names.iter())
                         .map(|(n, (_, id))| (n.as_slice(), Some(*id)))
                         .collect();
-                    // NOTE: Binding pattern identifiers don't get declaration_kind,
-                    // matching C++ behavior where only simple identifiers do.
                     let Self {
                         scope_collector, arena, ..
                     } = self;
@@ -221,7 +219,7 @@ impl Parser<'_> {
                         &entries,
                         declaration_line,
                         declaration_column,
-                        None,
+                        Some(DeclarationKind::Var),
                         &mut arena.identifiers,
                         &arena.strings,
                         &mut arena.scopes,
@@ -230,17 +228,13 @@ impl Parser<'_> {
                     let refs: Vec<&[u16]> = name_strs.iter().map(|n| n.as_slice()).collect();
                     self.scope_collector
                         .add_lexical_declaration(&refs, declaration_line, declaration_column);
-                    // Register each binding pattern identifier for scope analysis
-                    // so they get is_local() annotations.
-                    // NOTE: C++ does not pass declaration_kind for binding pattern identifiers,
-                    // only for simple identifier declarations.
                     let Self {
                         scope_collector, arena, ..
                     } = self;
                     for (_name, id) in &bound_names {
                         scope_collector.register_identifier(
                             *id,
-                            None,
+                            Some(kind),
                             &mut arena.identifiers,
                             &arena.strings,
                             &mut arena.scopes,
@@ -502,6 +496,13 @@ impl Parser<'_> {
             None
         };
 
+        // https://tc39.es/ecma262/#prod-GeneratorExpression
+        // GeneratorExpression : `function` `*` BindingIdentifier[+Yield, ~Await]? `(` FormalParameters[+Yield, ~Await] `)`
+        // `{` GeneratorBody `}`
+        if kind == FunctionKind::Generator && fn_name_value.as_slice() == utf16!("yield") {
+            self.syntax_error("'yield' is not allowed as a generator function expression name");
+        }
+
         // Register the function expression name in the outer scope, matching C++.
         // This must happen before open_function_scope so that the identifier group
         // exists with declaration_kind=None, preventing later var declarations
@@ -555,7 +556,7 @@ impl Parser<'_> {
                     "async generator function is not allowed to be called '{name_str}'"
                 ));
             }
-            if self.flags.in_class_static_init_block && fn_name == utf16!("await") {
+            if self.flags.in_class_static_init_block && is_async && fn_name == utf16!("await") {
                 self.syntax_error("'await' is a reserved word");
             }
         }
@@ -593,16 +594,16 @@ impl Parser<'_> {
         self.scope_collector.close_scope();
         self.pattern_bound_names = saved_pattern_bound_names;
 
-        self.flags.in_class_static_init_block = saved_static_init;
-        self.flags.in_class_field_initializer = saved_field_init;
-        self.flags.new_target_is_valid = saved_new_target;
-
         if name.is_some() {
             self.check_identifier_name_for_assignment_validity(fn_name, has_use_strict);
         }
-        if has_use_strict || kind != FunctionKind::Normal {
-            self.check_parameters_post_body(&parsed.parameter_info, has_use_strict, kind);
+        let parameters_are_strict = self.flags.strict_mode || has_use_strict;
+        if parameters_are_strict || kind != FunctionKind::Normal {
+            self.check_parameters_post_body(&parsed.parameter_info, parameters_are_strict, kind);
         }
+        self.flags.in_class_static_init_block = saved_static_init;
+        self.flags.in_class_field_initializer = saved_field_init;
+        self.flags.new_target_is_valid = saved_new_target;
 
         insights.might_need_arguments_object = self.flags.function_might_need_arguments_object;
         self.flags.function_might_need_arguments_object = saved_might_need_arguments;
@@ -674,7 +675,16 @@ impl Parser<'_> {
 
         let super_class = if self.match_token(TokenType::Extends) {
             self.consume();
-            Some(Box::new(self.parse_expression_any()))
+            let heritage_start = self.position();
+            let expression = self.parse_expression_any();
+            // ClassHeritage[Yield, Await] : `extends` LeftHandSideExpression[?Yield, ?Await]
+            if expression.range.start.offset == heritage_start.offset
+                && let ExpressionKind::Function(function_id) = &expression.inner
+                && self.function_table.get(*function_id).is_arrow_function
+            {
+                self.syntax_error("Arrow function is not allowed in class heritage");
+            }
+            Some(Box::new(expression))
         } else {
             None
         };
@@ -723,6 +733,8 @@ impl Parser<'_> {
             // Bubble up to outer class, or error if no outer class.
             if let Some(outer) = self.referenced_private_names_stack.last_mut() {
                 outer.insert(name);
+            } else if self.initiated_by_eval {
+                self.register_eval_referenced_private_name(&name);
             } else {
                 let name_str = String::from_utf16_lossy(&name);
                 self.syntax_error(&format!("Reference to undeclared private field or method '{name_str}'"));
@@ -1132,13 +1144,16 @@ impl Parser<'_> {
 
         let init = if self.match_token(TokenType::Equals) {
             self.consume();
+            let saved_await = self.flags.await_expression_is_valid;
             let saved_field_init = self.flags.in_class_field_initializer;
             let saved_super_lookup = self.flags.allow_super_property_lookup;
+            self.flags.await_expression_is_valid = false;
             self.flags.in_class_field_initializer = true;
             self.flags.allow_super_property_lookup = true;
             self.scope_collector.open_class_field_scope(None);
             let expression = self.parse_assignment_expression();
             self.scope_collector.close_scope();
+            self.flags.await_expression_is_valid = saved_await;
             self.flags.in_class_field_initializer = saved_field_init;
             self.flags.allow_super_property_lookup = saved_super_lookup;
             Some(Box::new(expression))
@@ -1194,7 +1209,9 @@ impl Parser<'_> {
             }
         }
 
-        children.extend(self.parse_statement_list(false));
+        // https://tc39.es/ecma262/#sec-labelled-function-declarations
+        // That rule is then modified to suppress the Syntax Error in non-strict code if the host supports this feature.
+        children.extend(self.parse_statement_list(true));
 
         self.flags.strict_mode = strict_before;
         self.flags.in_function_context = in_function_before;
@@ -1265,7 +1282,6 @@ impl Parser<'_> {
         let mut has_seen_default = false;
         let mut has_seen_rest = false;
         let mut parameter_info: Vec<ParamInfo> = Vec::new();
-        let mut parameter_info_ranges: Vec<(usize, usize, bool)> = Vec::new();
 
         // C++ uses the position at the start of parse_formal_parameters for all
         // parameter identifiers (i.e., the position of the first parameter).
@@ -1273,13 +1289,12 @@ impl Parser<'_> {
 
         loop {
             let parameter_start = self.position();
-            let parameter_info_start = parameter_info.len();
             let rest = self.eat(TokenType::TripleDot);
             if rest {
                 has_seen_rest = true;
             }
 
-            let (binding, is_pat) = if self.match_identifier()
+            let binding = if self.match_identifier()
                 || self.match_token(TokenType::Await)
                 || self.match_token(TokenType::Yield)
             {
@@ -1316,7 +1331,7 @@ impl Parser<'_> {
                     is_from_pattern: false,
                     identifier: Some(id),
                 });
-                (FunctionParameterBinding::Identifier(id), false)
+                FunctionParameterBinding::Identifier(id)
             } else if self.match_token(TokenType::CurlyOpen) || self.match_token(TokenType::BracketOpen) {
                 let pat = self.parse_binding_pattern();
                 let bound_names = std::mem::take(&mut self.pattern_bound_names);
@@ -1329,7 +1344,7 @@ impl Parser<'_> {
                         identifier: Some(id),
                     });
                 }
-                (FunctionParameterBinding::BindingPattern(pat), true)
+                FunctionParameterBinding::BindingPattern(pat)
             } else {
                 self.expected("parameter name");
                 self.consume();
@@ -1338,7 +1353,7 @@ impl Parser<'_> {
                     .arena
                     .identifiers
                     .insert(Identifier::new(self.range_from(parameter_start), empty));
-                (FunctionParameterBinding::Identifier(id), false)
+                FunctionParameterBinding::Identifier(id)
             };
 
             let default_value = if !rest && self.match_token(TokenType::Equals) {
@@ -1358,14 +1373,11 @@ impl Parser<'_> {
                 function_length += 1;
             }
 
-            let parameter_is_non_simple = rest || is_pat || default_value.is_some();
             parameters.push(FunctionParameter {
                 binding,
                 default_value,
                 is_rest: rest,
             });
-            let parameter_info_end = parameter_info.len();
-            parameter_info_ranges.push((parameter_info_start, parameter_info_end, parameter_is_non_simple));
 
             if rest || !self.match_token(TokenType::Comma) {
                 break;
@@ -1377,45 +1389,32 @@ impl Parser<'_> {
             }
         }
 
-        // Validate duplicates after parsing so we can use borrowed name slices
-        // from `parameter_info` without cloning each entry into the HashSet.
-        let mut seen_parameter_names: HashSet<&[u16]> = HashSet::default();
-        let mut has_seen_non_simple = false;
-        for (start, end, parameter_is_non_simple) in parameter_info_ranges {
-            for info in &parameter_info[start..end] {
-                if info.name.is_empty() {
-                    continue;
-                }
-                let is_duplicate = seen_parameter_names.contains(info.name.as_slice());
-                // https://tc39.es/ecma262/#sec-function-definitions-static-semantics-early-errors
-                // Duplicate names are tolerated only for sloppy, non-arrow
-                // functions with a fully simple parameter list.
-                // - `!is_arrow`: arrows reject duplicates via
-                //   check_arrow_duplicate_parameters().
-                // - `self.flags.strict_mode`: strict functions always reject.
-                // - `has_seen_non_simple || parameter_is_non_simple`: once any
-                //   rest/default/destructuring parameter appears, duplicates are
-                //   no longer allowed (e.g. `function(a, a = 1)`).
-                if is_duplicate
-                    && !is_arrow
-                    && (self.flags.strict_mode || has_seen_non_simple || parameter_is_non_simple)
-                {
-                    let name_str = String::from_utf16_lossy(&info.name);
-                    self.syntax_error(&format!("Duplicate parameter '{name_str}' not allowed"));
-                }
-                seen_parameter_names.insert(info.name.as_slice());
-            }
-            has_seen_non_simple |= parameter_is_non_simple;
-        }
-
-        self.flags.in_formal_parameter_context = saved_formal_parameter_ctx;
-        self.pattern_bound_names = saved_pattern_bound_names;
-
         let is_simple = !has_seen_default
             && !has_seen_rest
             && !parameters
                 .iter()
                 .any(|p| matches!(&p.binding, FunctionParameterBinding::BindingPattern(_)));
+
+        // Validate duplicates after parsing so we can use borrowed name slices
+        // from `parameter_info` without cloning each entry into the HashSet.
+        let mut seen_parameter_names: HashSet<&[u16]> = HashSet::default();
+        for info in &parameter_info {
+            if info.name.is_empty() {
+                continue;
+            }
+            let is_duplicate = seen_parameter_names.contains(info.name.as_slice());
+            // https://tc39.es/ecma262/#sec-function-definitions-static-semantics-early-errors
+            // Duplicate names are tolerated only for sloppy, non-arrow functions with a fully simple parameter list.
+            if is_duplicate && !is_arrow && (self.flags.strict_mode || !is_simple) {
+                let name_str = String::from_utf16_lossy(&info.name);
+                self.syntax_error(&format!("Duplicate parameter '{name_str}' not allowed"));
+            }
+            seen_parameter_names.insert(info.name.as_slice());
+        }
+
+        self.flags.in_formal_parameter_context = saved_formal_parameter_ctx;
+        self.pattern_bound_names = saved_pattern_bound_names;
+
         ParsedParameters {
             parameters,
             function_length,
@@ -1582,8 +1581,14 @@ impl Parser<'_> {
                                 Associativity::Right,
                                 ForbiddenTokens::none().forbid(&[TokenType::Equals]),
                             );
-                            if Self::is_object_expression(&expression) || Self::is_array_expression(&expression) {
-                                let pattern = self.synthesize_binding_pattern(expression_start);
+                            if Self::is_parenthesized_object_or_array_expression(&expression, expression_start) {
+                                // https://tc39.es/ecma262/#sec-destructuring-assignment-static-semantics-early-errors
+                                // If |LeftHandSideExpression| is either an |ObjectLiteral| or an |ArrayLiteral|,
+                                // |LeftHandSideExpression| must cover an |AssignmentPattern|.
+                                self.syntax_error("Invalid destructuring assignment target");
+                                break;
+                            } else if Self::is_object_or_array_expression(&expression) {
+                                let pattern = self.synthesize_binding_pattern(expression.range.start);
                                 entry_alias = Some(BindingEntryAlias::BindingPattern(Box::new(pattern)));
                             } else if Self::is_member_expression(&expression) {
                                 entry_alias = Some(BindingEntryAlias::MemberExpression(Box::new(expression)));
@@ -1628,8 +1633,14 @@ impl Parser<'_> {
                     Associativity::Right,
                     ForbiddenTokens::none().forbid(&[TokenType::Equals]),
                 );
-                if Self::is_object_expression(&expression) || Self::is_array_expression(&expression) {
-                    let pattern = self.synthesize_binding_pattern(expression_start);
+                if Self::is_parenthesized_object_or_array_expression(&expression, expression_start) {
+                    // https://tc39.es/ecma262/#sec-destructuring-assignment-static-semantics-early-errors
+                    // If |LeftHandSideExpression| is either an |ObjectLiteral| or an |ArrayLiteral|,
+                    // |LeftHandSideExpression| must cover an |AssignmentPattern|.
+                    self.syntax_error("Invalid destructuring assignment target");
+                    break;
+                } else if Self::is_object_or_array_expression(&expression) {
+                    let pattern = self.synthesize_binding_pattern(expression.range.start);
                     entry_alias = Some(BindingEntryAlias::BindingPattern(Box::new(pattern)));
                 } else if Self::is_member_expression(&expression) {
                     entry_alias = Some(BindingEntryAlias::MemberExpression(Box::new(expression)));

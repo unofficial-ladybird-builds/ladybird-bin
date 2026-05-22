@@ -208,6 +208,10 @@ describe("in- and exports", () => {
         expectModulePassed("./re-export-namespace-via-binding.mjs");
     });
 
+    test("can merge matching namespace re-exports", () => {
+        expectModulePassed("./namespace-re-export-entry.mjs");
+    });
+
     test("import variable before import statement behaves as undefined and non mutable variable", () => {
         expectModulePassed("./accessing-var-import-before-decl.mjs");
     });
@@ -257,6 +261,19 @@ describe("in- and exports", () => {
 describe("loops", () => {
     test("import and export from own file", () => {
         expectModulePassed("./loop-self.mjs");
+    });
+
+    test("entry module can import itself before evaluation", () => {
+        evaluateModule("./modules/entry-self-import.mjs");
+    });
+
+    test("entry module can dynamically import itself during evaluation", () => {
+        evaluateModule("./modules/dynamic-self-import-default-export.mjs");
+        expect(globalThis.dynamicSelfImportDefaultExportPassed).toBeTrue();
+    });
+
+    test("async parent modules execute in evaluation order", () => {
+        expectModulePassed("./async-evaluation-order.mjs");
     });
 
     test("import something which imports a cycle", () => {

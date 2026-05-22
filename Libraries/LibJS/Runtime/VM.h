@@ -84,6 +84,15 @@ public:
         return run_executable(context, executable, entry_point);
     }
 
+    void enter_module_execution() { ++m_module_execution_depth; }
+    void leave_module_execution()
+    {
+        VERIFY(m_module_execution_depth > 0);
+        --m_module_execution_depth;
+    }
+    [[nodiscard]] bool is_executing_module() const { return m_module_execution_depth > 0; }
+    u64 increment_module_async_evaluation_count() { return m_module_async_evaluation_count++; }
+
     ALWAYS_INLINE Value& accumulator() { return reg(Bytecode::Register::accumulator()); }
     Value& reg(Bytecode::Register const& r)
     {
@@ -103,7 +112,7 @@ public:
         m_running_execution_context->registers_and_constants_and_locals_and_arguments_span().data()[op.raw()] = value;
     }
 
-    Value do_yield(Value value, Optional<Bytecode::Label> continuation);
+    Value do_yield(Value value, Optional<Bytecode::Label> continuation, bool value_is_iterator_result = false);
     void do_return(Value value)
     {
         if (value.is_special_empty_value())
@@ -563,6 +572,9 @@ private:
     WellKnownSymbols m_well_known_symbols;
 
     u32 m_execution_generation { 0 };
+    u32 m_run_executable_depth { 0 };
+    u32 m_module_execution_depth { 0 };
+    u64 m_module_async_evaluation_count { 0 }; // [[ModuleAsyncEvaluationCount]]
 
     OwnPtr<Agent> m_agent;
 

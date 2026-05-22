@@ -44,6 +44,59 @@ test("functions in objects", () => {
     expect(o.c.name).toBe("");
 });
 
+test("computed property names infer anonymous function names", () => {
+    const namedSymbol = Symbol("named");
+    const emptySymbol = Symbol("");
+    const unnamedSymbol = Symbol();
+    const getterSymbol = Symbol("getter");
+    const setterSymbol = Symbol("");
+
+    const object = {
+        [1]: function () {},
+        [2]: class {},
+        [namedSymbol]: () => {},
+        [emptySymbol]: function* () {},
+        [unnamedSymbol]: async function () {},
+        [/a/]: function () {},
+        get [getterSymbol]() {},
+        set [setterSymbol](value) {},
+    };
+
+    expect(object[1].name).toBe("1");
+    expect(object[2].name).toBe("2");
+    expect(object[namedSymbol].name).toBe("[named]");
+    expect(object[emptySymbol].name).toBe("[]");
+    expect(object[unnamedSymbol].name).toBe("");
+    expect(object[/a/].name).toBe("/a/");
+    expect(Object.getOwnPropertyDescriptor(object, getterSymbol).get.name).toBe("get [getter]");
+    expect(Object.getOwnPropertyDescriptor(object, setterSymbol).set.name).toBe("set []");
+});
+
+test("computed property name inference does not leak between evaluations", () => {
+    function objectName(key) {
+        return { [key]: function () {} }[key].name;
+    }
+
+    function classMethodName(key) {
+        return new (class {
+            [key]() {}
+        })()[key].name;
+    }
+
+    expect(objectName("first")).toBe("first");
+    expect(objectName("second")).toBe("second");
+    expect(classMethodName("first")).toBe("first");
+    expect(classMethodName("second")).toBe("second");
+});
+
+test("computed property name inference only applies to anonymous definitions", () => {
+    const key = "computed";
+    const value = [function () {}][0];
+    const object = { [key]: value };
+
+    expect(object[key].name).toBe("");
+});
+
 test("names of native functions", () => {
     expect(console.debug.name).toBe("debug");
     expect((console.debug.name = "warn")).toBe("warn");
@@ -70,5 +123,23 @@ describe("some anonymous functions get renamed", () => {
     test("assignment via expression does not name", () => {
         let f4 = false || function () {};
         expect(f4.name).toBe("");
+    });
+
+    test("parenthesized assignment target does not name", () => {
+        let f5;
+        eval("(f5) = function () {};");
+        expect(f5.name).toBe("");
+
+        let f6;
+        eval("(f6) ??= function () {};");
+        expect(f6.name).toBe("");
+
+        let f7 = false;
+        eval("(f7) ||= function () {};");
+        expect(f7.name).toBe("");
+
+        let f8 = true;
+        eval("(f8) &&= function () {};");
+        expect(f8.name).toBe("");
     });
 });

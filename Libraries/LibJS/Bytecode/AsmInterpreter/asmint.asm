@@ -2177,9 +2177,8 @@ handler Call
     #    callee frame here and dispatch at pc = 0 of the callee bytecode.
     #    Cases that need function-environment allocation or sloppy primitive
     #    this-boxing can't stay in pure asm but also don't want the full
-    #    slow path (which would insert a run_executable() boundary and an
-    #    observable microtask drain), so they detour through the
-    #    asm_try_inline_call helper at .call_interp_inline.
+    #    slow path, so they detour through the asm_try_inline_call helper at
+    #    .call_interp_inline.
     #
     #  - RawNativeFunction: build a callee ExecutionContext here, call the
     #    stored C++ function pointer directly via call_raw_native, and then
@@ -2322,6 +2321,7 @@ handler Call
     mov scratch, EXECUTION_CONTEXT_NO_YIELD_CONTINUATION
     store32 [frame_base, EXECUTION_CONTEXT_YIELD_CONTINUATION], scratch
     store8 [frame_base, EXECUTION_CONTEXT_YIELD_IS_AWAIT], 0
+    store8 [frame_base, EXECUTION_CONTEXT_YIELD_VALUE_IS_ITERATOR_RESULT], 0
     store8 [frame_base, EXECUTION_CONTEXT_CALLER_IS_CONSTRUCT], 0
     store64 [frame_base, EXECUTION_CONTEXT_CALLER_FRAME], exec_ctx
     load_pair32 return_pc, return_dst, [pb, pc, m_length], [pb, pc, m_dst]
@@ -2405,9 +2405,8 @@ handler Call
     goto_handler pc
 .call_interp_inline:
     # Shared escape hatch for the cases that need C++ help to build the
-    # inline frame correctly but must not take the full Call slow path,
-    # since that would insert a run_executable() boundary and observable
-    # microtask drain.
+    # inline frame correctly but can still stay in the asm-managed inline-frame
+    # machinery.
     call_interp asm_try_inline_call, result
     branch_nonzero result, .call_slow
     load_vm vm_ptr
@@ -2508,6 +2507,7 @@ handler Call
     mov scratch, EXECUTION_CONTEXT_NO_YIELD_CONTINUATION
     store32 [frame_base, EXECUTION_CONTEXT_YIELD_CONTINUATION], scratch
     store8 [frame_base, EXECUTION_CONTEXT_YIELD_IS_AWAIT], 0
+    store8 [frame_base, EXECUTION_CONTEXT_YIELD_VALUE_IS_ITERATOR_RESULT], 0
     store8 [frame_base, EXECUTION_CONTEXT_CALLER_IS_CONSTRUCT], 0
 
     # While asm runs, the authoritative program counter lives in the `pc`
