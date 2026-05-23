@@ -1717,6 +1717,11 @@ void Element::removed_from(IsSubtreeRoot is_subtree_root, Node* old_ancestor, No
 {
     Base::removed_from(is_subtree_root, old_ancestor, old_root);
 
+    // https://html.spec.whatwg.org/multipage/dom.html#render-blocking-mechanism
+    // Whenever a render-blocking element el becomes browsing-context disconnected, unblock rendering on el.
+    if (old_root.is_connected() && document().is_render_blocking_element(*this))
+        unblock_rendering();
+
     if (m_id.has_value() && is<ShadowRoot>(old_root))
         static_cast<ShadowRoot&>(old_root).element_by_id().remove(*m_id, *this);
 
@@ -1942,6 +1947,8 @@ bool Element::has_synthetic_pseudo_elements() const
 void Element::clear_synthetic_pseudo_element_layout_nodes()
 {
     for_each_synthetic_pseudo_element([&](CSS::PseudoElement, SyntheticPseudoElement& pseudo_element) {
+        if (auto layout_node = pseudo_element.layout_node())
+            layout_node->prepare_subtree_for_detach_from_layout_tree();
         pseudo_element.set_layout_node(nullptr);
     });
 }
