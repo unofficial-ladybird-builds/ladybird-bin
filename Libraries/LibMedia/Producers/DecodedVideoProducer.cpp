@@ -258,16 +258,15 @@ void DecodedVideoProducer::ThreadData::seek(AK::Duration timestamp)
 {
     auto locker = take_lock();
     note_consumer_activity_while_locked();
-    m_seek_id++;
     m_current_halting_status = PipelineStatus::Pending;
     m_downstream_needs_wake = true;
 
     if (timestamp >= m_earliest_available_timestamp && timestamp < m_latest_available_timestamp) {
-        m_last_processed_seek_id = m_seek_id;
         dispatch_wake_if_needed_while_locked();
         return;
     }
 
+    m_seek_id++;
     m_seek_timestamp = timestamp;
     m_earliest_available_timestamp = timestamp;
     m_latest_available_timestamp = timestamp;
@@ -394,10 +393,12 @@ void DecodedVideoProducer::ThreadData::dispatch_error(DecoderError&& error)
 
 void DecodedVideoProducer::ThreadData::resolve_seek(u32 seek_id, bool moved_position)
 {
-    m_queue.clear();
     m_last_processed_seek_id = seek_id;
     VERIFY(m_current_halting_status != PipelineStatus::HaveData);
-    m_moved_position_pending = moved_position;
+    if (moved_position) {
+        m_moved_position_pending = true;
+        m_queue.clear();
+    }
 }
 
 bool DecodedVideoProducer::ThreadData::handle_seek()
