@@ -775,14 +775,77 @@ void Document::visit_edges(Cell::Visitor& visitor)
 
 String const& Document::content_blocker_style_sheet()
 {
-    if (!m_content_blocker_style_sheet.has_value())
-        m_content_blocker_style_sheet = ContentBlocker::the().cosmetic_style_sheet_for_document(*this);
+    if (is_decoded_svg()) {
+        if (!m_content_blocker_style_sheet.has_value())
+            m_content_blocker_style_sheet = String {};
+        return m_content_blocker_style_sheet.value();
+    }
+
+    if (!m_content_blocker_style_sheet.has_value()) {
+        m_content_blocker_style_sheet_checked_classes.clear();
+        m_content_blocker_style_sheet_checked_ids.clear();
+
+        Vector<String> classes;
+        Vector<String> ids;
+        for_each_shadow_including_descendant([&](DOM::Node& node) {
+            auto* element = as_if<DOM::Element>(node);
+            if (!element)
+                return TraversalDecision::Continue;
+
+            if (auto const& id = element->id(); id.has_value()) {
+                auto id_string = id->to_string();
+                if (!id_string.is_empty() && m_content_blocker_style_sheet_checked_ids.set(*id) == AK::HashSetResult::InsertedNewEntry)
+                    ids.append(move(id_string));
+            }
+
+            for (auto const& class_name : element->class_names()) {
+                auto class_string = class_name.to_string();
+                if (!class_string.is_empty() && m_content_blocker_style_sheet_checked_classes.set(class_name) == AK::HashSetResult::InsertedNewEntry)
+                    classes.append(move(class_string));
+            }
+
+            return TraversalDecision::Continue;
+        });
+
+        m_content_blocker_style_sheet = ContentBlocker::the().cosmetic_style_sheet_for_url(fallback_base_url(), classes, ids);
+    }
+
     return m_content_blocker_style_sheet.value();
 }
 
 void Document::invalidate_content_blocker_style_sheet()
 {
     m_content_blocker_style_sheet.clear();
+    m_content_blocker_style_sheet_checked_classes.clear();
+    m_content_blocker_style_sheet_checked_ids.clear();
+}
+
+bool Document::content_blocker_style_sheet_may_need_refresh_for_class_or_id(FlyString const* id, ReadonlySpan<FlyString> class_names)
+{
+    if (is_decoded_svg())
+        return false;
+
+    if (!m_content_blocker_style_sheet.has_value())
+        return false;
+
+    Vector<String> classes_to_check;
+    Vector<String> ids_to_check;
+    auto append_new_token = [](FlyString const& token, HashTable<FlyString>& checked_tokens, Vector<String>& tokens_to_check) {
+        auto token_string = token.to_string();
+        if (!token_string.is_empty() && checked_tokens.set(token) == AK::HashSetResult::InsertedNewEntry)
+            tokens_to_check.append(move(token_string));
+    };
+
+    if (id)
+        append_new_token(*id, m_content_blocker_style_sheet_checked_ids, ids_to_check);
+
+    for (auto const& class_name : class_names)
+        append_new_token(class_name, m_content_blocker_style_sheet_checked_classes, classes_to_check);
+
+    if (classes_to_check.is_empty() && ids_to_check.is_empty())
+        return false;
+
+    return ContentBlocker::the().has_generic_cosmetic_selectors_for_url(fallback_base_url(), classes_to_check, ids_to_check);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -7950,7 +8013,7 @@ void Document::parse_html_from_a_string(StringView html)
     // 3. Place html into the input stream for parser. The encoding confidence is irrelevant.
     // FIXME: We don't have the concept of encoding confidence yet.
     auto scripting_mode = is_scripting_enabled() ? HTML::ParserScriptingMode::Normal : HTML::ParserScriptingMode::Disabled;
-    auto parser = HTML::HTMLParser::create(*this, html, scripting_mode, "UTF-8"sv);
+    auto parser = HTML::HTMLParser::create_for_decoded_string(*this, html, scripting_mode, "UTF-8"sv);
 
     // 4. Start parser and let it run until it has consumed all the characters just inserted into the input stream.
     parser->run(as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document().url());
