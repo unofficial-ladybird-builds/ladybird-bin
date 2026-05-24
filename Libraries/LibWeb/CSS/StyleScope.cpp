@@ -125,7 +125,7 @@ void StyleScope::build_rule_cache()
             constructed_style_sheet = style_sheet;
         });
 
-        if (constructed_style_sheet && !saw_more_than_one_style_sheet && constructed_style_sheet->constructed() && !document().page().user_style().has_value() && !ContentBlocker::the().has_cosmetic_rules()) {
+        if (constructed_style_sheet && !saw_more_than_one_style_sheet && constructed_style_sheet->constructed() && !document().page().user_style().has_value()) {
             m_rule_cache = constructed_style_sheet->shared_single_constructed_sheet_style_cache(*this);
             return;
         }
@@ -170,8 +170,11 @@ void StyleScope::build_user_style_sheet_if_needed()
     if (m_user_style_sheet)
         return;
 
+    if (!is<DOM::Document>(*m_node))
+        return;
+
     auto user_style_source = document().page().user_style();
-    auto content_blocker_style_source = ContentBlocker::the().cosmetic_style_sheet_for_document(document());
+    auto const& content_blocker_style_source = document().content_blocker_style_sheet();
     if (!user_style_source.has_value() && content_blocker_style_source.is_empty())
         return;
 
@@ -511,6 +514,9 @@ void StyleScope::collect_selector_insights(Selector const& selector, SelectorIns
     for (auto const& compound_selector : selector.compound_selectors()) {
         for (auto const& simple_selector : compound_selector.simple_selectors) {
             if (simple_selector.type == Selector::SimpleSelector::Type::PseudoClass) {
+                insights.pseudo_classes.set(simple_selector.pseudo_class().type, true);
+                if (simple_selector.pseudo_class().type == PseudoClass::LocalLink)
+                    insights.has_local_link_selectors = true;
                 if (simple_selector.pseudo_class().type == PseudoClass::Has) {
                     insights.has_has_selectors = true;
                     for (auto const& argument_selector : simple_selector.pseudo_class().argument_selector_list) {
@@ -915,11 +921,39 @@ void StyleScope::build_counter_style_cache()
 
 bool StyleScope::may_have_has_selectors() const
 {
-    if (!has_valid_rule_cache())
-        return true;
+    if (!has_valid_rule_cache()) {
+        bool may_have_has_selectors = false;
+        for (auto cascade_origin : { CascadeOrigin::Author, CascadeOrigin::User, CascadeOrigin::UserAgent }) {
+            for_each_stylesheet(cascade_origin, [&](auto& style_sheet) {
+                if (style_sheet.selector_insights().has_has_selectors)
+                    may_have_has_selectors = true;
+            });
+        }
+        return may_have_has_selectors;
+    }
 
     build_rule_cache_if_needed();
     return m_rule_cache->selector_insights.has_has_selectors;
+}
+
+bool StyleScope::may_have_user_has_selectors() const
+{
+    bool may_have_user_has_selectors = false;
+    for_each_stylesheet(CascadeOrigin::User, [&](auto& style_sheet) {
+        if (style_sheet.selector_insights().has_has_selectors)
+            may_have_user_has_selectors = true;
+    });
+    return may_have_user_has_selectors;
+}
+
+bool StyleScope::may_have_user_pseudo_class_selectors(PseudoClass pseudo_class) const
+{
+    bool may_have_user_pseudo_class_selectors = false;
+    for_each_stylesheet(CascadeOrigin::User, [&](auto& style_sheet) {
+        if (style_sheet.selector_insights().pseudo_classes.get(pseudo_class))
+            may_have_user_pseudo_class_selectors = true;
+    });
+    return may_have_user_pseudo_class_selectors;
 }
 
 bool StyleScope::have_has_selectors() const
@@ -930,8 +964,16 @@ bool StyleScope::have_has_selectors() const
 
 bool StyleScope::may_have_has_selectors_with_relative_selector_that_has_sibling_combinator() const
 {
-    if (!has_valid_rule_cache())
-        return true;
+    if (!has_valid_rule_cache()) {
+        bool may_have_has_selectors_with_relative_selector_that_has_sibling_combinator = false;
+        for (auto cascade_origin : { CascadeOrigin::Author, CascadeOrigin::User, CascadeOrigin::UserAgent }) {
+            for_each_stylesheet(cascade_origin, [&](auto& style_sheet) {
+                if (style_sheet.selector_insights().has_has_selectors_with_relative_selector_that_has_sibling_combinator)
+                    may_have_has_selectors_with_relative_selector_that_has_sibling_combinator = true;
+            });
+        }
+        return may_have_has_selectors_with_relative_selector_that_has_sibling_combinator;
+    }
 
     build_rule_cache_if_needed();
     return m_rule_cache->selector_insights.has_has_selectors_with_relative_selector_that_has_sibling_combinator;

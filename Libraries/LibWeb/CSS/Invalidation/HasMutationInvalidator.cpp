@@ -13,6 +13,7 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Node.h>
+#include <LibWeb/DOM/ShadowRoot.h>
 
 namespace Web::CSS::Invalidation {
 
@@ -328,13 +329,16 @@ static void invalidate_style_of_elements_affected_by_pending_has_mutations(Style
         style_scope.m_pending_has_invalidations.clear();
     };
 
+    auto& counters = style_scope.document().style_invalidation_counters();
+    if (!style_scope.has_valid_rule_cache())
+        ++counters.has_invalidation_rule_cache_builds;
+
     // It's ok to call have_has_selectors() instead of may_have_has_selectors() here and force
     // rule cache build, because it's going to be built soon anyway, since we could get here
     // only from update_style().
     if (!style_scope.have_has_selectors())
         return;
 
-    auto& counters = style_scope.document().style_invalidation_counters();
     ++counters.has_ancestor_walk_invocations;
 
     GC::RootHashTable<GC::Ref<DOM::Element>> elements_already_invalidated_for_has;
@@ -409,6 +413,16 @@ void invalidate_style_for_pending_has_mutations(DOM::Document& document)
 {
     invalidate_style_of_elements_affected_by_pending_has_mutations(document.style_scope());
     document.for_each_shadow_root([&](auto& shadow_root) {
+        bool has_active_style_sheets = false;
+        shadow_root.for_each_active_css_style_sheet([&](auto&) {
+            has_active_style_sheets = true;
+        });
+        if (!has_active_style_sheets) {
+            // Without shadow stylesheets, this scope cannot contain :has() selectors.
+            // Document-level user rules are handled by the document style scope above.
+            shadow_root.style_scope().m_pending_has_invalidations.clear();
+            return;
+        }
         invalidate_style_of_elements_affected_by_pending_has_mutations(shadow_root.style_scope());
     });
 }
@@ -445,6 +459,31 @@ static void schedule_has_invalidation_for_child_list_mutation(DOM::Node& parent,
         invalidate_children_affected_by_has_sibling_combinators(parent);
 }
 
+static void schedule_has_invalidation_for_node_in_scope(DOM::Node& node, StyleScope& style_scope)
+{
+    if (!style_scope.may_have_has_selectors())
+        return;
+
+    style_scope.record_pending_has_invalidation_mutation_features(node, node, false);
+    style_scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(node);
+}
+
+static void schedule_document_user_has_invalidation_for_shadow_node(DOM::Node& node, StyleScope& node_style_scope)
+{
+    if (!is<DOM::ShadowRoot>(node.root()))
+        return;
+
+    auto& document_style_scope = node.document().style_scope();
+    if (&node_style_scope == &document_style_scope)
+        return;
+
+    if (!document_style_scope.may_have_user_has_selectors())
+        return;
+
+    document_style_scope.record_pending_has_invalidation_mutation_features(node, node, false);
+    document_style_scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(node);
+}
+
 void schedule_has_invalidation_for_node(DOM::Node& node, DOM::StyleInvalidationReason reason)
 {
     auto is_child_list_mutation = reason == DOM::StyleInvalidationReason::NodeRemove
@@ -467,11 +506,12 @@ void schedule_has_invalidation_for_node(DOM::Node& node, DOM::StyleInvalidationR
         return;
     }
 
-    auto& style_scope = node.style_scope();
-    if (!style_scope.may_have_has_selectors() || !reason_may_affect_has_selectors(reason))
+    if (!reason_may_affect_has_selectors(reason))
         return;
-    style_scope.record_pending_has_invalidation_mutation_features(node, node, false);
-    style_scope.schedule_ancestors_style_invalidation_due_to_presence_of_has(node);
+
+    auto& style_scope = node.style_scope();
+    schedule_has_invalidation_for_node_in_scope(node, style_scope);
+    schedule_document_user_has_invalidation_for_shadow_node(node, style_scope);
 }
 
 void schedule_has_invalidation_for_same_parent_move(DOM::Node& node)

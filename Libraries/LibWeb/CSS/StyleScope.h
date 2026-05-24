@@ -20,6 +20,7 @@
 #include <LibWeb/CSS/CounterStyle.h>
 #include <LibWeb/CSS/InvalidationSet.h>
 #include <LibWeb/CSS/Selector.h>
+#include <LibWeb/CSS/SelectorInsights.h>
 #include <LibWeb/CSS/StyleInvalidationData.h>
 #include <LibWeb/Forward.h>
 
@@ -75,11 +76,6 @@ struct RuleCaches {
     HashMap<FlyString, NonnullOwnPtr<RuleCache>> by_layer;
 
     void visit_edges(GC::Cell::Visitor&);
-};
-
-struct SelectorInsights {
-    bool has_has_selectors { false };
-    bool has_has_selectors_with_relative_selector_that_has_sibling_combinator { false };
 };
 
 struct StyleCache : public RefCounted<StyleCache> {
@@ -139,6 +135,8 @@ public:
     void build_qualified_layer_names_cache(StyleCache&);
 
     [[nodiscard]] bool may_have_has_selectors() const;
+    [[nodiscard]] bool may_have_user_has_selectors() const;
+    [[nodiscard]] bool may_have_user_pseudo_class_selectors(PseudoClass) const;
     [[nodiscard]] bool have_has_selectors() const;
     [[nodiscard]] bool may_have_has_selectors_with_relative_selector_that_has_sibling_combinator() const;
     [[nodiscard]] bool have_has_selectors_with_relative_selector_that_has_sibling_combinator() const;
