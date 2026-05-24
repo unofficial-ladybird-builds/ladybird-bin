@@ -169,7 +169,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     bool disable_http_memory_cache = false;
     bool disable_http_disk_cache = false;
     bool disable_content_blocker = false;
-    bool enable_compositor_process = false;
+    bool disable_compositor_process = false;
     Vector<StringView> content_blocker_list_paths;
     Optional<StringView> resource_substitution_map_path;
     bool enable_autoplay = false;
@@ -244,7 +244,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     args_parser.add_option(disable_http_memory_cache, "Disable HTTP memory cache", "disable-http-memory-cache");
     args_parser.add_option(disable_http_disk_cache, "Disable HTTP disk cache", "disable-http-disk-cache");
     args_parser.add_option(disable_content_blocker, "Disable content blocker", "disable-content-blocker");
-    args_parser.add_option(enable_compositor_process, "Enable the out-of-process compositor", "enable-compositor-process");
+    args_parser.add_option(disable_compositor_process, "Disable the out-of-process compositor", "disable-compositor-process");
     args_parser.add_option(Core::ArgsParser::Option {
         .argument_mode = Core::ArgsParser::OptionArgumentMode::Required,
         .help_string = "Path to a content blocker list. May be specified multiple times.",
@@ -333,8 +333,16 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     if (profile_process.has_value())
         profile_process_type = process_type_from_name(*profile_process);
 
+    auto configured_content_blocker_list_paths = m_settings.config_variable_as_string_array(ConfigVariableID::ContentBlockerListPaths);
+
     Vector<ByteString> content_blocker_list_paths_as_byte_strings;
-    TRY(content_blocker_list_paths_as_byte_strings.try_ensure_capacity(content_blocker_list_paths.size()));
+    TRY(content_blocker_list_paths_as_byte_strings.try_ensure_capacity(configured_content_blocker_list_paths.size() + content_blocker_list_paths.size()));
+    for (auto const& path : configured_content_blocker_list_paths) {
+        if (path.is_empty())
+            continue;
+
+        content_blocker_list_paths_as_byte_strings.unchecked_append(path.to_byte_string());
+    }
     for (auto path : content_blocker_list_paths)
         content_blocker_list_paths_as_byte_strings.unchecked_append(path);
 
@@ -360,7 +368,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
                 : OptionalNone()),
         .devtools_port = devtools_port,
         .enable_content_blocker = disable_content_blocker ? EnableContentBlocker::No : EnableContentBlocker::Yes,
-        .enable_compositor_process = enable_compositor_process ? EnableCompositorProcess::Yes : EnableCompositorProcess::No,
+        .enable_compositor_process = disable_compositor_process ? EnableCompositorProcess::No : EnableCompositorProcess::Yes,
         .content_blocker_list_paths = move(content_blocker_list_paths_as_byte_strings),
     };
 

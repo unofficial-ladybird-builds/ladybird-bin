@@ -154,8 +154,6 @@ public:
     DisplayListRecorder(DisplayList&, DisplayListResourceStorage&);
     ~DisplayListRecorder();
 
-    DisplayList& display_list() { return m_display_list; }
-    DisplayList const& display_list() const { return m_display_list; }
     DisplayListResourceStorage& resource_storage() { return m_resource_storage; }
 
     int m_save_nesting_level { 0 };
@@ -171,7 +169,6 @@ private:
     }
 
     VisualContextIndex m_accumulated_visual_context_index {};
-    Vector<size_t> m_push_sc_index_stack;
     DisplayList& m_display_list;
     DisplayListResourceStorage& m_resource_storage;
     bool m_is_capturing { false };
