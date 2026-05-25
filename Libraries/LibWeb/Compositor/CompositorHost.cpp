@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibCore/Timer.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibWeb/Compositor/CompositorHost.h>
 #include <LibWeb/Painting/DisplayList.h>
@@ -15,15 +14,10 @@ CompositorContextHandle::CompositorContextHandle(CompositorHost& host, Composito
     : m_host(host)
     , m_context_id(context_id)
 {
-    m_backing_store_shrink_timer = Core::Timer::create_single_shot(3000, [this] {
-        m_host.viewport_size_updated(m_context_id, m_last_viewport_size, m_last_viewport_size_is_top_level_traversable, WindowResizingInProgress::No);
-    });
 }
 
 CompositorContextHandle::~CompositorContextHandle()
 {
-    m_backing_store_shrink_timer->on_timeout = {};
-    m_backing_store_shrink_timer->stop();
     m_host.destroy_context(m_context_id);
 }
 
@@ -78,11 +72,6 @@ AsyncScrollEnqueueResult CompositorContextHandle::async_scroll_by(UniqueNodeID e
     return m_host.async_scroll_by(m_context_id, expected_document_id, position, delta_in_device_pixels, viewport_rect, operation_tracking);
 }
 
-bool CompositorContextHandle::should_defer_async_scroll_offset_adoption() const
-{
-    return m_host.should_defer_async_scroll_offset_adoption(m_context_id);
-}
-
 bool CompositorContextHandle::should_defer_main_thread_present_for_async_scroll() const
 {
     return m_host.should_defer_main_thread_present_for_async_scroll(m_context_id);
@@ -95,10 +84,6 @@ PendingAsyncScrollUpdates CompositorContextHandle::take_pending_async_scroll_upd
 
 void CompositorContextHandle::viewport_size_updated(Gfx::IntSize viewport_size, bool is_top_level_traversable, WindowResizingInProgress window_resize_in_progress)
 {
-    m_last_viewport_size = viewport_size;
-    m_last_viewport_size_is_top_level_traversable = is_top_level_traversable;
-    if (window_resize_in_progress == WindowResizingInProgress::Yes)
-        m_backing_store_shrink_timer->restart();
     m_host.viewport_size_updated(m_context_id, viewport_size, is_top_level_traversable, window_resize_in_progress);
 }
 
@@ -114,9 +99,8 @@ void CompositorContextHandle::request_screenshot(NonnullRefPtr<Gfx::PaintingSurf
 
 CompositorHost::~CompositorHost() = default;
 
-OwnPtr<CompositorContextHandle> CompositorHost::create_context(CompositorContextId context_id, Optional<u64> page_id, PagePresentationRegistration page_presentation_registration)
+OwnPtr<CompositorContextHandle> CompositorHost::create_context(CompositorContextId context_id)
 {
-    register_context(context_id, page_id, page_presentation_registration);
     return adopt_own(*new CompositorContextHandle(*this, context_id));
 }
 

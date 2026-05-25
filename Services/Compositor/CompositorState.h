@@ -12,6 +12,8 @@
 #include <AK/OwnPtr.h>
 #include <AK/RefCounted.h>
 #include <AK/Vector.h>
+#include <Compositor/BackingStoreManager.h>
+#include <LibCore/Forward.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibGfx/Point.h>
 #include <LibGfx/Rect.h>
@@ -22,7 +24,6 @@
 #include <LibMedia/Forward.h>
 #include <LibWeb/Compositor/AsyncScrollTree.h>
 #include <LibWeb/Compositor/AsyncScrollingState.h>
-#include <LibWeb/Compositor/BackingStoreManager.h>
 #include <LibWeb/Compositor/Types.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Painting/DisplayList.h>
@@ -102,6 +103,8 @@ private:
     };
 
     struct ContextState {
+        ~ContextState();
+
         struct PublishedSurface {
             Web::Compositor::CompositorContextId parent_context_id;
             Web::Painting::CompositorSurfaceId surface_id;
@@ -120,7 +123,7 @@ private:
         RefPtr<Web::Painting::DisplayList> display_list;
         Web::Painting::DisplayListResourceStorage display_list_resource_storage;
         Web::Painting::ScrollStateSnapshot scroll_state_snapshot;
-        Web::Compositor::BackingStoreManager backing_store_manager;
+        BackingStoreManager backing_store_manager;
 
         Web::Compositor::AsyncScrollTree async_scroll_tree;
         Vector<Web::Compositor::ViewportScrollbar> viewport_scrollbars;
@@ -140,12 +143,15 @@ private:
         Gfx::IntSize viewport_size;
         bool is_top_level_traversable { false };
         Web::Compositor::WindowResizingInProgress window_resize_in_progress { Web::Compositor::WindowResizingInProgress::No };
+        RefPtr<Core::Timer> backing_store_shrink_timer;
 
         Optional<Gfx::IntRect> pending_present_frame;
         Optional<Gfx::IntRect> presented_frame;
         Optional<i32> presented_bitmap_id_awaiting_ack;
         bool has_deferred_async_scroll_present { false };
         Gfx::IntRect deferred_async_scroll_present_viewport_rect;
+
+        void stop_backing_store_shrink_timer();
     };
 
     ContextState* context_if_present(Web::Compositor::CompositorContextId);
@@ -164,11 +170,13 @@ private:
     bool apply_viewport_scrollbar_drag(Web::Compositor::CompositorContextId, ContextState&, size_t scrollbar_index, float primary_position, float thumb_grab_position);
     void present_viewport_scrollbar_overlay(Web::Compositor::CompositorContextId, ContextState&);
     bool paint_viewport_scrollbar_overlay(ContextState&, Gfx::PaintingSurface&);
+    void schedule_backing_store_shrink(Web::Compositor::CompositorContextId, ContextState&);
+    void shrink_backing_stores_after_resize(Web::Compositor::CompositorContextId);
     void resize_backing_stores_if_needed(Web::Compositor::CompositorContextId, ContextState&);
     void present_current_frame(Web::Compositor::CompositorContextId, ContextState&);
     void publish_to_parent_surface(ContextState&, Web::Compositor::PublishToCompositorSurface const&);
     void present_frame(Web::Compositor::CompositorContextId, ContextState&, Gfx::IntRect);
-    void publish_backing_stores(Web::Compositor::CompositorContextId, ContextState&, Web::Compositor::BackingStoreManager::Publication&&);
+    void publish_backing_stores(Web::Compositor::CompositorContextId, ContextState&, BackingStoreManager::Publication&&);
     bool present_frame_to_client(Web::Compositor::CompositorContextId, ContextState&, Gfx::IntRect const&, i32 bitmap_id);
 
     HashMap<Web::Compositor::CompositorContextId, OwnPtr<ContextState>> m_contexts;

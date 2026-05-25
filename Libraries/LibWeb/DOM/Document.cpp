@@ -74,7 +74,6 @@
 #include <LibWeb/CSS/SystemColor.h>
 #include <LibWeb/CSS/TransitionEvent.h>
 #include <LibWeb/CSS/VisualViewport.h>
-#include <LibWeb/Compositor/AsyncScrollingState.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/ContentSecurityPolicy/PolicyList.h>
@@ -1379,6 +1378,17 @@ Color Document::background_color() const
     // By default, the document is transparent.
     // The outermost canvas is colored by the PageHost.
     return Color::Transparent;
+}
+
+Color Document::canvas_background_color() const
+{
+    auto color_scheme = CSS::PreferredColorScheme::Light;
+    if (auto* html_element = this->html_element(); html_element && html_element->layout_node()) {
+        if (html_element->layout_node()->computed_values().color_scheme() == CSS::PreferredColorScheme::Dark)
+            color_scheme = CSS::PreferredColorScheme::Dark;
+    }
+
+    return CSS::SystemColor::canvas(color_scheme).blend(background_color());
 }
 
 Vector<CSS::BackgroundLayerData> const* Document::background_layers() const
@@ -4420,6 +4430,9 @@ void Document::update_the_visibility_state(HTML::VisibilityState visibility_stat
     auto event = DOM::Event::create(realm(), HTML::EventNames::visibilitychange);
     event->set_bubbles(true);
     dispatch_event(event);
+
+    if (m_visibility_state == HTML::VisibilityState::Visible)
+        page().client().request_frame();
 }
 
 // https://drafts.csswg.org/cssom-view/#document-run-the-resize-steps
@@ -8209,7 +8222,11 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
     if (opaque_canvas)
         display_list_recorder.fill_rect(bitmap_rect, CSS::SystemColor::canvas(color_scheme));
 
-    display_list_recorder.fill_rect(bitmap_rect, background_color());
+    auto background_color = this->background_color();
+    if (navigable()->is_top_level_traversable())
+        page().client().page_did_change_background_color(canvas_background_color());
+
+    display_list_recorder.fill_rect(bitmap_rect, background_color);
 
     Web::DisplayListRecordingContext context(display_list_recorder, page().palette(), page().client().device_pixels_per_css_pixel(), page().chrome_metrics());
     context.set_device_viewport_rect(viewport_rect);
@@ -8218,10 +8235,10 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
 
     auto& viewport_paintable = *paintable();
     viewport_paintable.refresh_scroll_state();
-    Compositor::initialize_async_scrolling_metadata_recording(context, viewport_paintable);
+    viewport_paintable.initialize_async_scrolling_metadata_recording(context);
 
     viewport_paintable.paint_all_phases(context);
-    Compositor::finalize_async_scrolling_metadata_recording(context, *navigable(), viewport_rect.to_type<int>());
+    viewport_paintable.finalize_async_scrolling_metadata_recording(context, *navigable(), viewport_rect.to_type<int>());
 
     if (highlighted_node() && highlighted_node()->paintable()) {
         highlighted_node()->paintable()->paint_inspector_overlay(context);

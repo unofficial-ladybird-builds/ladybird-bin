@@ -13,12 +13,9 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/OwnPtr.h>
 #include <LibGC/Root.h>
-#include <LibIPC/Forward.h>
 #include <WebContent/Forward.h>
 
 namespace Web {
-
-enum class DisplayListPlayerType;
 
 namespace Compositor {
 
@@ -43,8 +40,7 @@ public:
     void remove_page(Badge<PageClient>, u64 index);
 
     ConnectionFromClient& client() const { return m_client; }
-    void ensure_compositor_host(Web::DisplayListPlayerType);
-    void attach_compositor_ui_client(IPC::TransportHandle);
+    void ensure_compositor_host();
     void compositor_process_reconnected();
     Web::Compositor::CompositorHost* compositor_host() { return m_compositor_host.ptr(); }
     Web::Compositor::CompositorHost const* compositor_host() const { return m_compositor_host.ptr(); }

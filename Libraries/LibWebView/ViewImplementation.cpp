@@ -672,6 +672,13 @@ void ViewImplementation::did_update_navigation_buttons_state(Badge<WebContentCli
     m_navigate_forward_action->set_enabled(forward_enabled);
 }
 
+void ViewImplementation::did_change_background_color(Badge<WebContentClient>, Gfx::Color color)
+{
+    m_page_background_color = color;
+    if (on_page_background_color_change)
+        on_page_background_color_change(color);
+}
+
 void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::SharedImage front_backing_store, i32 back_bitmap_id, Gfx::SharedImage back_backing_store)
 {
     dbgln_if(COMPOSITOR_DEBUG, "[Compositor] UI installing backing stores for page {} front={} back={} had_usable_bitmap={}",
@@ -720,8 +727,7 @@ void ViewImplementation::apply_zoom_for_current_host()
 void ViewImplementation::handle_resize()
 {
     client().async_set_viewport(page_id(), viewport_size(), m_device_pixel_ratio, m_is_fullscreen);
-    if (Application::the().should_use_compositor_process())
-        Application::the().update_compositor_viewport(client().compositor_context_id_for_page(page_id()), viewport_size().to_type<int>());
+    Application::the().update_compositor_viewport(client().compositor_context_id_for_page(page_id()), viewport_size().to_type<int>());
 }
 
 void ViewImplementation::initialize_client(CreateNewClient create_new_client)
@@ -741,10 +747,8 @@ void ViewImplementation::initialize_client(CreateNewClient create_new_client)
     client().async_set_viewport(m_client_state.page_index, viewport_size(), m_device_pixel_ratio, m_is_fullscreen);
     client().async_set_maximum_frames_per_second(m_client_state.page_index, m_maximum_frames_per_second);
     client().async_set_system_visibility_state(m_client_state.page_index, m_system_visibility_state);
-    if (Application::the().should_use_compositor_process()) {
-        auto compositor_context_id = client().compositor_context_id_for_page(m_client_state.page_index);
-        Application::the().update_compositor_viewport(compositor_context_id, viewport_size().to_type<int>());
-    }
+    auto compositor_context_id = client().compositor_context_id_for_page(m_client_state.page_index);
+    Application::the().update_compositor_viewport(compositor_context_id, viewport_size().to_type<int>());
     client().async_set_document_cookie_version_buffer(m_client_state.page_index, m_document_cookie_version_buffer);
 
     if (auto webdriver_endpoint = Application::browser_options().webdriver_endpoint; webdriver_endpoint.has_value())
