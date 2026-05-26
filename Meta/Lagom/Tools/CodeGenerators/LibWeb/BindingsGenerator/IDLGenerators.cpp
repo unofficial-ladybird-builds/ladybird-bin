@@ -640,6 +640,11 @@ static CppType cpp_type_for_dictionary_member(Context const& context, Dictionary
     return cpp_type_for_idl_type(context, *member.type, dictionary_member_presence(member), member.extended_attributes);
 }
 
+static bool dictionary_member_uses_optional(Context const& context, DictionaryMember const& member)
+{
+    return cpp_type_for_dictionary_member(context, member).is_optional_presence;
+}
+
 static bool dictionary_needs_builder_for_default_construction(Context const& context, ByteString const& dictionary_name)
 {
     auto dictionary = context.dictionaries.find(dictionary_name);
@@ -2140,33 +2145,31 @@ static void generate_sequence_from_iterable(SourceGenerator& generator, IDL::Par
     sequence_generator.set("sequence.type", sequence_cpp_type.name);
     sequence_generator.set("sequence.storage_type", contained_storage_type_to_cpp_name(sequence_cpp_type.contained_storage_type));
 
-    // To create an IDL value of type sequence<T> given an iterable iterable and an iterator getter method, perform the following steps:
-    // 1. Let iter be ? GetIterator(iterable, sync, method).
-    // 2. Initialize i to be 0.
-    // 3. Repeat
-    //      1. Let next be ? IteratorStep(iter).
-    //      2. If next is false, then return an IDL sequence value of type sequence<T> of length i, where the value of the element at index j is Sj.
-    //      3. Let nextItem be ? IteratorValue(next).
-    //      4. Initialize Si to the result of converting nextItem to an IDL value of type T.
-    //      5. Set i to i + 1.
-
-    // FIXME: The WebIDL spec is out of date - it should be using GetIteratorFromMethod.
     sequence_generator.append(R"~~~(
+    // To create an IDL value of type sequence<T> given an iterable iterable and an iterator getter method, perform the following steps:
+    // 1. Let iteratorRecord be ? GetIteratorFromMethod(iterable, method).
     auto @iterable_cpp_name@_iterator@recursion_depth@ = TRY(JS::get_iterator_from_method(vm, @iterable_cpp_name@, *@iterator_method_cpp_name@));
 
     @sequence.storage_type@<@sequence.type@> @cpp_name@;
 
+    // 2. Initialize i to be 0.
+    // 3. Repeat
     for (;;) {
-        auto next@recursion_depth@ = TRY(JS::iterator_step(vm, @iterable_cpp_name@_iterator@recursion_depth@));
-        if (!next@recursion_depth@.has<JS::IterationResult>())
+        // 1. Let next be ? IteratorStepValue(iteratorRecord).
+        auto next@recursion_depth@ = TRY(JS::iterator_step_value(vm, @iterable_cpp_name@_iterator@recursion_depth@));
+
+        // 2. If next is done, then return an IDL sequence value of type sequence<T> of length i, where the value of the element at index j is Sj.
+        if (!next@recursion_depth@.has_value())
             break;
 
-        auto next_item@recursion_depth@ = TRY(next@recursion_depth@.get<JS::IterationResult>().value);
+        // 3. Initialize Si to the result of converting next to an IDL value of type T.
+        // 4. Set i to i + 1.
+        auto next_value@recursion_depth@ = next@recursion_depth@.release_value();
 )~~~");
 
     // FIXME: Sequences types should be TypeWithExtendedAttributes, which would allow us to get [LegacyNullToEmptyString] here.
     IDL::Parameter parameter { .type = type.parameters().first(), .name = iterable_cpp_name, .optional_default_value = {}, .extended_attributes = {} };
-    generate_to_cpp(sequence_generator, parameter, "next_item", ByteString::number(recursion_depth), ByteString::formatted("sequence_item{}", recursion_depth), context, includes, false, {}, false, recursion_depth, TypeOptionality::OptionalArgument);
+    generate_to_cpp(sequence_generator, parameter, "next_value", ByteString::number(recursion_depth), ByteString::formatted("sequence_item{}", recursion_depth), context, includes, false, {}, false, recursion_depth, TypeOptionality::OptionalArgument);
 
     sequence_generator.append(R"~~~(
     @cpp_name@.append(sequence_item@recursion_depth@);
@@ -2241,11 +2244,8 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
 
     if (type.is_string()) {
         if (type.is_nullable() || is_optional) {
-            // FIXME: Ideally we would not need to do this const_cast, but we currently rely on temporary
-            //        lifetime extension to allow Variants to compile and handle an interface returning a
-            //        GC::Ref while the generated code will visit it as a GC::Root.
             scoped_generator.append(R"~~~(
-    @result_expression@ JS::PrimitiveString::create(vm, const_cast<decltype(@value@)&>(@value@).release_value());
+    @result_expression@ JS::PrimitiveString::create(vm, @value@.value());
 )~~~");
         } else {
             scoped_generator.append(R"~~~(
@@ -2474,16 +2474,8 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
                 auto wrapped_value_name = ByteString::formatted("wrapped_{}", member_value_js_name);
                 dictionary_generator.set("wrapped_value_name", wrapped_value_name);
 
-                // NOTE: This has similar semantics as 'required' in WebIDL. However, the spec does not put 'required' on
-                //       _returned_ dictionary members since with the way the spec is worded it has no normative effect to
-                //      do so. We could implement this without the 'GenerateAsRequired' extended attribute, but it would require
-                //      the generated code to do some metaprogramming to inspect the type of the member in the C++ struct to
-                //      determine whether the type is present or not (e.g through a has_value() on an Optional<T>, or a null
-                //      check on a GC::Ptr<T>). So to save some complexity in the generator, give ourselves a hint of what to do.
-                auto member_cpp_type = cpp_type_for_dictionary_member(context, member);
-                bool is_optional_storage = member_cpp_type.is_optional_presence;
-                bool is_optional_property = is_optional_storage && !member.extended_attributes.contains("GenerateAsRequired");
-                if (is_optional_storage) {
+                bool is_optional = dictionary_member_uses_optional(context, member);
+                if (is_optional) {
                     dictionary_generator.append(R"~~~(
         Optional<JS::Value> @wrapped_value_name@;
 )~~~");
@@ -2494,23 +2486,13 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
                 }
 
                 next_iteration_index++;
-                generate_wrap_statement(dictionary_generator, ByteString::formatted("{}{}{}", value_non_optional, type.is_nullable() ? "->" : ".", member.name.to_snakecase()), member.type, context, includes, ByteString::formatted("{} =", wrapped_value_name), recursion_depth + 1, is_optional_storage, next_iteration_index);
+                generate_wrap_statement(dictionary_generator, ByteString::formatted("{}{}{}", value_non_optional, type.is_nullable() ? "->" : ".", member.name.to_snakecase()), member.type, context, includes, ByteString::formatted("{} =", wrapped_value_name), recursion_depth + 1, is_optional, next_iteration_index);
 
-                if (is_optional_property) {
+                if (is_optional) {
                     dictionary_generator.append(R"~~~(
         if (@wrapped_value_name@.has_value())
             MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@.release_value()));
 )~~~");
-                } else if (is_optional_storage) {
-                    if (member.type->is_nullable()) {
-                        dictionary_generator.append(R"~~~(
-        MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@.has_value() ? @wrapped_value_name@.release_value() : JS::js_null()));
-)~~~");
-                    } else {
-                        dictionary_generator.append(R"~~~(
-        MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@.release_value()));
-)~~~");
-                    }
                 } else {
                     dictionary_generator.append(R"~~~(
         MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@));
@@ -3632,10 +3614,10 @@ static bool dictionary_member_needs_builder(Context const& context, DictionaryMe
     if (!member.required && !member.default_value.has_value())
         return false;
 
-    auto member_cpp_type = cpp_type_for_dictionary_member(context, member);
-    if (member_cpp_type.is_optional_presence)
+    if (dictionary_member_uses_optional(context, member))
         return false;
 
+    auto member_cpp_type = cpp_type_for_dictionary_member(context, member);
     if (is_direct_gc_ref_cpp_type(member_cpp_type))
         return true;
 
@@ -3653,13 +3635,13 @@ static bool dictionary_member_needs_builder(Context const& context, DictionaryMe
 
 static ByteString dictionary_member_initializer(Context const& context, DictionaryMember const& member)
 {
-    auto member_cpp_type = cpp_type_for_dictionary_member(context, member);
+    auto is_optional = cpp_type_for_dictionary_member(context, member).is_optional_presence;
 
     if (dictionary_member_needs_builder(context, member))
         return ""sv;
 
     if (member.default_value.has_value()) {
-        if (member_cpp_type.is_optional_presence && *member.default_value == "null"sv)
+        if (is_optional && *member.default_value == "null"sv)
             return " {}"sv;
 
         auto default_value_expression = cpp_default_expression(context, *member.type, member.default_value, member.extended_attributes);
@@ -3669,7 +3651,7 @@ static ByteString dictionary_member_initializer(Context const& context, Dictiona
         return ByteString::formatted(" {{ {} }}", default_value_expression);
     }
 
-    if (is<UnionType>(*member.type) && !member_cpp_type.is_optional_presence)
+    if (is<UnionType>(*member.type) && !is_optional)
         return ByteString::formatted(" {{ {} }}", cpp_default_expression(context, *member.type, {}, member.extended_attributes));
 
     return " {}"sv;

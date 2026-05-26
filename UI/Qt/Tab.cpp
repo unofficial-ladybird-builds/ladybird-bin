@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/EventLoop.h>
 #include <LibURL/URL.h>
 #include <LibWeb/HTML/SelectedFile.h>
 #include <LibWebView/Application.h>
@@ -206,7 +207,6 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
         m_location_edit->set_favicon({});
         m_location_edit->set_loading(true);
         m_location_edit->set_url(url);
-        m_location_edit->setCursorPosition(0);
     };
 
     view().on_load_finish = [this](auto const&) {
@@ -369,15 +369,14 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
                             extensions.append(mime_type.globPatterns());
                     }
 
-                    accepted_file_filters.append(QString("%1 (%2)").arg(title, extensions.join(" ")));
+                    accepted_file_filters.append(qformatted("{} ({})", title, extensions.join(" ")));
                 },
                 [&](Web::HTML::FileFilter::MimeType const& filter) {
                     if (auto mime_type = mime_database.mimeTypeForName(qstring_from_ak_string(filter.value)); mime_type.isValid())
                         accepted_file_filters.append(mime_type.filterString());
                 },
                 [&](Web::HTML::FileFilter::Extension const& filter) {
-                    auto extension = MUST(String::formatted("*.{}", filter.value));
-                    accepted_file_filters.append(qstring_from_ak_string(extension));
+                    accepted_file_filters.append(qformatted("*.{}", filter.value));
                 });
         }
 
@@ -666,8 +665,8 @@ void Tab::update_chrome_style()
     auto hover_surface = ChromeStyle::style_sheet_color(ChromeStyle::chrome_surface(palette()));
     auto hover_border = ChromeStyle::style_sheet_color(ChromeStyle::chrome_border(palette()));
     auto hover_text = ChromeStyle::style_sheet_color(ChromeStyle::chrome_text(palette()));
-    m_hover_label->setStyleSheet(QStringLiteral("background: %1; color: %2; border: 1px solid %3; border-radius: 6px;")
-            .arg(hover_surface, hover_text, hover_border));
+    m_hover_label->setStyleSheet(qformatted("background: {}; color: {}; border: 1px solid {}; border-radius: 6px;",
+        hover_surface, hover_text, hover_border));
     m_is_updating_chrome_style = false;
 }
 
@@ -702,6 +701,13 @@ void Tab::find_next()
 
 void Tab::request_close()
 {
+    if (!view().needs_beforeunload_check()) {
+        auto request_close = view().prepare_for_immediate_close();
+        m_window->definitely_close_tab(tab_index());
+        Core::deferred_invoke(AK::move(request_close));
+        return;
+    }
+
     // Prevent closing on first request so WebContent can cleanly shutdown (e.g. asking if the user is sure they want
     // to leave, closing WebSocket connections, etc.)
     if (!m_already_requested_close) {
