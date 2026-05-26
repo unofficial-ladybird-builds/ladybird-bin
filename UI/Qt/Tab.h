@@ -18,7 +18,6 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPointer>
-#include <QToolBar>
 #include <QToolButton>
 #include <QWidget>
 
@@ -80,6 +79,7 @@ public:
 
     QToolButton* hamburger_button() const { return m_hamburger_button; }
 
+    void set_window(BrowserWindow&);
     void update_hover_label();
 
     bool url_is_hidden() const { return m_location_edit->url_is_hidden(); }
@@ -100,16 +100,17 @@ private:
     virtual void config_variable_changed(WebView::ConfigVariableID) override;
 
     void recreate_toolbar_icons();
+    void connect_hamburger_menu();
+    void update_chrome_style();
     void update_tab_title();
     void set_loading(bool);
     void update_tab_icon();
     int tab_index();
 
     QBoxLayout* m_layout { nullptr };
-    QToolBar* m_toolbar { nullptr };
+    QWidget* m_toolbar { nullptr };
     BookmarksBar* m_bookmarks_bar { nullptr };
     QToolButton* m_hamburger_button { nullptr };
-    QAction* m_hamburger_button_action { nullptr };
     LocationEdit* m_location_edit { nullptr };
     WebContentView* m_view { nullptr };
     FindInPageWidget* m_find_in_page { nullptr };
@@ -119,6 +120,7 @@ private:
     QIcon m_favicon;
     QTimer* m_loading_animation_timer { nullptr };
     bool m_is_loading { false };
+    bool m_is_updating_chrome_style { false };
     int m_loading_animation_frame { 0 };
 
     QMenu* m_context_menu { nullptr };

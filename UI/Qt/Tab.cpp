@@ -12,6 +12,7 @@
 #include <LibWebView/Utilities.h>
 #include <LibWebView/WebContentClient.h>
 #include <UI/Qt/BrowserWindow.h>
+#include <UI/Qt/ChromeStyle.h>
 #include <UI/Qt/Icon.h>
 #include <UI/Qt/Menu.h>
 #include <UI/Qt/Settings.h>
@@ -21,6 +22,7 @@
 #include <QFileDialog>
 #include <QFont>
 #include <QFontMetrics>
+#include <QHBoxLayout>
 #include <QImage>
 #include <QInputDialog>
 #include <QMenu>
@@ -72,6 +74,17 @@ static QIcon default_favicon()
     return icon;
 }
 
+static QToolButton* create_toolbar_button(QWidget& parent, QAction& action)
+{
+    auto* button = new QToolButton(&parent);
+    button->setDefaultAction(&action);
+    button->setAutoRaise(true);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setIconSize({ 20, 20 });
+    button->setFixedSize(38, 38);
+    return button;
+}
+
 Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client, size_t page_index)
     : QWidget(window)
     , m_window(window)
@@ -87,7 +100,15 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
     m_view = new WebContentView(this, parent_client, page_index, AK::move(view_initial_state));
     m_find_in_page = new FindInPageWidget(this, m_view);
     m_find_in_page->setVisible(false);
-    m_toolbar = new QToolBar(this);
+    m_toolbar = new QWidget(this);
+    m_toolbar->setObjectName("LadybirdNavigationToolbar");
+    m_toolbar->setFixedHeight(54);
+    m_toolbar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+
+    auto* toolbar_layout = new QHBoxLayout(m_toolbar);
+    toolbar_layout->setSpacing(8);
+    toolbar_layout->setContentsMargins(18, 4, 18, 6);
+
     m_location_edit = new LocationEdit(this);
     m_bookmarks_bar = new BookmarksBar(this);
     m_loading_animation_timer = new QTimer(this);
@@ -119,16 +140,13 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
     m_hamburger_button->setText("Show &Menu");
     m_hamburger_button->setToolTip("Show Menu");
     m_hamburger_button->setIcon(create_tvg_icon_with_theme_colors("hamburger", palette()));
+    m_hamburger_button->setIconSize({ 20, 20 });
+    m_hamburger_button->setFixedSize(38, 38);
+    m_hamburger_button->setAutoRaise(true);
+    m_hamburger_button->setFocusPolicy(Qt::NoFocus);
     m_hamburger_button->setPopupMode(QToolButton::InstantPopup);
     m_hamburger_button->setMenu(&m_window->hamburger_menu());
-    m_hamburger_button->setStyleSheet(":menu-indicator {image: none}");
-
-    QObject::connect(&m_window->hamburger_menu(), &QMenu::aboutToShow, m_hamburger_button, [this]() {
-        m_hamburger_button->setDown(true);
-    });
-    QObject::connect(&m_window->hamburger_menu(), &QMenu::aboutToHide, m_hamburger_button, [this]() {
-        m_hamburger_button->setDown(false);
-    });
+    connect_hamburger_menu();
 
     m_navigate_back_action = create_application_action(*this, view().navigate_back_action());
     m_navigate_forward_action = create_application_action(*this, view().navigate_forward_action());
@@ -143,24 +161,19 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
     m_image_context_menu = create_context_menu(*this, view(), view().image_context_menu());
     m_media_context_menu = create_context_menu(*this, view(), view().media_context_menu());
 
-    m_toolbar->addAction(m_navigate_back_action);
-    m_toolbar->addAction(m_navigate_forward_action);
-    m_toolbar->addAction(m_reload_action);
-    m_toolbar->addWidget(m_location_edit);
-    m_toolbar->addAction(create_application_action(*m_toolbar, view().toggle_bookmark_action()));
-    m_toolbar->addAction(create_application_action(*m_toolbar, view().reset_zoom_action()));
-    m_hamburger_button_action = m_toolbar->addWidget(m_hamburger_button);
+    toolbar_layout->addWidget(create_toolbar_button(*m_toolbar, *m_navigate_back_action));
+    toolbar_layout->addWidget(create_toolbar_button(*m_toolbar, *m_navigate_forward_action));
+    toolbar_layout->addWidget(create_toolbar_button(*m_toolbar, *m_reload_action));
+    m_location_edit->set_trailing_action(create_application_action(*m_location_edit, view().toggle_bookmark_action()));
+    toolbar_layout->addWidget(m_location_edit, 1);
+    toolbar_layout->addWidget(m_hamburger_button);
 
-    m_toolbar->setIconSize({ 16, 16 });
-    m_toolbar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
-    // This is a little awkward, but without this Qt shrinks the button to the size of the icon.
-    // Note: toolButtonStyle="0" -> ToolButtonIconOnly.
-    m_toolbar->setStyleSheet("QToolButton[toolButtonStyle=\"0\"]{padding:0px 4px 0px 4px;height:24px}");
+    update_chrome_style();
 
-    m_hamburger_button_action->setVisible(!Settings::the()->show_menubar());
+    m_hamburger_button->setVisible(!Settings::the()->show_menubar());
 
     QObject::connect(Settings::the(), &Settings::show_menubar_changed, this, [this](bool show_menubar) {
-        m_hamburger_button_action->setVisible(!show_menubar);
+        m_hamburger_button->setVisible(!show_menubar);
     });
 
     view().on_activate_tab = [this] {
@@ -495,6 +508,30 @@ void Tab::focus_location_editor()
     m_location_edit->selectAll();
 }
 
+void Tab::set_window(BrowserWindow& window)
+{
+    if (&window == m_window)
+        return;
+
+    QObject::disconnect(&m_window->hamburger_menu(), nullptr, m_hamburger_button, nullptr);
+
+    m_window = &window;
+    m_hamburger_button->setMenu(&m_window->hamburger_menu());
+    connect_hamburger_menu();
+    m_hamburger_button->setVisible(!Settings::the()->show_menubar());
+    recreate_toolbar_icons();
+}
+
+void Tab::connect_hamburger_menu()
+{
+    QObject::connect(&m_window->hamburger_menu(), &QMenu::aboutToShow, m_hamburger_button, [this]() {
+        m_hamburger_button->setDown(true);
+    });
+    QObject::connect(&m_window->hamburger_menu(), &QMenu::aboutToHide, m_hamburger_button, [this]() {
+        m_hamburger_button->setDown(false);
+    });
+}
+
 void Tab::navigate(URL::URL const& url)
 {
     view().load(url);
@@ -609,6 +646,7 @@ void Tab::update_hover_label()
 bool Tab::event(QEvent* event)
 {
     if (event->type() == QEvent::PaletteChange) {
+        update_chrome_style();
         recreate_toolbar_icons();
         if (m_is_loading)
             update_tab_icon();
@@ -618,13 +656,28 @@ bool Tab::event(QEvent* event)
     return QWidget::event(event);
 }
 
+void Tab::update_chrome_style()
+{
+    if (m_is_updating_chrome_style)
+        return;
+
+    m_is_updating_chrome_style = true;
+    m_toolbar->setStyleSheet(ChromeStyle::navigation_toolbar_style_sheet(palette()));
+    m_hover_label->setStyleSheet(QStringLiteral("padding: 2px 6px; border-radius: 6px;"));
+    m_is_updating_chrome_style = false;
+}
+
 void Tab::recreate_toolbar_icons()
 {
-    m_navigate_back_action->setIcon(create_tvg_icon_with_theme_colors("back", palette()));
-    m_navigate_forward_action->setIcon(create_tvg_icon_with_theme_colors("forward", palette()));
-    m_reload_action->setIcon(create_tvg_icon_with_theme_colors("reload", palette()));
-    m_window->new_tab_action().setIcon(create_tvg_icon_with_theme_colors("new_tab", palette()));
-    m_hamburger_button->setIcon(create_tvg_icon_with_theme_colors("hamburger", palette()));
+    m_navigate_back_action->setIcon(create_chrome_icon(ChromeIcon::Back, palette()));
+    m_navigate_forward_action->setIcon(create_chrome_icon(ChromeIcon::Forward, palette()));
+    m_reload_action->setIcon(create_chrome_icon(ChromeIcon::Reload, palette()));
+    m_window->new_tab_action().setIcon(create_chrome_icon(ChromeIcon::NewTab, palette()));
+    m_hamburger_button->setIcon(create_chrome_icon(ChromeIcon::Menu, palette()));
+    if (auto* action = m_location_edit->trailing_action()) {
+        auto icon = view().toggle_bookmark_action().engaged() ? ChromeIcon::StarFilled : ChromeIcon::Star;
+        action->setIcon(create_chrome_icon(icon, palette()));
+    }
 }
 
 void Tab::show_find_in_page()

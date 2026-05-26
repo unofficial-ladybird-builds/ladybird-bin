@@ -10,6 +10,7 @@
  */
 
 #include <AK/RefPtr.h>
+#include <AK/StdLibExtras.h>
 #include <AK/TypeCasts.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/HistoryStore.h>
@@ -22,8 +23,11 @@
 #include <UI/Qt/TabBar.h>
 #include <UI/Qt/WebContentView.h>
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
+#include <QCursor>
 #include <QGuiApplication>
 #include <QInputDialog>
 #include <QMenuBar>
@@ -187,7 +191,10 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
 {
     auto const& browser_options = WebView::Application::browser_options();
 
+    setWindowFlag(Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_OpaquePaintEvent);
     setWindowIcon(app_icon());
+    qApp->installEventFilter(this);
 
     // Listen for DPI changes
     m_device_pixel_ratio = devicePixelRatio();
@@ -429,6 +436,11 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
         on_devtools_enabled();
 }
 
+BrowserWindow::~BrowserWindow()
+{
+    qApp->removeEventFilter(this);
+}
+
 void BrowserWindow::rebuild_bookmarks_menu()
 {
     repopulate_application_menu(*m_bookmarks_menu, *this, Application::the().bookmarks_menu());
@@ -552,6 +564,70 @@ void BrowserWindow::initialize_tab(Tab* tab)
     create_close_button_for_tab(tab);
 }
 
+void BrowserWindow::uninitialize_tab(Tab* tab)
+{
+    QObject::disconnect(tab, nullptr, this, nullptr);
+    QObject::disconnect(&tab->view(), nullptr, this, nullptr);
+}
+
+void BrowserWindow::adopt_tab(Tab& tab, int index)
+{
+    index = clamp(index, 0, m_tabs_container->count());
+
+    tab.set_window(*this);
+    m_tabs_container->insert_tab(index, &tab, "New Tab");
+    initialize_tab(&tab);
+    tab_title_changed(index, tab.title());
+
+    tab.view().set_device_pixel_ratio(m_device_pixel_ratio);
+    tab.view().set_maximum_frames_per_second(m_refresh_rate);
+
+    m_tabs_container->set_current_tab(&tab);
+}
+
+void BrowserWindow::move_tab_to_window(int index, BrowserWindow& target_window, int target_index)
+{
+    if (index < 0 || index >= m_tabs_container->count())
+        return;
+
+    if (&target_window == this) {
+        if (target_index > index)
+            --target_index;
+        target_index = clamp(target_index, 0, m_tabs_container->count() - 1);
+        move_tab(index, target_index);
+        return;
+    }
+
+    auto* tab = m_tabs_container->tab(index);
+    uninitialize_tab(tab);
+    m_tabs_container->take_tab(index);
+    if (m_current_tab == tab)
+        set_current_tab(m_tabs_container->count() > 0 ? m_tabs_container->tab(m_tabs_container->current_index()) : nullptr);
+
+    target_window.adopt_tab(*tab, target_index);
+
+    if (m_tabs_container->count() == 0) {
+        m_should_record_closed_window_on_close = false;
+        close();
+    }
+}
+
+void BrowserWindow::detach_tab_to_new_window(int index, QPoint global_position)
+{
+    if (index < 0 || index >= m_tabs_container->count())
+        return;
+
+    WindowConfiguration configuration {
+        .x = Web::DevicePixels { global_position.x() - 160 },
+        .y = Web::DevicePixels { global_position.y() - 18 },
+        .width = Web::DevicePixels { width() },
+        .height = Web::DevicePixels { height() },
+    };
+
+    auto& window = Application::the().new_window({}, configuration);
+    move_tab_to_window(index, window, 0);
+}
+
 void BrowserWindow::set_current_tab(Tab* tab)
 {
     if (tab == m_current_tab)
@@ -658,7 +734,7 @@ void BrowserWindow::create_close_button_for_tab(Tab* tab)
     auto index = m_tabs_container->index_of(tab);
     m_tabs_container->set_tab_icon(index, tab->tab_icon());
 
-    auto* button = new TabBarButton(create_tvg_icon_with_theme_colors("close", palette()));
+    auto* button = new TabBarButton(create_chrome_icon(ChromeIcon::Close, palette()));
     button->setToolTip("Close Tab");
 
     auto position = audio_button_position_for_tab(index) == QTabBar::LeftSide ? QTabBar::RightSide : QTabBar::LeftSide;
@@ -815,8 +891,123 @@ bool BrowserWindow::event(QEvent* event)
 
     if (event->type() == QEvent::WindowActivate)
         Application::the().set_active_window(*this);
+    else if (event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide)
+        clear_resize_cursor();
 
     return QMainWindow::event(event);
+}
+
+bool BrowserWindow::eventFilter(QObject* object, QEvent* event)
+{
+    auto* widget = as_if<QWidget>(object);
+    if (!widget || widget->window() != this)
+        return QMainWindow::eventFilter(object, event);
+
+    auto const is_button = qobject_cast<QAbstractButton*>(object) != nullptr;
+
+    if (is_button && (event->type() == QEvent::Enter || event->type() == QEvent::MouseMove || event->type() == QEvent::Leave)) {
+        clear_resize_cursor();
+    } else if (event->type() == QEvent::Enter) {
+        update_resize_cursor(mapFromGlobal(QCursor::pos()));
+    } else if (event->type() == QEvent::MouseMove) {
+        auto* mouse_event = static_cast<QMouseEvent*>(event);
+        update_resize_cursor(widget->mapTo(this, mouse_event->position().toPoint()));
+    } else if (event->type() == QEvent::Leave) {
+        auto position = mapFromGlobal(QCursor::pos());
+        if (rect().contains(position))
+            update_resize_cursor(position);
+        else
+            clear_resize_cursor();
+    } else if (event->type() != QEvent::MouseButtonPress) {
+        return QMainWindow::eventFilter(object, event);
+    }
+
+    if (event->type() != QEvent::MouseButtonPress)
+        return QMainWindow::eventFilter(object, event);
+
+    if (isMaximized() || isFullScreen())
+        return QMainWindow::eventFilter(object, event);
+
+    if (is_button)
+        return QMainWindow::eventFilter(object, event);
+
+    auto* mouse_event = static_cast<QMouseEvent*>(event);
+    if (mouse_event->button() != Qt::LeftButton)
+        return QMainWindow::eventFilter(object, event);
+
+    auto edges = resize_edges_for_position(widget->mapTo(this, mouse_event->position().toPoint()));
+    if (edges == Qt::Edges {})
+        return QMainWindow::eventFilter(object, event);
+
+    auto* handle = windowHandle();
+    if (!handle || !handle->startSystemResize(edges))
+        return QMainWindow::eventFilter(object, event);
+
+    return true;
+}
+
+Qt::Edges BrowserWindow::resize_edges_for_position(QPoint const& position) const
+{
+    static constexpr int resize_border_width = 6;
+
+    Qt::Edges edges;
+    if (position.x() <= resize_border_width)
+        edges |= Qt::LeftEdge;
+    if (position.x() >= width() - resize_border_width)
+        edges |= Qt::RightEdge;
+    if (position.y() <= resize_border_width)
+        edges |= Qt::TopEdge;
+    if (position.y() >= height() - resize_border_width)
+        edges |= Qt::BottomEdge;
+
+    return edges;
+}
+
+Optional<Qt::CursorShape> BrowserWindow::resize_cursor_for_edges(Qt::Edges edges) const
+{
+    if (edges == Qt::Edges {})
+        return {};
+
+    if ((edges & Qt::TopEdge && edges & Qt::LeftEdge) || (edges & Qt::BottomEdge && edges & Qt::RightEdge))
+        return Qt::SizeFDiagCursor;
+    if ((edges & Qt::TopEdge && edges & Qt::RightEdge) || (edges & Qt::BottomEdge && edges & Qt::LeftEdge))
+        return Qt::SizeBDiagCursor;
+    if (edges & Qt::LeftEdge || edges & Qt::RightEdge)
+        return Qt::SizeHorCursor;
+    if (edges & Qt::TopEdge || edges & Qt::BottomEdge)
+        return Qt::SizeVerCursor;
+
+    return {};
+}
+
+void BrowserWindow::update_resize_cursor(QPoint const& position)
+{
+    if (isMaximized() || isFullScreen() || !rect().contains(position)) {
+        clear_resize_cursor();
+        return;
+    }
+
+    auto cursor_shape = resize_cursor_for_edges(resize_edges_for_position(position));
+    if (!cursor_shape.has_value()) {
+        clear_resize_cursor();
+        return;
+    }
+
+    if (m_resize_cursor_active)
+        QApplication::changeOverrideCursor(*cursor_shape);
+    else {
+        QApplication::setOverrideCursor(*cursor_shape);
+        m_resize_cursor_active = true;
+    }
+}
+
+void BrowserWindow::clear_resize_cursor()
+{
+    if (!m_resize_cursor_active)
+        return;
+
+    QApplication::restoreOverrideCursor();
+    m_resize_cursor_active = false;
 }
 
 void BrowserWindow::resizeEvent(QResizeEvent* event)
@@ -870,6 +1061,8 @@ void BrowserWindow::wheelEvent(QWheelEvent* event)
 
 void BrowserWindow::closeEvent(QCloseEvent* event)
 {
+    clear_resize_cursor();
+
     Optional<Vector<URL::URL>> recently_closed_window_urls;
     size_t recently_closed_window_active_tab_index { 0 };
     if (m_should_record_closed_window_on_close && m_tabs_container->count() > 0) {

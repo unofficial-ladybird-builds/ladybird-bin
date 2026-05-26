@@ -11,19 +11,36 @@
 #include <LibWebView/Autocomplete.h>
 #include <LibWebView/URL.h>
 #include <UI/Qt/Autocomplete.h>
+#include <UI/Qt/ChromeStyle.h>
 #include <UI/Qt/Icon.h>
 #include <UI/Qt/LocationEdit.h>
 #include <UI/Qt/StringUtils.h>
 
 #include <QAction>
 #include <QApplication>
+#include <QEasingCurve>
+#include <QGraphicsDropShadowEffect>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLatin1String>
 #include <QPalette>
+#include <QResizeEvent>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#    include <QStyleHints>
+#endif
 #include <QTextLayout>
 #include <QTimer>
+#include <QToolButton>
+#include <QVariantAnimation>
 
 namespace Ladybird {
+
+static QColor location_focus_glow_color(QPalette const& palette, int alpha)
+{
+    auto color = ChromeStyle::chrome_accent(palette);
+    color.setAlpha(alpha);
+    return color;
+}
 
 static QString candidate_by_trimming_root_trailing_slash(QString const& candidate)
 {
@@ -133,8 +150,41 @@ LocationEdit::LocationEdit(QWidget* parent)
     : QLineEdit(parent)
     , m_autocomplete(new Autocomplete(this))
 {
-    m_leading_icon_action = addAction(create_tvg_icon_with_theme_colors("search", palette()), QLineEdit::LeadingPosition);
-    m_leading_icon_action->setToolTip("Search");
+    setObjectName("LadybirdLocationEdit");
+    setMinimumHeight(41);
+    setTextMargins(40, 0, 40, 0);
+    update_chrome_style();
+
+    m_focus_glow_effect = new QGraphicsDropShadowEffect(this);
+    m_focus_glow_effect->setBlurRadius(10);
+    m_focus_glow_effect->setOffset(0, 0);
+    update_focus_glow(0);
+    setGraphicsEffect(m_focus_glow_effect);
+
+    m_focus_glow_animation = new QVariantAnimation(this);
+    m_focus_glow_animation->setDuration(130);
+    m_focus_glow_animation->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_focus_glow_animation, &QVariantAnimation::valueChanged, this, [this](QVariant const& value) {
+        update_focus_glow(value.toInt());
+    });
+
+    m_leading_icon_button = new QToolButton(this);
+    m_leading_icon_button->setObjectName("LadybirdLocationIcon");
+    m_leading_icon_button->setIconSize({ 20, 20 });
+    m_leading_icon_button->setFixedSize(22, 22);
+    m_leading_icon_button->setAutoRaise(true);
+    m_leading_icon_button->setFocusPolicy(Qt::NoFocus);
+    m_leading_icon_button->setCursor(Qt::ArrowCursor);
+    m_leading_icon_button->setToolTip("Search");
+
+    m_trailing_action_button = new QToolButton(this);
+    m_trailing_action_button->setObjectName("LadybirdLocationAction");
+    m_trailing_action_button->setIconSize({ 20, 20 });
+    m_trailing_action_button->setFixedSize(24, 24);
+    m_trailing_action_button->setAutoRaise(true);
+    m_trailing_action_button->setFocusPolicy(Qt::NoFocus);
+    m_trailing_action_button->setCursor(Qt::ArrowCursor);
+    m_trailing_action_button->hide();
 
     m_loading_animation_timer = new QTimer(this);
     m_loading_animation_timer->setInterval(80);
@@ -224,19 +274,38 @@ LocationEdit::LocationEdit(QWidget* parent)
         highlight_location();
         update_location_icon();
     });
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
+        schedule_chrome_style_update();
+    });
+#endif
+}
+
+void LocationEdit::set_trailing_action(QAction* action)
+{
+    m_trailing_action_button->setDefaultAction(action);
+    m_trailing_action_button->setVisible(action != nullptr);
+}
+
+QAction* LocationEdit::trailing_action() const
+{
+    return m_trailing_action_button->defaultAction();
 }
 
 void LocationEdit::changeEvent(QEvent* event)
 {
     QLineEdit::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange)
-        update_location_icon();
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::ThemeChange) {
+        schedule_chrome_style_update();
+    }
 }
 
 void LocationEdit::focusInEvent(QFocusEvent* event)
 {
     QLineEdit::focusInEvent(event);
     highlight_location();
+    animate_focus_glow(58);
 
     if (event->reason() != Qt::PopupFocusReason)
         QTimer::singleShot(0, this, &QLineEdit::selectAll);
@@ -245,6 +314,7 @@ void LocationEdit::focusInEvent(QFocusEvent* event)
 void LocationEdit::focusOutEvent(QFocusEvent* event)
 {
     QLineEdit::focusOutEvent(event);
+    animate_focus_glow(0);
 
     reset_autocomplete_state();
     m_autocomplete->cancel_pending_query();
@@ -260,6 +330,24 @@ void LocationEdit::focusOutEvent(QFocusEvent* event)
         setCursorPosition(0);
         highlight_location();
     }
+}
+
+void LocationEdit::update_focus_glow(int alpha)
+{
+    m_focus_glow_alpha = alpha;
+    if (m_focus_glow_effect)
+        m_focus_glow_effect->setColor(location_focus_glow_color(palette(), alpha));
+}
+
+void LocationEdit::animate_focus_glow(int target_alpha)
+{
+    if (!m_focus_glow_animation)
+        return;
+
+    m_focus_glow_animation->stop();
+    m_focus_glow_animation->setStartValue(m_focus_glow_alpha);
+    m_focus_glow_animation->setEndValue(target_alpha);
+    m_focus_glow_animation->start();
 }
 
 void LocationEdit::keyPressEvent(QKeyEvent* event)
@@ -299,9 +387,49 @@ void LocationEdit::keyPressEvent(QKeyEvent* event)
     QLineEdit::keyPressEvent(event);
 }
 
+void LocationEdit::resizeEvent(QResizeEvent* event)
+{
+    QLineEdit::resizeEvent(event);
+
+    auto button_size = m_leading_icon_button->sizeHint();
+    auto y = (height() - button_size.height()) / 2 + 2;
+    m_leading_icon_button->move(12, y);
+
+    auto trailing_button_size = m_trailing_action_button->sizeHint();
+    auto trailing_y = (height() - trailing_button_size.height()) / 2 + 2;
+    m_trailing_action_button->move(width() - trailing_button_size.width() - 12, trailing_y);
+}
+
 void LocationEdit::search_engine_changed()
 {
     update_placeholder();
+}
+
+void LocationEdit::update_chrome_style()
+{
+    if (m_is_updating_chrome_style)
+        return;
+
+    m_is_updating_chrome_style = true;
+    setStyleSheet(ChromeStyle::location_edit_style_sheet(palette()));
+    m_is_updating_chrome_style = false;
+}
+
+void LocationEdit::schedule_chrome_style_update()
+{
+    if (m_has_pending_chrome_style_update)
+        return;
+
+    m_has_pending_chrome_style_update = true;
+    QTimer::singleShot(0, this, [this] {
+        update_chrome_style();
+        m_autocomplete->schedule_chrome_style_update();
+        update_focus_glow(m_focus_glow_alpha);
+        update_location_icon();
+        highlight_location();
+        update();
+        m_has_pending_chrome_style_update = false;
+    });
 }
 
 void LocationEdit::update_placeholder()
@@ -316,7 +444,7 @@ void LocationEdit::update_placeholder()
 
 void LocationEdit::update_location_icon()
 {
-    if (!m_leading_icon_action)
+    if (!m_leading_icon_button)
         return;
 
     if (m_is_loading) {
@@ -325,22 +453,22 @@ void LocationEdit::update_location_icon()
     }
 
     if (text_matches_current_url()) {
-        m_leading_icon_action->setIcon(m_favicon.isNull() ? create_tvg_icon_with_theme_colors("globe", palette()) : m_favicon);
-        m_leading_icon_action->setToolTip("Page icon");
+        m_leading_icon_button->setIcon(m_favicon.isNull() ? create_chrome_icon(ChromeIcon::Globe, palette()) : m_favicon);
+        m_leading_icon_button->setToolTip("Page icon");
         return;
     }
 
-    m_leading_icon_action->setIcon(create_tvg_icon_with_theme_colors("search", palette()));
-    m_leading_icon_action->setToolTip("Search");
+    m_leading_icon_button->setIcon(create_chrome_icon(ChromeIcon::Search, palette()));
+    m_leading_icon_button->setToolTip("Search");
 }
 
 void LocationEdit::update_loading_icon()
 {
-    if (!m_leading_icon_action)
+    if (!m_leading_icon_button)
         return;
 
-    m_leading_icon_action->setIcon(loading_spinner_icon(palette(), m_loading_animation_frame));
-    m_leading_icon_action->setToolTip("Loading");
+    m_leading_icon_button->setIcon(loading_spinner_icon(palette(), m_loading_animation_frame));
+    m_leading_icon_button->setToolTip("Loading");
 }
 
 void LocationEdit::highlight_location()
@@ -349,14 +477,14 @@ void LocationEdit::highlight_location()
     QList<QInputMethodEvent::Attribute> attributes;
 
     if (auto url_parts = WebView::break_url_into_parts(url); url_parts.has_value()) {
-        auto darkened_text_color = QPalette().color(QPalette::Text);
+        auto darkened_text_color = ChromeStyle::chrome_text(palette());
         darkened_text_color.setAlpha(127);
 
         QTextCharFormat dark_attributes;
         dark_attributes.setForeground(darkened_text_color);
 
         QTextCharFormat highlight_attributes;
-        highlight_attributes.setForeground(QPalette().color(QPalette::Text));
+        highlight_attributes.setForeground(ChromeStyle::chrome_text(palette()));
 
         attributes.append({
             QInputMethodEvent::TextFormat,
