@@ -54,7 +54,6 @@ jobs:
             freetype2 \
             harfbuzz \
             ttf-liberation \
-            xorg-xcb-util \
             xcb-util \
             xcb-util-image \
             xcb-util-keysyms \
