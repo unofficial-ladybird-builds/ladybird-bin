@@ -16,6 +16,63 @@
 
 namespace Wasm {
 
+static Vector<ModuleStats> s_module_stats;
+
+void record_module_stats(ModuleStats stats)
+{
+    s_module_stats.append(move(stats));
+}
+
+void dump_module_stats()
+{
+    if (s_module_stats.is_empty()) {
+        warnln("wasm-stats: no modules compiled yet");
+        return;
+    }
+
+    warnln("wasm-stats: {} module(s) compiled", s_module_stats.size());
+    warnln("wasm-stats:   hash      input KiB  parse ms  validate ms  cl ms  cl blob KiB  funcs  cache");
+
+    AK::Duration total_parse;
+    AK::Duration total_validate;
+    AK::Duration total_cranelift;
+    size_t total_input = 0;
+    size_t total_blob = 0;
+    size_t total_hits = 0;
+
+    for (auto const& s : s_module_stats) {
+        StringBuilder hash_prefix;
+        for (size_t i = 0; i < 4; ++i)
+            hash_prefix.appendff("{:02x}", s.wasm_hash[i]);
+
+        warnln("wasm-stats:   {}  {:>9}  {:>8}  {:>11}  {:>5}  {:>11}  {:>5}  {}",
+            hash_prefix.to_byte_string(),
+            s.input_size_bytes / 1024,
+            s.parse_time.to_milliseconds(),
+            s.validate_time.to_milliseconds(),
+            s.cranelift_time.to_milliseconds(),
+            s.cranelift_blob_size_bytes / 1024,
+            s.function_count,
+            s.cache_hit ? "HIT" : "miss");
+
+        total_parse = total_parse + s.parse_time;
+        total_validate = total_validate + s.validate_time;
+        total_cranelift = total_cranelift + s.cranelift_time;
+        total_input += s.input_size_bytes;
+        total_blob += s.cranelift_blob_size_bytes;
+        if (s.cache_hit)
+            ++total_hits;
+    }
+
+    warnln("wasm-stats:   ----      {:>9}  {:>8}  {:>11}  {:>5}  {:>11}         hits={}",
+        total_input / 1024,
+        total_parse.to_milliseconds(),
+        total_validate.to_milliseconds(),
+        total_cranelift.to_milliseconds(),
+        total_blob / 1024,
+        total_hits);
+}
+
 MemoryBuffer::~MemoryBuffer()
 {
     clear();
@@ -162,6 +219,42 @@ bool MemoryInstance::grow(size_t size_to_grow, GrowType grow_type, InhibitGrowCa
         m_type = MemoryType { Limits(m_type.limits().address_type(), m_type.limits().min() + size_to_grow / Constants::page_size, m_type.limits().max()) };
 
     return true;
+}
+
+Vector<CompiledFunctionEntry> const& ModuleInstance::compiled_fn_table(Store& store) const
+{
+    if (m_compiled_fn_table_built)
+        return m_compiled_fn_table;
+    m_compiled_fn_table_built = true;
+
+    auto count = m_functions.size();
+    if (count == 0)
+        return m_compiled_fn_table;
+
+    m_compiled_fn_table.resize_with_default_value_and_keep_capacity(count, {});
+    auto* entries = m_compiled_fn_table.data();
+
+    for (size_t i = 0; i < count; i++) {
+        auto* instance = store.unsafe_get(m_functions[i]);
+        auto* wasm_fn = instance->get_pointer<WasmFunction>();
+        if (!wasm_fn)
+            continue;
+        auto& ci = wasm_fn->code().func().body().compiled_instructions;
+        if (!ci.cranelift_compiled)
+            continue;
+
+        auto& entry = entries[i];
+        entry.handler_ptr = ci.dispatches[0].handler_ptr;
+        entry.dispatches_ptr = bit_cast<FlatPtr>(ci.dispatches.data());
+        entry.src_dst_ptr = bit_cast<FlatPtr>(ci.src_dst_mappings.data());
+        entry.first_insn = ci.dispatches[0].instruction;
+        entry.expression = &wasm_fn->code().func().body();
+        entry.module = &wasm_fn->module();
+        entry.total_local_count = static_cast<u32>(wasm_fn->code().func().total_local_count());
+        entry.arity = static_cast<u32>(wasm_fn->type().results().size());
+        entry.max_call_rec_size = static_cast<u32>(ci.max_call_rec_size);
+    }
+    return m_compiled_fn_table;
 }
 
 Optional<FunctionAddress> Store::allocate(ModuleInstance& instance, Module const& module, CodeSection::Code const& code, TypeIndex type_index)
@@ -328,7 +421,7 @@ ExceptionInstance* Store::get(ExceptionAddress address)
     return &m_exceptions[value];
 }
 
-ErrorOr<void, ValidationError> AbstractMachine::validate(Module& module)
+ErrorOr<void, ValidationError> AbstractMachine::validate(Module& module, Optional<CompileCacheConfig> cache_config)
 {
     if (module.validation_status() != Module::ValidationStatus::Unchecked) {
         if (module.validation_status() == Module::ValidationStatus::Valid)
@@ -337,7 +430,10 @@ ErrorOr<void, ValidationError> AbstractMachine::validate(Module& module)
         return ValidationError { module.validation_error() };
     }
 
-    auto result = Validator {}.validate(module);
+    Validator validator;
+    if (cache_config.has_value())
+        validator.set_cache_config(cache_config.release_value());
+    auto result = validator.validate(module);
     if (result.is_error()) {
         module.set_validation_error(result.error().error_string);
         return result.release_error();

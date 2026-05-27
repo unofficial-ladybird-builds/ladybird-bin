@@ -491,6 +491,19 @@ Messages::RequestServer::RetrieveCacheAssociatedDataResponse ConnectionFromClien
     return Optional<Core::AnonymousBuffer> { buffer.release_value() };
 }
 
+Messages::RequestServer::CreateSyntheticCacheEntryResponse ConnectionFromClient::create_synthetic_cache_entry(URL::URL url, ByteString method)
+{
+    if (!m_disk_cache.has_value())
+        return false;
+
+    auto result = m_disk_cache->create_synthetic_entry(url, method);
+    if (result.is_error()) {
+        dbgln("Failed to create synthetic cache entry for {}: {}", url, result.error());
+        return false;
+    }
+    return result.value();
+}
+
 void ConnectionFromClient::websocket_connect(u64 websocket_id, URL::URL url, ByteString origin, Vector<ByteString> protocols, Vector<ByteString> extensions, Vector<HTTP::Header> additional_request_headers)
 {
     auto host = url.serialized_host().to_byte_string();
@@ -571,6 +584,19 @@ void ConnectionFromClient::websocket_send(u64 websocket_id, bool is_text, ByteBu
 {
     if (auto* connection = m_websockets.get(websocket_id).value_or({}); connection && connection->ready_state() == WebSocket::ReadyState::Open)
         connection->send(WebSocket::Message { move(data), is_text });
+}
+
+void ConnectionFromClient::websocket_send_shared(u64 websocket_id, bool is_text, Core::AnonymousBuffer data)
+{
+    auto* connection = m_websockets.get(websocket_id).value_or({});
+    if (!connection || connection->ready_state() != WebSocket::ReadyState::Open)
+        return;
+    auto byte_buffer_or_error = ByteBuffer::copy(data.bytes());
+    if (byte_buffer_or_error.is_error()) {
+        dbgln("websocket_send_shared: failed to copy {} bytes from shared buffer: {}", data.size(), byte_buffer_or_error.error());
+        return;
+    }
+    connection->send(WebSocket::Message { byte_buffer_or_error.release_value(), is_text });
 }
 
 void ConnectionFromClient::websocket_close(u64 websocket_id, u16 code, ByteString reason)

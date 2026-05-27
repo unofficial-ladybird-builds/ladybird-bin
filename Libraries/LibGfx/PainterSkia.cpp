@@ -53,8 +53,8 @@ static void apply_paint_style(SkPaint& paint, PaintStyle const& style, DecodedIm
         Vector<SkScalar> positions;
         positions.ensure_capacity(color_stops.size());
         for (auto const& color_stop : color_stops) {
-            colors.append(to_skia_color(color_stop.color));
-            positions.append(color_stop.position);
+            colors.unchecked_append(to_skia_color(color_stop.color));
+            positions.unchecked_append(color_stop.position);
         }
 
         Array points { to_skia_point(linear_gradient->start_point()), to_skia_point(linear_gradient->end_point()) };
@@ -70,8 +70,8 @@ static void apply_paint_style(SkPaint& paint, PaintStyle const& style, DecodedIm
         Vector<SkScalar> positions;
         positions.ensure_capacity(color_stops.size());
         for (auto const& color_stop : color_stops) {
-            colors.append(to_skia_color(color_stop.color));
-            positions.append(color_stop.position);
+            colors.unchecked_append(to_skia_color(color_stop.color));
+            positions.unchecked_append(color_stop.position);
         }
 
         auto start_center = radial_gradient->start_center();
@@ -84,6 +84,24 @@ static void apply_paint_style(SkPaint& paint, PaintStyle const& style, DecodedIm
 
         SkMatrix matrix;
         auto shader = SkGradientShader::MakeTwoPointConical(start_sk_point, start_radius, end_sk_point, end_radius, colors.data(), positions.data(), color_stops.size(), SkTileMode::kClamp, 0, &matrix);
+        paint.setShader(shader);
+    } else if (auto const* conic_gradient = as_if<CanvasConicGradientPaintStyle>(style)) {
+        auto const& color_stops = conic_gradient->color_stops();
+
+        Vector<SkColor> colors;
+        colors.ensure_capacity(color_stops.size());
+        Vector<SkScalar> positions;
+        positions.ensure_capacity(color_stops.size());
+        for (auto const& color_stop : color_stops) {
+            colors.unchecked_append(to_skia_color(color_stop.color));
+            positions.unchecked_append(color_stop.position);
+        }
+
+        auto center = conic_gradient->center();
+        auto start_angle_degrees = AK::to_degrees(conic_gradient->start_angle());
+
+        SkMatrix matrix;
+        auto shader = SkGradientShader::MakeSweep(center.x(), center.y(), colors.data(), positions.data(), color_stops.size(), SkTileMode::kClamp, start_angle_degrees, start_angle_degrees + 360, 0, &matrix);
         paint.setShader(shader);
     } else if (auto const* canvas_pattern = as_if<CanvasPatternPaintStyle>(style)) {
         auto frame = canvas_pattern->image();
