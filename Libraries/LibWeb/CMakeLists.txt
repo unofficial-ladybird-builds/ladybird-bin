@@ -721,6 +721,7 @@ set(SOURCES
     HTML/WorkerDebugConsoleClient.cpp
     HTML/WorkerGlobalScope.cpp
     HTML/WorkerLocation.cpp
+    HTML/WorkerAgentTypes.cpp
     HTML/WorkerNavigator.cpp
     HTML/WorkletGlobalScope.cpp
     HTML/XMLSerializer.cpp
@@ -1184,7 +1185,6 @@ set(SOURCES
     WebXR/XRSessionEvent.cpp
     WebXR/XRSystem.cpp
     WebXR/XRWebGLLayer.cpp
-    Worker/WebWorkerClient.cpp
     XHR/EventNames.cpp
     XHR/FormData.cpp
     XHR/FormDataIterator.cpp

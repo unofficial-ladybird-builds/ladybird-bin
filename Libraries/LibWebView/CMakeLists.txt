@@ -28,6 +28,8 @@ set(SOURCES
     Utilities.cpp
     ViewImplementation.cpp
     WebContentClient.cpp
+    WebWorkerClient.cpp
+    WorkerProcessManager.cpp
     WebUI.cpp
     WebUI/BookmarksUI.cpp
     WebUI/ProcessesUI.cpp
