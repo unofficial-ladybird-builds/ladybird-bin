@@ -1376,27 +1376,27 @@ struct HideCursor {
 
 - (void)onPinch:(NSMagnificationGestureRecognizer*)recognizer
 {
-    double scale_delta = 0;
     switch (recognizer.state) {
     case NSGestureRecognizerStateBegan:
-        m_web_view_bridge->pinch_state() = { .previous_scale = recognizer.magnification };
-        break;
+        recognizer.magnification = 0;
+        return;
     case NSGestureRecognizerStateChanged:
-        scale_delta = recognizer.magnification - m_web_view_bridge->pinch_state()->previous_scale;
-        m_web_view_bridge->pinch_state()->previous_scale = recognizer.magnification;
         break;
     case NSGestureRecognizerStateEnded:
     case NSGestureRecognizerStateCancelled:
-        scale_delta = recognizer.magnification - m_web_view_bridge->pinch_state()->previous_scale;
-        m_web_view_bridge->pinch_state() = {};
-        break;
+        recognizer.magnification = 0;
+        return;
     default:
         return;
     }
 
+    auto scale_delta = recognizer.magnification;
+    recognizer.magnification = 0;
+
     NSPoint point = [recognizer locationInView:self];
     Web::PinchEvent pinch_event;
     pinch_event.position = Ladybird::ns_point_to_gfx_point(point).to_type<Web::DevicePixels>() * m_web_view_bridge->device_pixel_ratio();
+    pinch_event.modifiers = Ladybird::ns_modifiers_to_key_modifiers([NSEvent modifierFlags]);
     pinch_event.scale_delta = scale_delta;
     m_web_view_bridge->enqueue_input_event(move(pinch_event));
 }
