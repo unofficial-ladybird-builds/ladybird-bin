@@ -1,13 +1,13 @@
-name: Build Ladybird Portable (Nix AppImage)
+name: Build Ladybird Portable (Arch RootFS Bundle)
 
 on:
   push:
     branches: ["*"]
   pull_request:
     branches: ["*"]
-  workflow_dispatch:
   schedule:
     - cron: "0 */48 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,43 +15,168 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    container:
+      image: archlinux:latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Show system info
+      - name: Initialize Arch system
         run: |
-          echo "Runner architecture:"
-          uname -a
-          echo "CPU info:"
-          lscpu
-          echo "Nix version:"
-          nix --version
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm
 
-      - name: Build Ladybird AppImage
+      - name: Install build dependencies
         run: |
-          nix build --no-write-lock-file github:nix-community/nix-environments#ladybird
+          pacman -S --noconfirm --needed \
+            base-devel \
+            git \
+            sudo \
+            ninja \
+            cmake \
+            curl \
+            zip \
+            unzip \
+            patchelf \
+            zstd \
+            qt6-base \
+            qt6-tools \
+            qt6-wayland \
+            qt6-multimedia \
+            libglvnd \
+            mesa \
+            ffmpeg \
+            xz \
+            zlib \
+            icu \
+            openssl \
+            sqlite \
+            fontconfig \
+            freetype2 \
+            harfbuzz \
+            ttf-liberation \
+            xorg-xcb-util \
+            xcb-util \
+            xcb-util-image \
+            xcb-util-keysyms \
+            xcb-util-renderutil \
+            xcb-util-wm \
+            libx11 \
+            libxkbcommon \
+            vulkan-icd-loader
 
-      - name: Rename artifact
+      - name: Create builder user
         run: |
-          mkdir -p dist
-          cp result/bin/Ladybird*.AppImage dist/Ladybird-x86_64.AppImage
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: Set CPU flags
+        run: |
+          export CFLAGS="-march=x86-64 -O2"
+          export CXXFLAGS="-march=x86-64 -O2"
+
+      - name: System info
+        run: |
+          lscpu | grep -E 'Architecture|Model name|Flags'
+          gcc --version
+          g++ --version
+
+      - name: Clone Ladybird AUR
+        run: |
+          sudo -u builder git clone https://aur.archlinux.org/ladybird.git /home/builder/ladybird
+
+      - name: Build Ladybird
+        run: |
+          cd /home/builder/ladybird
+          sudo -u builder env \
+            MAKEFLAGS="-j$(nproc)" \
+            CFLAGS="-march=x86-64 -O2" \
+            CXXFLAGS="-march=x86-64 -O2" \
+            makepkg -s --noconfirm
+
+      - name: Create portable Arch rootfs bundle
+        run: |
+          set -eux
+
+          ROOTFS=/home/builder/ladybird-rootfs
+          PORTABLE=/home/builder/Ladybird-portable
+
+          mkdir -p "$ROOTFS" "$PORTABLE"
+
+          pacman -Sy --noconfirm
+
+          pacman -S --noconfirm --root "$ROOTFS" \
+            --dbpath "$ROOTFS/var/lib/pacman" \
+            --cachedir /var/cache/pacman/pkg \
+            bash glibc gcc-libs \
+            zlib xz bzip2 \
+            libpng freetype2 fontconfig harfbuzz \
+            icu openssl sqlite curl \
+            ffmpeg \
+            libglvnd mesa vulkan-icd-loader \
+            qt6-base qt6-wayland qt6-multimedia qt6-tools \
+            xorg-xcb-util xcb-util xcb-util-image xcb-util-keysyms \
+            xcb-util-renderutil xcb-util-wm \
+            libx11 libxkbcommon \
+            ttf-liberation
+
+          PKG_DIR=$(find /home/builder/ladybird/pkg -type d -name usr | head -n1)
+
+          cp -a "$ROOTFS"/* "$PORTABLE/"
+          mkdir -p "$PORTABLE/usr"
+          cp -a "$PKG_DIR"/* "$PORTABLE/usr/"
+
+          rm -rf \
+            "$PORTABLE/usr/share/man" \
+            "$PORTABLE/usr/share/doc" \
+            "$PORTABLE/usr/share/info" || true
+
+      - name: Strip binaries
+        run: |
+          find /home/builder/Ladybird-portable -type f | while read f; do
+            if file "$f" | grep -q ELF; then
+              strip --strip-unneeded "$f" || true
+            fi
+          done
+
+      - name: Create launcher
+        run: |
+          set -e
+
+          PORTABLE=/home/builder/Ladybird-portable
+
+          cat > "$PORTABLE/Ladybird.sh" <<- 'EOF'
+          #!/usr/bin/env bash
+
+          set -e
+
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          export LD_LIBRARY_PATH="$DIR/usr/lib:$LD_LIBRARY_PATH"
+          export QT_PLUGIN_PATH="$DIR/usr/lib/qt6/plugins"
+          export QML2_IMPORT_PATH="$DIR/usr/lib/qt6/qml"
+          export QT_QPA_PLATFORM=xcb
+
+          export FONTCONFIG_PATH="$DIR/etc/fonts"
+          export XDG_DATA_DIRS="$DIR/usr/share"
+
+          exec "$DIR/usr/bin/Ladybird" "$@"
+          EOF
+
+          chmod +x "$PORTABLE/Ladybird.sh"
+
+      - name: Package portable archive
+        run: |
+          cd /home/builder
+          tar --zstd -cf "$GITHUB_WORKSPACE/ladybird-portable-linux.tar.zst" Ladybird-portable
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ladybird-AppImage
-          path: dist/Ladybird-x86_64.AppImage
+          name: ladybird-portable-linux
+          path: ladybird-portable-linux.tar.zst
 
-      - name: Upload to Release (on tag)
+      - name: Upload release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Ladybird-x86_64.AppImage
+          files: ladybird-portable-linux.tar.zst
